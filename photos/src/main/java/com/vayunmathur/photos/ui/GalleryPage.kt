@@ -266,179 +266,179 @@ fun GalleryPage(
                             }
                         }
                     )
-                    SearchBar(
-                        inputField = {
-                            SearchBarDefaults.InputField(
-                                query = if (isSelectionMode && isSearchActive) stringResource(R.string.items_selected, selectedIds.size) else searchQuery,
-                                onQueryChange = { if (!isSelectionMode) searchQuery = it },
-                                onSearch = { isSearchActive = false },
-                                expanded = isSearchActive,
-                                onExpandedChange = { if (!isSelectionMode) isSearchActive = it },
-                                placeholder = { Text(stringResource(R.string.search_photos)) },
-                                leadingIcon = {
-                                    if (isSelectionMode && isSearchActive) {
-                                        IconButton(onClick = { selectedIds.clear() }) {
-                                            IconClose()
-                                        }
-                                    } else {
-                                        IconSearch()
-                                    }
-                                },
-                                trailingIcon = {
-                                    if (isSelectionMode && isSearchActive) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            IconButton(onClick = onMoveToSecureClick) {
-                                                Icon(painterResource(R.drawable.lock_24px), contentDescription = stringResource(R.string.action_move_to_secure))
-                                            }
-                                            IconButton(onClick = onDeleteClick) {
-                                                IconDelete()
-                                            }
-                                        }
-                                    } else if (searchQuery.isNotEmpty()) {
-                                        IconButton(onClick = { searchQuery = "" }) {
-                                            IconClose()
-                                        }
-                                    } else if (ocrProgress < 1f && isFeatureEnabled) {
-                                        Box(Modifier.padding(8.dp)) {
-                                            CircularProgressIndicator(
-                                                progress = { ocrProgress },
-                                                modifier = Modifier.size(24.dp),
-                                                strokeWidth = 2.dp,
-                                            )
-                                        }
-                                    }
-                                }
-                            )
-                        },
-                        expanded = isSearchActive,
-                        onExpandedChange = { if (!isSelectionMode) isSearchActive = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = if (isSearchActive) 0.dp else 16.dp)
-                            .padding(top = if (isSearchActive) 0.dp else 8.dp),
-                        content = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .pointerInput(Unit) {
-                                        awaitEachGesture {
-                                            while (true) {
-                                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                if (event.changes.size > 1) {
-                                                    val zoom = event.calculateZoom()
-                                                    if (zoom != 1f) {
-                                                        columnCount = (columnCount / zoom).coerceIn(2f, 8f)
-                                                        event.changes.forEach { it.consume() }
-                                                    }
-                                                }
-                                                if (event.changes.all { it.changedToUp() }) break
-                                            }
-                                        }
-                                    }
-                            ) {
-                                if (!isFeatureEnabled) {
-                                    Column(
-                                        Modifier
-                                            .fillMaxSize()
-                                            .padding(32.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
-                                        Icon(
-                                            painterResource(R.drawable.lock_24px),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(48.dp),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(Modifier.height(16.dp))
-                                        Text(
-                                            stringResource(R.string.image_understanding_title),
-                                            style = MaterialTheme.typography.headlineSmall
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            stringResource(R.string.image_understanding_description),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        if (!isOpenAssistantInstalled) {
-                                            Spacer(Modifier.height(16.dp))
-                                            Text(
-                                                stringResource(R.string.openassistant_not_found),
-                                                color = MaterialTheme.colorScheme.error,
-                                                style = MaterialTheme.typography.bodySmall
-                                            )
-                                        }
-                                        Spacer(Modifier.height(24.dp))
-                                        TextButton(
-                                            onClick = {
-                                                scope.launch {
-                                                    dataStore.setBoolean("image_understanding_enabled", true)
-                                                    SyncWorker.runOnce(context)
-                                                }
-                                            },
-                                            enabled = isOpenAssistantInstalled
-                                        ) {
-                                            Text(stringResource(R.string.enable_feature))
-                                        }
-                                    }
-                                } else if (searchQuery.isBlank()) {
-                                    Column(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(32.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.indexing_photos),
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            stringResource(R.string.indexing_progress_details, ocrCount, targetCount),
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                        Spacer(Modifier.height(16.dp))
-                                        LinearProgressIndicator(
-                                            progress = { ocrProgress },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(
-                                            "${(ocrProgress * 100).roundToInt()}%",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.align(Alignment.End)
-                                        )
-                                    }
-                                } else {
-                                    LazyVerticalGrid(
-                                        GridCells.Fixed(columnCount.roundToInt().coerceIn(2, 8)),
-                                        Modifier.fillMaxSize(),
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        items(searchResults, { it.id }, contentType = { "photo_thumbnail" }) { photo ->
-                                            val isSelected = photo.id in selectedIds
-                                            ImageLoader.SelectablePhotoItem(
-                                                photo = photo,
-                                                isSelected = isSelected,
-                                                isSelectionMode = isSelectionMode,
-                                                onToggleSelection = {
-                                                    if (isSelected) selectedIds.remove(photo.id) else selectedIds.add(photo.id)
-                                                },
-                                                onClick = {
-                                                    if (isSelectionMode) {
-                                                        if (isSelected) selectedIds.remove(photo.id) else selectedIds.add(photo.id)
-                                                    } else {
-                                                        backStack.add(Route.PhotoPage(photo.id, null))
-                                                    }
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    )
+//                    SearchBar(
+//                        inputField = {
+//                            SearchBarDefaults.InputField(
+//                                query = if (isSelectionMode && isSearchActive) stringResource(R.string.items_selected, selectedIds.size) else searchQuery,
+//                                onQueryChange = { if (!isSelectionMode) searchQuery = it },
+//                                onSearch = { isSearchActive = false },
+//                                expanded = isSearchActive,
+//                                onExpandedChange = { if (!isSelectionMode) isSearchActive = it },
+//                                placeholder = { Text(stringResource(R.string.search_photos)) },
+//                                leadingIcon = {
+//                                    if (isSelectionMode && isSearchActive) {
+//                                        IconButton(onClick = { selectedIds.clear() }) {
+//                                            IconClose()
+//                                        }
+//                                    } else {
+//                                        IconSearch()
+//                                    }
+//                                },
+//                                trailingIcon = {
+//                                    if (isSelectionMode && isSearchActive) {
+//                                        Row(verticalAlignment = Alignment.CenterVertically) {
+//                                            IconButton(onClick = onMoveToSecureClick) {
+//                                                Icon(painterResource(R.drawable.lock_24px), contentDescription = stringResource(R.string.action_move_to_secure))
+//                                            }
+//                                            IconButton(onClick = onDeleteClick) {
+//                                                IconDelete()
+//                                            }
+//                                        }
+//                                    } else if (searchQuery.isNotEmpty()) {
+//                                        IconButton(onClick = { searchQuery = "" }) {
+//                                            IconClose()
+//                                        }
+//                                    } else if (ocrProgress < 1f && isFeatureEnabled) {
+//                                        Box(Modifier.padding(8.dp)) {
+//                                            CircularProgressIndicator(
+//                                                progress = { ocrProgress },
+//                                                modifier = Modifier.size(24.dp),
+//                                                strokeWidth = 2.dp,
+//                                            )
+//                                        }
+//                                    }
+//                                }
+//                            )
+//                        },
+//                        expanded = isSearchActive,
+//                        onExpandedChange = { if (!isSelectionMode) isSearchActive = it },
+//                        modifier = Modifier
+//                            .fillMaxWidth()
+//                            .padding(horizontal = if (isSearchActive) 0.dp else 16.dp)
+//                            .padding(top = if (isSearchActive) 0.dp else 8.dp),
+//                        content = {
+//                            Column(
+//                                modifier = Modifier
+//                                    .fillMaxSize()
+//                                    .pointerInput(Unit) {
+//                                        awaitEachGesture {
+//                                            while (true) {
+//                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+//                                                if (event.changes.size > 1) {
+//                                                    val zoom = event.calculateZoom()
+//                                                    if (zoom != 1f) {
+//                                                        columnCount = (columnCount / zoom).coerceIn(2f, 8f)
+//                                                        event.changes.forEach { it.consume() }
+//                                                    }
+//                                                }
+//                                                if (event.changes.all { it.changedToUp() }) break
+//                                            }
+//                                        }
+//                                    }
+//                            ) {
+//                                if (!isFeatureEnabled) {
+//                                    Column(
+//                                        Modifier
+//                                            .fillMaxSize()
+//                                            .padding(32.dp),
+//                                        horizontalAlignment = Alignment.CenterHorizontally,
+//                                        verticalArrangement = Arrangement.Center
+//                                    ) {
+//                                        Icon(
+//                                            painterResource(R.drawable.lock_24px),
+//                                            contentDescription = null,
+//                                            modifier = Modifier.size(48.dp),
+//                                            tint = MaterialTheme.colorScheme.primary
+//                                        )
+//                                        Spacer(Modifier.height(16.dp))
+//                                        Text(
+//                                            stringResource(R.string.image_understanding_title),
+//                                            style = MaterialTheme.typography.headlineSmall
+//                                        )
+//                                        Spacer(Modifier.height(8.dp))
+//                                        Text(
+//                                            stringResource(R.string.image_understanding_description),
+//                                            style = MaterialTheme.typography.bodyMedium
+//                                        )
+//                                        if (!isOpenAssistantInstalled) {
+//                                            Spacer(Modifier.height(16.dp))
+//                                            Text(
+//                                                stringResource(R.string.openassistant_not_found),
+//                                                color = MaterialTheme.colorScheme.error,
+//                                                style = MaterialTheme.typography.bodySmall
+//                                            )
+//                                        }
+//                                        Spacer(Modifier.height(24.dp))
+//                                        TextButton(
+//                                            onClick = {
+//                                                scope.launch {
+//                                                    dataStore.setBoolean("image_understanding_enabled", true)
+//                                                    SyncWorker.runOnce(context)
+//                                                }
+//                                            },
+//                                            enabled = isOpenAssistantInstalled
+//                                        ) {
+//                                            Text(stringResource(R.string.enable_feature))
+//                                        }
+//                                    }
+//                                } else if (searchQuery.isBlank()) {
+//                                    Column(
+//                                        Modifier
+//                                            .fillMaxWidth()
+//                                            .padding(32.dp),
+//                                        horizontalAlignment = Alignment.CenterHorizontally
+//                                    ) {
+//                                        Text(
+//                                            stringResource(R.string.indexing_photos),
+//                                            style = MaterialTheme.typography.titleMedium
+//                                        )
+//                                        Spacer(Modifier.height(8.dp))
+//                                        Text(
+//                                            stringResource(R.string.indexing_progress_details, ocrCount, targetCount),
+//                                            style = MaterialTheme.typography.bodySmall
+//                                        )
+//                                        Spacer(Modifier.height(16.dp))
+//                                        LinearProgressIndicator(
+//                                            progress = { ocrProgress },
+//                                            modifier = Modifier.fillMaxWidth()
+//                                        )
+//                                        Spacer(Modifier.height(8.dp))
+//                                        Text(
+//                                            "${(ocrProgress * 100).roundToInt()}%",
+//                                            style = MaterialTheme.typography.bodySmall,
+//                                            modifier = Modifier.align(Alignment.End)
+//                                        )
+//                                    }
+//                                } else {
+//                                    LazyVerticalGrid(
+//                                        GridCells.Fixed(columnCount.roundToInt().coerceIn(2, 8)),
+//                                        Modifier.fillMaxSize(),
+//                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+//                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+//                                    ) {
+//                                        items(searchResults, { it.id }, contentType = { "photo_thumbnail" }) { photo ->
+//                                            val isSelected = photo.id in selectedIds
+//                                            ImageLoader.SelectablePhotoItem(
+//                                                photo = photo,
+//                                                isSelected = isSelected,
+//                                                isSelectionMode = isSelectionMode,
+//                                                onToggleSelection = {
+//                                                    if (isSelected) selectedIds.remove(photo.id) else selectedIds.add(photo.id)
+//                                                },
+//                                                onClick = {
+//                                                    if (isSelectionMode) {
+//                                                        if (isSelected) selectedIds.remove(photo.id) else selectedIds.add(photo.id)
+//                                                    } else {
+//                                                        backStack.add(Route.PhotoPage(photo.id, null))
+//                                                    }
+//                                                }
+//                                            )
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                        }
+//                    )
                 }
             }
         },
