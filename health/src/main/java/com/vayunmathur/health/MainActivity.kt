@@ -166,7 +166,19 @@ sealed interface Route: NavKey {
 @Composable
 fun Navigation() {
     val backStack = rememberNavBackStack<Route>(Route.MainPage)
-    MainNavigation(backStack) {
+    MainNavigation(
+        backStack = backStack,
+        bottomBar = {
+            com.vayunmathur.library.util.BottomNavBar(
+                backStack = backStack,
+                pages = listOf(
+                    com.vayunmathur.library.util.BottomBarItem("Home", Route.MainPage, R.drawable.baseline_favorite_24),
+                    com.vayunmathur.library.util.BottomBarItem("Nutrition", Route.NutritionDetails, R.drawable.baseline_local_fire_department_24)
+                ),
+                currentPage = backStack.last()
+            )
+        }
+    ) {
         entry<Route.MainPage> {
             MainPage(backStack)
         }

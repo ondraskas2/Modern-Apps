@@ -4,17 +4,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -105,8 +108,6 @@ fun MainPage(backStack: NavBackStack<Route>) {
     val distanceToday by HealthAPI.sumInRange(RecordType.Distance, dayStart, dayEnd).collectAsState(0.0)
     val floorsClimbedToday by HealthAPI.sumInRange(RecordType.Floors, dayStart, dayEnd).collectAsState(0.0)
     val elevationGainedToday by HealthAPI.sumInRange(RecordType.Elevation, dayStart, dayEnd).collectAsState(0.0)
-    val hydrationToday by HealthAPI.sumInRange(RecordType.Hydration, dayStart, dayEnd).collectAsState(0.0) // Liters
-    val nutritionCaloriesToday by HealthAPI.sumInRange(RecordType.Nutrition, dayStart, dayEnd).let { f -> remember(f) { f.map { it.toLong() } } }.collectAsState(0L)
 
     val heartRateMaxToday by HealthAPI.maxInRange(RecordType.HeartRate, dayStart, dayEnd).let { f -> remember(f) { f.map{it?.toLong() ?: 0L} } }.collectAsState(0L)
     val heartRateMinToday by HealthAPI.minInRange(RecordType.HeartRate, dayStart, dayEnd).let { f -> remember(f) { f.map{it?.toLong() ?: 0L} } }.collectAsState(0L)
@@ -153,83 +154,101 @@ fun MainPage(backStack: NavBackStack<Route>) {
     }
 
     Scaffold { paddingValues ->
-        Column(
-            Modifier
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
+        val layoutDirection = LocalLayoutDirection.current
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = paddingValues.calculateStartPadding(layoutDirection) + 16.dp,
+                top = paddingValues.calculateTopPadding() + 8.dp,
+                end = paddingValues.calculateEndPadding(layoutDirection) + 16.dp,
+                bottom = paddingValues.calculateBottomPadding() + 24.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
             // 4. Activity & Energy
-            Text(stringResource(R.string.section_activity), style = MaterialTheme.typography.labelLarge)
-            EnergyBurned(backStack, totalCaloriesBurnedToday)
+            item {
+                Text(stringResource(R.string.section_activity), style = MaterialTheme.typography.labelLarge)
+            }
+            item {
+                EnergyBurned(backStack, totalCaloriesBurnedToday)
+            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) {
-                    MiniMetricCard(stringResource(R.string.label_active), activeCaloriesBurnedToday.toString(), stringResource(R.string.unit_cal), onClick = {
-                        backStack.add(Route.BarChartDetails(HealthMetricConfig.ACTIVE_CALORIES))
-                    })
-                }
-                Box(Modifier.weight(1f)) {
-                    MiniMetricCard(stringResource(R.string.label_basal), basalCaloriesBurnedToday.toString(), stringResource(R.string.unit_cal), onClick = {
-                        backStack.add(Route.BarChartDetails(HealthMetricConfig.BASAL_METABOLIC_RATE))
-                    })
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        MiniMetricCard(stringResource(R.string.label_active), activeCaloriesBurnedToday.toString(), stringResource(R.string.unit_cal), onClick = {
+                            backStack.add(Route.BarChartDetails(HealthMetricConfig.ACTIVE_CALORIES))
+                        })
+                    }
+                    Box(Modifier.weight(1f)) {
+                        MiniMetricCard(stringResource(R.string.label_basal), basalCaloriesBurnedToday.toString(), stringResource(R.string.unit_cal), onClick = {
+                            backStack.add(Route.BarChartDetails(HealthMetricConfig.BASAL_METABOLIC_RATE))
+                        })
+                    }
                 }
             }
 
             // High priority Activity Metrics
-            Steps(backStack, stepsToday)
+            item {
+                Steps(backStack, stepsToday)
+            }
 
             if (wheelchairPushesToday > 0) {
-                WheelchairPushes(backStack, wheelchairPushesToday)
+                item {
+                    WheelchairPushes(backStack, wheelchairPushesToday)
+                }
             }
 
-            Mindfulness(mindfulnessToday)
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) { ElevationGained(backStack, elevationGainedToday) }
-                Box(Modifier.weight(1f)) { FloorsClimbed(backStack, floorsClimbedToday) }
+            item {
+                Mindfulness(mindfulnessToday)
             }
 
-            Distance(backStack,distanceToday)
-            HeartRate(backStack, heartRateMaxToday, heartRateMinToday)
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) { ElevationGained(backStack, elevationGainedToday) }
+                    Box(Modifier.weight(1f)) { FloorsClimbed(backStack, floorsClimbedToday) }
+                }
+            }
+
+            item { Distance(backStack,distanceToday) }
+            item { HeartRate(backStack, heartRateMaxToday, heartRateMinToday) }
             // TODO: add this back
             //Sleep(aggregates?.get(SleepSessionRecord.SLEEP_DURATION_TOTAL)?.toKotlinDuration()?.inWholeMinutes ?: 0)
 
 
             // 1. Vitals & Clinical Metrics
-            Text(stringResource(R.string.section_vitals_clinical), style = MaterialTheme.typography.labelLarge)
-            VitalsDashboard(backStack, br, spo2, rhr, hrv, skinTemp, vo2Max, bloodGlucose, bloodPressure)
-
-            Text(stringResource(R.string.section_nutrition_today), style = MaterialTheme.typography.labelLarge)
-            // TODO: add this back
-            //NutritionSummaryCard(aggregates)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) { Nutrition(backStack, nutritionCaloriesToday) }
-                Box(Modifier.weight(1f)) { Hydration(backStack, hydrationToday) }
+            item {
+                Text(stringResource(R.string.section_vitals_clinical), style = MaterialTheme.typography.labelLarge)
+            }
+            item {
+                VitalsDashboard(backStack, br, spo2, rhr, hrv, skinTemp, vo2Max, bloodGlucose, bloodPressure)
             }
 
             // 3. Body Composition
-            Text(stringResource(R.string.section_body_composition), style = MaterialTheme.typography.labelLarge)
-            BodyCompositionDashboard(backStack, height, weight, bodyFat, leanBodyMass, boneMass, bodyWaterMass)
-
-            Text(stringResource(R.string.section_medical_records), style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(1f)) {
-                    MiniMetricCard(stringResource(R.string.label_immunizations), "", "", onClick = {
-                        backStack.add(Route.Immunizations)
-                    })
-                }
-                Box(Modifier.weight(1f)) {
-                    MiniMetricCard(stringResource(R.string.label_lab_results), "", "", onClick = {
-                        backStack.add(Route.LabResults)
-                    })
-                }
+            item {
+                Text(stringResource(R.string.section_body_composition), style = MaterialTheme.typography.labelLarge)
+            }
+            item {
+                BodyCompositionDashboard(backStack, height, weight, bodyFat, leanBodyMass, boneMass, bodyWaterMass)
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            item {
+                Text(stringResource(R.string.section_medical_records), style = MaterialTheme.typography.labelLarge)
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        MiniMetricCard(stringResource(R.string.label_immunizations), "", "", onClick = {
+                            backStack.add(Route.Immunizations)
+                        })
+                    }
+                    Box(Modifier.weight(1f)) {
+                        MiniMetricCard(stringResource(R.string.label_lab_results), "", "", onClick = {
+                            backStack.add(Route.LabResults)
+                        })
+                    }
+                }
+            }
         }
     }
 }

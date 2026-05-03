@@ -121,14 +121,15 @@ class EntryProviderScope<T: NavKey>(val obj: T) {
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-fun <T: NavKey> MainNavigation(backStack: NavBackStack<T>, entryProvider: EntryProviderScope<T>.() -> Unit) {
+fun <T: NavKey> MainNavigation(backStack: NavBackStack<T>, bottomBar: @Composable () -> Unit = {}, entryProvider: EntryProviderScope<T>.() -> Unit) {
     val sceneStrategy: ListDetailSceneStrategy<T> = rememberListDetailSceneStrategy()
     val resultRegistry = remember { NavResultRegistry() }
     val snackbarHostState = remember { SnackbarHostState() }
 
     Scaffold(
         contentWindowInsets = WindowInsets(),
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = bottomBar
     ) { paddingValues ->
         CompositionLocalProvider(
             LocalNavResultRegistry provides resultRegistry,
@@ -177,7 +178,7 @@ fun <Route : NavKey> BottomNavBar(backStack: NavBackStack<Route>, pages: List<Bo
             NavigationBarItem(
                 currentPage == page.route, {
                     if (backStack.last() != page.route) {
-                        backStack.add(page.route)
+                        backStack.reset(page.route)
                     }
                 }, { Icon(painterResource(page.icon), null) }, label = { Text(page.name) }
             )
