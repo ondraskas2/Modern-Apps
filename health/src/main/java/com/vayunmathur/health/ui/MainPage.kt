@@ -232,23 +232,23 @@ fun MainPage(backStack: NavBackStack<Route>) {
                 BodyCompositionDashboard(backStack, height, weight, bodyFat, leanBodyMass, boneMass, bodyWaterMass)
             }
 
-            item {
-                Text(stringResource(R.string.section_medical_records), style = MaterialTheme.typography.labelLarge)
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.weight(1f)) {
-                        MiniMetricCard(stringResource(R.string.label_immunizations), "", "", onClick = {
-                            backStack.add(Route.Immunizations)
-                        })
-                    }
-                    Box(Modifier.weight(1f)) {
-                        MiniMetricCard(stringResource(R.string.label_lab_results), "", "", onClick = {
-                            backStack.add(Route.LabResults)
-                        })
-                    }
-                }
-            }
+//            item {
+//                Text(stringResource(R.string.section_medical_records), style = MaterialTheme.typography.labelLarge)
+//            }
+//            item {
+//                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+//                    Box(Modifier.weight(1f)) {
+//                        MiniMetricCard(stringResource(R.string.label_immunizations), "", "", onClick = {
+//                            backStack.add(Route.Immunizations)
+//                        })
+//                    }
+//                    Box(Modifier.weight(1f)) {
+//                        MiniMetricCard(stringResource(R.string.label_lab_results), "", "", onClick = {
+//                            backStack.add(Route.LabResults)
+//                        })
+//                    }
+//                }
+//            }
         }
     }
 }
