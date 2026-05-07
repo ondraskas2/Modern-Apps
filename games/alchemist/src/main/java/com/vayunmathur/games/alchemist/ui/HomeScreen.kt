@@ -1,6 +1,5 @@
 package com.vayunmathur.games.alchemist.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -17,35 +16,43 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vayunmathur.games.alchemist.data.Alchemist
-import com.vayunmathur.games.alchemist.Route
-import androidx.compose.ui.res.stringResource
+import com.github.javaparser.ast.Modifier
 import com.vayunmathur.games.alchemist.R
+import com.vayunmathur.games.alchemist.Route
+import com.vayunmathur.games.alchemist.data.Alchemist
 import com.vayunmathur.library.util.AchievementsManager
-import androidx.compose.ui.res.painterResource
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.NavBackStack
-import kotlinx.coroutines.flow.map
 import kotlin.collections.sortedBy
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.map
 
-data class PlacedItem(
-    val id: Long,
-    val offset: Offset,
-    val key: Long = System.nanoTime()
-)
+data class PlacedItem(val id: Long, val offset: Offset, val key: Long = System.nanoTime())
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsManager: AchievementsManager, onOpenGameCenter: () -> Unit) {
-    val itemsIds by remember {
-        ds.stringSetFlow("available_items").map { set -> set.map { it.toLong() }.toSet() }
-    }.collectAsState(initial = emptySet())
+fun HomeScreen(
+        backStack: NavBackStack<Route>,
+        ds: DataStoreUtils,
+        achievementsManager: AchievementsManager,
+        onOpenGameCenter: () -> Unit
+) {
+    val itemsIds by
+            remember {
+                        ds.stringSetFlow("available_items").map { set ->
+                            set.map { it.toLong() }.toSet()
+                        }
+                    }
+                    .collectAsState(initial = emptySet())
 
-    val availableItems by remember { derivedStateOf { Alchemist.items.filter{ it.id in itemsIds}.sortedBy { it.name } }}
+    val availableItems by remember {
+        derivedStateOf { Alchemist.items.filter { it.id in itemsIds }.sortedBy { it.name } }
+    }
 
     LaunchedEffect(availableItems) {
         if (availableItems.isEmpty()) {
@@ -54,7 +61,7 @@ fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsM
             if (availableItems.size > 4) achievementsManager.onAchievementUnlocked("first_creation")
             achievementsManager.onProgressUpdated("collector_50", availableItems.size)
             achievementsManager.onProgressUpdated("collector_100", availableItems.size)
-            
+
             if (availableItems.size >= Alchemist.items.size && Alchemist.items.isNotEmpty()) {
                 achievementsManager.onAchievementUnlocked("all_discovered")
             }
@@ -77,67 +84,77 @@ fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsM
     var contextMenuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
-        modifier = Modifier.onGloballyPositioned { screenWidth = it.size.width.toFloat() },
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                actions = {
-                    IconButton(onClick = onOpenGameCenter) {
-                        Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
-                    }
-                    com.vayunmathur.library.ui.BackupButtons(
-                        datastoreNames = listOf("datastore_default")
-                    )
-                }
-            )
-        }
+            modifier = Modifier.onGloballyPositioned { screenWidth = it.size.width.toFloat() },
+            topBar = {
+                TopAppBar(
+                        title = { Text(stringResource(R.string.app_name)) },
+                        actions = {
+                            IconButton(onClick = onOpenGameCenter) {
+                                Icon(
+                                        painterResource(id = android.R.drawable.btn_star_big_on),
+                                        "Achievements"
+                                )
+                            }
+                            com.vayunmathur.library.ui.BackupButtons(
+                                    datastoreNames = listOf("datastore_default")
+                            )
+                        }
+                )
+            }
     ) { paddingValues ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
+        Box(Modifier.fillMaxSize().padding(paddingValues)) {
             // 1. PLAY AREA (Full Screen)
             Box(
-                Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { playAreaOffsetInWindow = it.positionInWindow() }
+                    Modifier.fillMaxSize().onGloballyPositioned {
+                        playAreaOffsetInWindow = it.positionInWindow()
+                    }
             ) {
                 activeItems.forEach { item ->
                     key(item.key) {
                         val density = LocalDensity.current
                         DraggableElement(
-                            item = item,
-                            onOffsetChanged = { newOffset ->
-                                val index = activeItems.indexOfFirst { it.key == item.key }
-                                if (index != -1) {
-                                    activeItems[index] = activeItems[index].copy(offset = newOffset)
-                                }
-                            },
-                            onDragEnd = { finalOffset ->
-                                val limit = with(density) {
-                                    screenWidth - panelWidth - 72.dp.toPx()
-                                }
-                                // DELETION: Triggered if any part of the item touches the sidebar
-                                // screenWidth - panelWidth is the exact left edge of the sidebar.
-                                if (finalOffset.x > limit) {
-                                    activeItems.removeAll { it.key == item.key }
-                                } else {
-                                    checkCombinations(item.key, finalOffset, activeItems) { toRemove, toAdd ->
-                                        activeItems.removeAll { it.key in toRemove.map { r -> r.key } }
-                                        activeItems.addAll(toAdd)
-                                        toAdd.forEach { newItem ->
-                                            if (newItem.id !in itemsIds) {
-                                                ds.addStringToSet("available_items", newItem.id.toString())
+                                item = item,
+                                onOffsetChanged = { newOffset ->
+                                    val index = activeItems.indexOfFirst { it.key == item.key }
+                                    if (index != -1) {
+                                        activeItems[index] =
+                                                activeItems[index].copy(offset = newOffset)
+                                    }
+                                },
+                                onDragEnd = { finalOffset ->
+                                    val limit =
+                                            with(density) {
+                                                screenWidth - panelWidth - 72.dp.toPx()
+                                            }
+                                    // DELETION: Triggered if any part of the item touches the
+                                    // sidebar
+                                    // screenWidth - panelWidth is the exact left edge of the
+                                    // sidebar.
+                                    if (finalOffset.x > limit) {
+                                        activeItems.removeAll { it.key == item.key }
+                                    } else {
+                                        checkCombinations(item.key, finalOffset, activeItems) {
+                                                toRemove,
+                                                toAdd ->
+                                            activeItems.removeAll {
+                                                it.key in toRemove.map { r -> r.key }
+                                            }
+                                            activeItems.addAll(toAdd)
+                                            toAdd.forEach { newItem ->
+                                                if (newItem.id !in itemsIds) {
+                                                    ds.addStringToSet(
+                                                            "available_items",
+                                                            newItem.id.toString()
+                                                    )
+                                                }
                                             }
                                         }
                                     }
+                                },
+                                onLongClick = {
+                                    contextMenuElementId = item.id
+                                    contextMenuExpanded = true
                                 }
-                            },
-                            onLongClick = {
-                                contextMenuElementId = item.id
-                                contextMenuExpanded = true
-                            }
                         )
                     }
                 }
@@ -145,79 +162,117 @@ fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsM
 
             // 2. SIDE PANEL (Overlay)
             Surface(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(140.dp)
-                    .align(Alignment.CenterEnd)
-                    .onGloballyPositioned { panelWidth = it.size.width.toFloat() },
-                tonalElevation = 8.dp,
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
+                    modifier =
+                            Modifier.fillMaxHeight()
+                                    .width(140.dp)
+                                    .align(Alignment.CenterEnd)
+                                    .onGloballyPositioned { panelWidth = it.size.width.toFloat() },
+                    tonalElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)
             ) {
                 LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     items(availableItems, key = { it.id }) { item ->
                         var itemPosInWindow by remember { mutableStateOf(Offset.Zero) }
 
                         Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .onGloballyPositioned { itemPosInWindow = it.positionInWindow() }
-                                .pointerInput(item.id) {
-                                    detectDragGestures(
-                                        onDragStart = { startOffset ->
-                                            draggingInventoryId = item.id
-                                            val fingerInWindow = itemPosInWindow + startOffset
-                                            draggingInventoryOffset = Offset(
-                                                x = fingerInWindow.x - playAreaOffsetInWindow.x - 100f,
-                                                y = fingerInWindow.y - playAreaOffsetInWindow.y - 100f
-                                            )
-                                        },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            draggingInventoryOffset += dragAmount
-                                        },
-                                        onDragEnd = {
-                                            // Final Check: Drop it if it's clear of the sidebar
-                                            // Using -72f to ensure the icon is fully out before adding to board
-                                            if (draggingInventoryOffset.x < (screenWidth - panelWidth - 72f)) {
-                                                val newItem = PlacedItem(item.id, draggingInventoryOffset)
-                                                activeItems.add(newItem)
-
-                                                checkCombinations(newItem.key, newItem.offset, activeItems) { toRemove, toAdd ->
-                                                    activeItems.removeAll { it.key in toRemove.map { r -> r.key } }
-                                                    activeItems.addAll(toAdd)
-                                                    toAdd.forEach { res ->
-                                                        if (res.id !in itemsIds) {
-                                                            ds.addStringToSet("available_items", res.id.toString())
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            draggingInventoryId = null
-                                        },
-                                        onDragCancel = {
-                                            draggingInventoryId = null
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier =
+                                        Modifier.onGloballyPositioned {
+                                            itemPosInWindow = it.positionInWindow()
                                         }
-                                    )
-                                }
+                                                .pointerInput(item.id) {
+                                                    detectDragGestures(
+                                                            onDragStart = { startOffset ->
+                                                                draggingInventoryId = item.id
+                                                                val fingerInWindow =
+                                                                        itemPosInWindow +
+                                                                                startOffset
+                                                                draggingInventoryOffset =
+                                                                        Offset(
+                                                                                x =
+                                                                                        fingerInWindow
+                                                                                                .x -
+                                                                                                playAreaOffsetInWindow
+                                                                                                        .x -
+                                                                                                100f,
+                                                                                y =
+                                                                                        fingerInWindow
+                                                                                                .y -
+                                                                                                playAreaOffsetInWindow
+                                                                                                        .y -
+                                                                                                100f
+                                                                        )
+                                                            },
+                                                            onDrag = { change, dragAmount ->
+                                                                change.consume()
+                                                                draggingInventoryOffset +=
+                                                                        dragAmount
+                                                            },
+                                                            onDragEnd = {
+                                                                // Final Check: Drop it if it's
+                                                                // clear of the sidebar
+                                                                // Using -72f to ensure the icon is
+                                                                // fully out before adding to board
+                                                                if (draggingInventoryOffset.x <
+                                                                                (screenWidth -
+                                                                                        panelWidth -
+                                                                                        72f)
+                                                                ) {
+                                                                    val newItem =
+                                                                            PlacedItem(
+                                                                                    item.id,
+                                                                                    draggingInventoryOffset
+                                                                            )
+                                                                    activeItems.add(newItem)
+
+                                                                    checkCombinations(
+                                                                            newItem.key,
+                                                                            newItem.offset,
+                                                                            activeItems
+                                                                    ) { toRemove, toAdd ->
+                                                                        activeItems.removeAll {
+                                                                            it.key in
+                                                                                    toRemove.map { r
+                                                                                        ->
+                                                                                        r.key
+                                                                                    }
+                                                                        }
+                                                                        activeItems.addAll(toAdd)
+                                                                        toAdd.forEach { res ->
+                                                                            if (res.id !in itemsIds
+                                                                            ) {
+                                                                                ds.addStringToSet(
+                                                                                        "available_items",
+                                                                                        res.id
+                                                                                                .toString()
+                                                                                )
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                draggingInventoryId = null
+                                                            },
+                                                            onDragCancel = {
+                                                                draggingInventoryId = null
+                                                            }
+                                                    )
+                                                }
                         ) {
                             Box(
-                                Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .combinedClickable(
-                                        onLongClick = {
-                                            contextMenuElementId = item.id
-                                            contextMenuExpanded = true
-                                        },
-                                        onClick = {}
-                                    )
-                            ) {
-                                DynamicAlchemyIcon(item.id)
-                            }
+                                    Modifier.size(64.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .combinedClickable(
+                                                    onLongClick = {
+                                                        contextMenuElementId = item.id
+                                                        contextMenuExpanded = true
+                                                    },
+                                                    onClick = {}
+                                            )
+                            ) { DynamicAlchemyIcon(item.id) }
                             Text(item.name ?: "", fontSize = 10.sp)
                         }
                     }
@@ -227,31 +282,30 @@ fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsM
             // 3. GLOBAL DRAG OVERLAY
             draggingInventoryId?.let { id ->
                 Box(
-                    Modifier
-                        .offset {
-                            IntOffset(
-                                draggingInventoryOffset.x.roundToInt(),
-                                draggingInventoryOffset.y.roundToInt()
-                            )
-                        }
-                        .size(72.dp)
-                ) {
-                    DynamicAlchemyIcon(id)
-                }
+                        Modifier.offset {
+                                    IntOffset(
+                                            draggingInventoryOffset.x.roundToInt(),
+                                            draggingInventoryOffset.y.roundToInt()
+                                    )
+                                }
+                                .size(72.dp)
+                ) { DynamicAlchemyIcon(id) }
             }
         }
 
         if (contextMenuExpanded) {
             DropdownMenu(
-                expanded = contextMenuExpanded,
-                onDismissRequest = { contextMenuExpanded = false }
+                    expanded = contextMenuExpanded,
+                    onDismissRequest = { contextMenuExpanded = false }
             ) {
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.see_details)) },
-                    onClick = {
-                        contextMenuExpanded = false
-                        contextMenuElementId?.let { backStack.add(Route.ItemDetails(it.toInt())) }
-                    }
+                        text = { Text(stringResource(R.string.see_details)) },
+                        onClick = {
+                            contextMenuExpanded = false
+                            contextMenuElementId?.let {
+                                backStack.add(Route.ItemDetails(it.toInt()))
+                            }
+                        }
                 )
             }
         }
@@ -260,51 +314,51 @@ fun HomeScreen(backStack: NavBackStack<Route>, ds: DataStoreUtils, achievementsM
 
 @Composable
 fun DraggableElement(
-    item: PlacedItem,
-    onOffsetChanged: (Offset) -> Unit,
-    onDragEnd: (Offset) -> Unit,
-    onLongClick: () -> Unit
+        item: PlacedItem,
+        onOffsetChanged: (Offset) -> Unit,
+        onDragEnd: (Offset) -> Unit,
+        onLongClick: () -> Unit
 ) {
     var currentOffset by remember(item.key) { mutableStateOf(item.offset) }
 
     Box(
-        Modifier
-            .offset { IntOffset(currentOffset.x.roundToInt(), currentOffset.y.roundToInt()) }
-            .size(72.dp)
-            .combinedClickable(onLongClick = onLongClick, onClick = {})
-            .pointerInput(item.key) {
-                detectDragGestures(
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        currentOffset += dragAmount
-                        onOffsetChanged(currentOffset)
-                    },
-                    onDragEnd = { onDragEnd(currentOffset) }
-                )
+            Modifier.offset {
+                IntOffset(currentOffset.x.roundToInt(), currentOffset.y.roundToInt())
             }
-    ) {
-        DynamicAlchemyIcon(item.id)
-    }
+                    .size(72.dp)
+                    .combinedClickable(onLongClick = onLongClick, onClick = {})
+                    .pointerInput(item.key) {
+                        detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    currentOffset += dragAmount
+                                    onOffsetChanged(currentOffset)
+                                },
+                                onDragEnd = { onDragEnd(currentOffset) }
+                        )
+                    }
+    ) { DynamicAlchemyIcon(item.id) }
 }
 
 fun checkCombinations(
-    movedKey: Long,
-    movedOffset: Offset,
-    currentItems: List<PlacedItem>,
-    onCombined: (toRemove: List<PlacedItem>, toAdd: List<PlacedItem>) -> Unit
+        movedKey: Long,
+        movedOffset: Offset,
+        currentItems: List<PlacedItem>,
+        onCombined: (toRemove: List<PlacedItem>, toAdd: List<PlacedItem>) -> Unit
 ) {
     val movedItem = currentItems.find { it.key == movedKey } ?: return
     val others = currentItems.filter { it.key != movedKey }
 
-    val target = others.find { other ->
-        (other.offset - movedOffset).getDistance() < 100f
-    }
+    val target = others.find { other -> (other.offset - movedOffset).getDistance() < 100f }
 
     if (target != null) {
         val combined = listOf(movedItem.id, target.id).sorted()
         val recipe = Alchemist.recipes.find { it.inputs.sorted() == combined }
         if (recipe != null) {
-            onCombined(listOf(movedItem, target), recipe.outputs.map { PlacedItem(it, target.offset) })
+            onCombined(
+                    listOf(movedItem, target),
+                    recipe.outputs.map { PlacedItem(it, target.offset) }
+            )
         }
     }
 }

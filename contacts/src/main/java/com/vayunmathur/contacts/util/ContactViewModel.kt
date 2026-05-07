@@ -40,6 +40,9 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     val isCalendarSyncEnabled: StateFlow<Boolean> = dataStore.booleanFlow("calendar_sync_enabled")
         .stateIn(viewModelScope, SharingStarted.Eagerly, dataStore.getBoolean("calendar_sync_enabled", false))
 
+    val showAccountLabels: StateFlow<Boolean> = dataStore.booleanFlow("show_account_labels")
+        .stateIn(viewModelScope, SharingStarted.Eagerly, dataStore.getBoolean("show_account_labels", true))
+
     init {
         loadContacts()
         loadAccounts()
@@ -59,6 +62,12 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
                 }
                 CalendarWorker.cancel(getApplication())
             }
+        }
+    }
+
+    fun setShowAccountLabels(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.setBoolean("show_account_labels", enabled)
         }
     }
 

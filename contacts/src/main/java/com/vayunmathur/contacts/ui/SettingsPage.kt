@@ -122,6 +122,27 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
             item {
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
+                    text = stringResource(R.string.display),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                val showAccountLabels by viewModel.showAccountLabels.collectAsState()
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.show_account_labels)) },
+                    trailingContent = {
+                        Switch(
+                            checked = showAccountLabels,
+                            onCheckedChange = { viewModel.setShowAccountLabels(it) }
+                        )
+                    }
+                )
+                HorizontalDivider()
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
                     text = stringResource(R.string.backup_and_export),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,

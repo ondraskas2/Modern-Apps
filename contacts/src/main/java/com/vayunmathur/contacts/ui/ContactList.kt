@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.plus
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.Route
@@ -96,6 +98,7 @@ fun ContactList(
     val contacts by viewModel.contacts.collectAsState()
     val selectedIds = remember { mutableStateListOf<Long>() }
     val isSelectionMode = selectedIds.isNotEmpty()
+    val showAccountLabels by viewModel.showAccountLabels.collectAsState()
 
     val (favorites, otherContacts) = remember(contacts) { contacts.partition { it.isFavorite } }
     val groupedContacts = remember(otherContacts) {
@@ -216,6 +219,7 @@ fun ContactList(
                     ContactItem(
                         contact = contact,
                         isSelected = if (isSelectionMode) contact.id in selectedIds else selectedID == contact.id,
+                        showAccountLabels = showAccountLabels,
                         onClick = {
                             if (isSelectionMode) {
                                 if (contact.id in selectedIds) {
@@ -242,6 +246,7 @@ fun ContactList(
                     ContactItem(
                         contact = contact,
                         isSelected = if (isSelectionMode) contact.id in selectedIds else selectedID == contact.id,
+                        showAccountLabels = showAccountLabels,
                         onClick = {
                             if (isSelectionMode) {
                                 if (contact.id in selectedIds) {
@@ -302,7 +307,7 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
 @Composable
 fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit) {
     if(mimeType == null || mimeType == ContactsContract.Contacts.CONTENT_ITEM_TYPE || mimeType == ContactsContract.Contacts.CONTENT_TYPE) {
-        ContactItem(contact, false, {
+        ContactItem(contact, false, true, {
             onClick(Uri.withAppendedPath(
                 ContactsContract.RawContacts.CONTENT_URI,
                 contact.id.toString()))
@@ -321,7 +326,7 @@ fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit)
             CDKStructuredPostal.CONTENT_ITEM_TYPE -> CDKStructuredPostal.CONTENT_URI
             else -> throw IllegalArgumentException("Unsupported MIME type: $mimeType")
         }
-        ContactItem(contact, false, {  }, dropdownList = relevantList.map { it.value }, dropdownListClick = { index ->
+        ContactItem(contact, false, true, {  }, dropdownList = relevantList.map { it.value }, dropdownListClick = { index ->
             onClick(Uri.withAppendedPath(
                 baseURI,
                 relevantList[index].id.toString()
@@ -398,6 +403,7 @@ fun getAvatarColor(id: Long): Color {
 fun ContactItem(
     contact: Contact,
     isSelected: Boolean,
+    showAccountLabels: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     dropdownList: List<String>? = null,
@@ -432,7 +438,9 @@ fun ContactItem(
                 Text(
                     text = nameString,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             },
             leadingContent = {
@@ -476,10 +484,19 @@ fun ContactItem(
                 }
             },
 
-            trailingContent = {
-                val onDevice = stringResource(R.string.on_device)
-                Text(contact.accountName ?: onDevice)
-            },
+            trailingContent = if (showAccountLabels) {
+                {
+                    val onDevice = stringResource(R.string.on_device)
+                    Text(
+                        text = contact.accountName ?: onDevice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 120.dp)
+                    )
+                }
+            } else null,
 
             colors = ListItemDefaults.colors(
                 containerColor = if (isSelected) {

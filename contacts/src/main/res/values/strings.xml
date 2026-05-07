@@ -70,4 +70,6 @@
     <string name="delete_selected_contacts_title">Delete selected contacts</string>
     <string name="delete_selected_contacts_confirm">Are you sure you want to delete the %1$d selected contacts? This action cannot be undone.</string>
     <string name="selected_count">%1$d selected</string>
+    <string name="display">Display</string>
+    <string name="show_account_labels">Show contact accounts</string>
 </resources>
