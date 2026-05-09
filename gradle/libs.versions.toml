@@ -17,6 +17,7 @@ composeBom = "2026.04.01"
 activityCompose = "1.13.0"
 material3 = "1.5.0-alpha18"
 reorderable = "3.1.0"
+material = "1.12.0"
 composeMarkdown = "0.5.8"
 
 # Navigation
@@ -129,6 +130,7 @@ cryptography-provider-jdk = { module = "dev.whyoleg.cryptography:cryptography-pr
 jaudiotagger = { module = "net.jthink:jaudiotagger", version.ref = "jaudiotagger" }
 sol4k = { group = "org.sol4k", name = "sol4k", version.ref = "sol4k" }
 libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", version.ref = "libphonenumber" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
 
 gradle = { module = "com.android.tools.build:gradle", version.ref = "agp" }

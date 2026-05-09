@@ -48,6 +48,7 @@ import androidx.core.util.forEach
 import androidx.pdf.EditablePdfDocument
 import androidx.pdf.PdfPoint
 import androidx.pdf.PdfRect
+import androidx.pdf.compose.FastScrollConfiguration
 import androidx.pdf.compose.PdfViewer
 import androidx.pdf.compose.PdfViewerState
 import androidx.pdf.view.Highlight
@@ -70,23 +71,23 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
     val pdfSavedMessage = stringResource(R.string.pdf_saved)
     val pdfSaveErrorMessage = stringResource(R.string.pdf_save_error)
     val downloadLauncher =
-            rememberLauncherForActivityResult(
-                    ActivityResultContracts.CreateDocument("application/pdf")
-            ) { uri ->
-                uri?.let {
-                    coroutineScope.launch {
-                        try {
-                            context.contentResolver.openFileDescriptor(it, "w")?.use { pfd ->
-                                pdfDocument.createWriteHandle().writeTo(pfd)
-                                Toast.makeText(context, pdfSavedMessage, Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Exception) {
-                            Log.e("PdfViewerScreen", "Error saving PDF", e)
-                            Toast.makeText(context, pdfSaveErrorMessage, Toast.LENGTH_SHORT).show()
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/pdf")
+        ) { uri ->
+            uri?.let {
+                coroutineScope.launch {
+                    try {
+                        context.contentResolver.openFileDescriptor(it, "w")?.use { pfd ->
+                            pdfDocument.createWriteHandle().writeTo(pfd)
+                            Toast.makeText(context, pdfSavedMessage, Toast.LENGTH_SHORT).show()
                         }
+                    } catch (e: Exception) {
+                        Log.e("PdfViewerScreen", "Error saving PDF", e)
+                        Toast.makeText(context, pdfSaveErrorMessage, Toast.LENGTH_SHORT).show()
                     }
                 }
             }
+        }
 
     var showSearchBar by remember { mutableStateOf(false) }
     var searchResults by remember { mutableStateOf(emptyList<PdfRect>()) }
@@ -126,9 +127,9 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
             val resultsFinal = mutableListOf<PdfRect>()
             results.forEach { page, result ->
                 resultsFinal.addAll(
-                        result.mapNotNull {
-                            it.bounds.firstOrNull()?.let { rect -> PdfRect(page, rect) }
-                        }
+                    result.mapNotNull {
+                        it.bounds.firstOrNull()?.let { rect -> PdfRect(page, rect) }
+                    }
                 )
             }
             searchResults = resultsFinal
@@ -139,16 +140,16 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
 
     LaunchedEffect(searchResults, searchIndex) {
         pdfState.setHighlights(
-                searchResults.mapIndexed { idx, it ->
-                    Highlight(
-                            it,
-                            if (idx == searchIndex) 0xFFFFA500.toInt() else Color.Yellow.toArgb()
-                    )
-                }
+            searchResults.mapIndexed { idx, it ->
+                Highlight(
+                    it,
+                    if (idx == searchIndex) 0xFFFFA500.toInt() else Color.Yellow.toArgb()
+                )
+            }
         )
         if (searchResults.isNotEmpty()) {
             pdfState.scrollToPosition(
-                    searchResults[searchIndex].let { PdfPoint(it.pageNum, it.left, it.top) }
+                searchResults[searchIndex].let { PdfPoint(it.pageNum, it.left, it.top) }
             )
         }
     }
@@ -164,105 +165,113 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
     }
 
     Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            topBar = {
-                TopAppBar(
-                        title = { Text(stringResource(R.string.pdf_viewer_title)) },
-                        navigationIcon = { IconNavigation(onBack) },
-                        actions = {
-                            if (!showSearchBar) {
-                                IconButton({ showSearchBar = true }) { IconSearch() }
-                                IconButton({ downloadLauncher.launch(pdfName) }) { IconSave() }
-                                IconButton({
-                                    val intent =
-                                            Intent(Intent.ACTION_SEND).apply {
-                                                type = "application/pdf"
-                                                putExtra(Intent.EXTRA_STREAM, pdfDocument.uri)
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                            }
-                                    context.startActivity(
-                                            Intent.createChooser(
-                                                    intent,
-                                                    context.getString(R.string.share_pdf)
-                                            )
-                                    )
-                                }) { IconShare() }
-                            } else {
-                                if (searchResults.isNotEmpty()) {
-                                    Text(
-                                            stringResource(
-                                                    R.string.search_result_counter,
-                                                    searchIndex + 1,
-                                                    searchResults.size
-                                            ),
-                                            modifier = Modifier.padding(end = 12.dp)
-                                    )
+        modifier = Modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.pdf_viewer_title)) },
+                navigationIcon = { IconNavigation(onBack) },
+                actions = {
+                    if (!showSearchBar) {
+                        IconButton({ showSearchBar = true }) { IconSearch() }
+                        IconButton({ downloadLauncher.launch(pdfName) }) { IconSave() }
+                        IconButton({
+                            val intent =
+                                Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/pdf"
+                                    putExtra(Intent.EXTRA_STREAM, pdfDocument.uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                            }
+                            context.startActivity(
+                                Intent.createChooser(
+                                    intent,
+                                    context.getString(R.string.share_pdf)
+                                )
+                            )
+                        }) { IconShare() }
+                    } else {
+                        if (searchResults.isNotEmpty()) {
+                            Text(
+                                stringResource(
+                                    R.string.search_result_counter,
+                                    searchIndex + 1,
+                                    searchResults.size
+                                ),
+                                modifier = Modifier.padding(end = 12.dp)
+                            )
                         }
-                )
-            },
-            bottomBar = {
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            if (showSearchBar) {
+                BottomAppBar() {
+                    OutlinedTextField(
+                        searchText,
+                        {
+                            searchText = it
+                            search()
+                        },
+                        Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequestor),
+                        label = { Text(stringResource(R.string.search_label)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
+                    )
+                }
+            }
+        },
+        floatingActionButton = {
+            Column {
                 if (showSearchBar) {
-                    BottomAppBar() {
-                        OutlinedTextField(
-                                searchText,
-                                {
-                                    searchText = it
-                                    search()
-                                },
-                                Modifier.fillMaxWidth().focusRequester(focusRequestor),
-                                label = { Text(stringResource(R.string.search_label)) },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
-                        )
-                    }
-                }
-            },
-            floatingActionButton = {
-                Column {
-                    if (showSearchBar) {
-                        Column {
-                            SmallFloatingActionButton({ if (searchIndex > 0) searchIndex-- }) {
-                                Icon(painterResource(R.drawable.keyboard_arrow_up_24px), null)
-                            }
-                            SmallFloatingActionButton({
-                                if (searchIndex < searchResults.size - 1) searchIndex++
-                            }) { Icon(painterResource(R.drawable.keyboard_arrow_down_24px), null) }
+                    Column {
+                        SmallFloatingActionButton({ if (searchIndex > 0) searchIndex-- }) {
+                            Icon(painterResource(R.drawable.keyboard_arrow_up_24px), null)
                         }
-                    }
-                    if (changesMade) {
-                        FloatingActionButton({
-                            changesMade = false
-                            coroutineScope.launch {
-                                context.contentResolver.openFileDescriptor(pdfDocument.uri, "wt")
-                                        ?.use { pfd ->
-                                            pdfDocument.createWriteHandle().writeTo(pfd)
-                                        }
-                            }
-                        }) { IconSave() }
+                        SmallFloatingActionButton({
+                            if (searchIndex < searchResults.size - 1) searchIndex++
+                        }) { Icon(painterResource(R.drawable.keyboard_arrow_down_24px), null) }
                     }
                 }
-            },
-            contentWindowInsets = WindowInsets(0)
+                if (changesMade) {
+                    FloatingActionButton({
+                        changesMade = false
+                        coroutineScope.launch {
+                            context.contentResolver.openFileDescriptor(pdfDocument.uri, "wt")
+                                ?.use { pfd ->
+                                    pdfDocument.createWriteHandle().writeTo(pfd)
+                                }
+                        }
+                    }) { IconSave() }
+                }
+            }
+        },
+        contentWindowInsets = WindowInsets(0)
     ) { innerPadding ->
         Column(Modifier.padding(innerPadding)) {
             Box(Modifier.fillMaxSize()) {
                 PdfViewer(
-                        pdfDocument = pdfDocument,
-                        state = pdfState,
-                        modifier =
-                                Modifier.onGloballyPositioned { coordinates ->
-                                    center = coordinates.size.center.toOffset()
-                                },
-                        isFormFillingEnabled = true,
-                        isImageSelectionEnabled = true,
-                        onFormWidgetInfoUpdated = { editInfo ->
-                            coroutineScope.launch {
-                                pdfDocument.applyEdit(editInfo)
-                                changesMade = true
-                            }
+                    pdfDocument = pdfDocument,
+                    state = pdfState,
+                    modifier =
+                        Modifier.onGloballyPositioned { coordinates ->
+                            center = coordinates.size.center.toOffset()
                         },
+                    fastScrollConfig = FastScrollConfiguration.withDrawableIdsAndDp(
+                        fastScrollPageIndicatorBackgroundDrawableRes = R.drawable.pdf_page_indicator_background,
+                        fastScrollVerticalThumbDrawableRes = R.drawable.pdf_fast_scroll_thumb,
+                        fastScrollPageIndicatorMarginEnd = 42.dp,
+                        fastScrollVerticalThumbMarginEnd = 0.dp,
+                    ),
+                    isFormFillingEnabled = true,
+                    isImageSelectionEnabled = true,
+                    onFormWidgetInfoUpdated = { editInfo ->
+                        coroutineScope.launch {
+                            pdfDocument.applyEdit(editInfo)
+                            changesMade = true
+                        }
+                    },
                 ) { uri ->
                     val intent = Intent(Intent.ACTION_VIEW, uri)
                     context.startActivity(intent)

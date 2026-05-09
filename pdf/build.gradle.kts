@@ -22,4 +22,5 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.coil.compose)
     implementation(libs.reorderable)
+    implementation(libs.material)
 }
