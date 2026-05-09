@@ -13,4 +13,8 @@
     <string name="alarm_notification_wake_up">Svegliati!</string>
     <string name="alarm_ringing_notification_title">La sveglia sta suonando</string>
     <string name="channel_ongoing_timers_name">Timer attivi</string>
+    <string name="channel_ongoing_timers_description">Countdown attivi</string>
+    <string name="channel_completed_timers_name">Timer completati</string>
+    <string name="channel_completed_timers_description">Avvisi al termine dei timer</string>
+    <string name="channel_alarms_name">Sveglie</string>
 </resources>
