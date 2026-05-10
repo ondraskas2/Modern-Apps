@@ -10,12 +10,11 @@ android {
 }
 
 dependencies {
+    implementation(project(":library:downloadservice"))
 
     implementation(libs.jaudiotagger)
 
     implementRoom(libs)
-
-    implementation(libs.androidx.work.runtime.ktx)
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)

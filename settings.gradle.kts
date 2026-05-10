@@ -27,6 +27,7 @@ rootProject.name = "apps"
 include(":library")
 include(":library:biometric")
 include(":library:downloadservice")
+include(":library:widgets")
 include(":calendar")
 include(":contacts")
 include(":pdf")

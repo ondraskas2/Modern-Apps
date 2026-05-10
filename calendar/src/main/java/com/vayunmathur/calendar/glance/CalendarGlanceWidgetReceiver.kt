@@ -2,7 +2,7 @@ package com.vayunmathur.calendar.glance
 
 import android.content.Context
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
-import com.vayunmathur.library.util.scheduleHourlyUpdate
+import com.vayunmathur.library.widgets.scheduleHourlyUpdate
 
 class CalendarGlanceWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: CalendarGlanceWidget = CalendarGlanceWidget()

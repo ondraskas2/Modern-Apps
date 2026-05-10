@@ -2,7 +2,7 @@ package com.vayunmathur.photos.glance
 
 import android.content.Context
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
-import com.vayunmathur.library.util.scheduleHourlyUpdate
+import com.vayunmathur.library.widgets.scheduleHourlyUpdate
 
 class PhotoGlanceWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: PhotoGlanceWidget = PhotoGlanceWidget()

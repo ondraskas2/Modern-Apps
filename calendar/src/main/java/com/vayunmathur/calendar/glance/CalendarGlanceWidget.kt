@@ -42,7 +42,7 @@ import com.vayunmathur.calendar.ui.atEndOfDayIn
 import com.vayunmathur.calendar.ui.computePositionedEventsForDay
 import com.vayunmathur.calendar.ui.dateFormat
 import com.vayunmathur.calendar.ui.dateRangeString
-import com.vayunmathur.library.ui.DynamicThemeGlance
+import com.vayunmathur.library.widgets.DynamicThemeGlance
 import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone

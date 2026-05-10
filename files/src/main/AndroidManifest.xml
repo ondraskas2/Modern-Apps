@@ -27,11 +27,6 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"
-            tools:node="merge" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"

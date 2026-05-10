@@ -79,6 +79,7 @@ import com.vayunmathur.library.ui.AchievementNotification
 import com.vayunmathur.library.ui.GameCenterScreen
 import com.vayunmathur.games.unblockjam.util.AppBackupAgent
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalContext
 
 class MainActivity : ComponentActivity() {
 

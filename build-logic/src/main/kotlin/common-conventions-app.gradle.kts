@@ -51,6 +51,7 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         minSdk = 31
         versionCode = appVersionCode
         versionName = appVersionName
+        targetSdk = 37
     }
 
     signingConfigs {

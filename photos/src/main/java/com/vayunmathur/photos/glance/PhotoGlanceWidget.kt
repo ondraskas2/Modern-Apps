@@ -22,7 +22,7 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.fillMaxSize
-import com.vayunmathur.library.ui.DynamicThemeGlance
+import com.vayunmathur.library.widgets.DynamicThemeGlance
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.photos.data.Photo

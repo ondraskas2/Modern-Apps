@@ -1,4 +1,4 @@
-package com.vayunmathur.library.util
+package com.vayunmathur.findfamily.util
 
 import android.content.Context
 import androidx.work.Constraints
@@ -13,8 +13,11 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 
-
-inline fun <reified T: ListenableWorker> startRepeatedTask(context: Context, name: String, interval: Duration) {
+inline fun <reified T : ListenableWorker> startRepeatedTask(
+    context: Context,
+    name: String,
+    interval: Duration
+) {
     val workManager = WorkManager.getInstance(context)
 
     val myConstraints = Constraints.Builder()

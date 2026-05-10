@@ -9,7 +9,5 @@ android {
 }
 
 dependencies {
-    // Glance app widget
-    implementation(libs.androidx.glance)
-    implementation(libs.androidx.glance.appwidget)
+    implementation(project(":library:widgets"))
 }

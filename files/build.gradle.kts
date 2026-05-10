@@ -9,5 +9,5 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.work.runtime.ktx)
+    implementation(project(":library:downloadservice"))
 }

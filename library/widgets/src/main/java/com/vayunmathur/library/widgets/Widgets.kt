@@ -1,4 +1,4 @@
-package com.vayunmathur.library.util
+package com.vayunmathur.library.widgets
 
 import android.content.Context
 import androidx.glance.appwidget.GlanceAppWidget

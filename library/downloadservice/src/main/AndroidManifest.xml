@@ -14,6 +14,12 @@
             android:name=".DownloadService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            xmlns:tools="http://schemas.android.com/tools"
+            tools:node="merge" />
     </application>
 
 </manifest>

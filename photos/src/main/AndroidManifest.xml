@@ -64,13 +64,6 @@
                 android:resource="@xml/photo_glance_widget_info" />
         </receiver>
 
-        <!-- Required for WorkManager Foreground Service in Android 14+ -->
-        <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false"
-            tools:node="merge" />
-
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
