@@ -89,8 +89,8 @@ import kotlin.time.Instant
 import kotlin.time.toKotlinInstant
 
 data class VideoChapter(val time: Int, val title: String, val previewURL: String?)
-data class AudioStream(val url: String, val bitrate: Int, val language: String)
-data class VideoStream(val url: String, val width: Int, val height: Int, val bitrate: Int, val fps: Int, val quality: String)
+data class AudioStream(val url: String, val bitrate: Int, val language: String, val codec: String)
+data class VideoStream(val url: String, val width: Int, val height: Int, val bitrate: Int, val fps: Int, val quality: String, val codec: String)
 data class VideoData(val title: String, val views: Long, val duration: Long, val uploadDate: Instant, val thumbnailURL: String, val author: String, val authorURL: String, val authorThumbnail: String)
 data class Comment(val text: String, val author: String, val likes: Int, val dislikes: Int)
 
@@ -139,27 +139,61 @@ fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, vide
                             it.previewUrl
                         )
                     }
-                    videoStreams = streamExtractor.videoOnlyStreams.map {
+                    videoStreams = streamExtractor.videoOnlyStreams.map { stream ->
+                        val codecStr = stream.codec ?: ""
+                        val codec = when {
+                            codecStr.contains("av01", ignoreCase = true) -> "av1"
+                            codecStr.contains("vp9", ignoreCase = true) || codecStr.contains("vp09", ignoreCase = true) -> "vp9"
+                            codecStr.contains("avc", ignoreCase = true) || codecStr.contains("h264", ignoreCase = true) -> "avc"
+                            else -> codecStr
+                        }
                         VideoStream(
-                            it.content,
-                            it.width,
-                            it.height,
-                            it.bitrate,
-                            it.fps,
-                            it.quality
+                            stream.content,
+                            stream.width,
+                            stream.height,
+                            stream.bitrate,
+                            stream.fps,
+                            "${stream.height}p",
+                            codec
                         )
-                    }
-                    audioStreams = streamExtractor.audioStreams.map {
+                    }.sortedWith(
+                        compareByDescending<VideoStream> { it.height }
+                            .thenByDescending {
+                                when (it.codec) {
+                                    "av1" -> 3
+                                    "vp9" -> 2
+                                    "avc" -> 1
+                                    else -> 0
+                                }
+                            }
+                    )
+                    audioStreams = streamExtractor.audioStreams.map { stream ->
+                        val codecStr = stream.codec ?: ""
+                        val codec = when {
+                            codecStr.contains("opus", ignoreCase = true) -> "opus"
+                            codecStr.contains("mp4a", ignoreCase = true) || codecStr.contains("aac", ignoreCase = true) -> "aac"
+                            else -> codecStr
+                        }
                         AudioStream(
-                            it.content,
-                            it.bitrate,
-                            it.audioLocale?.language ?: "Default"
+                            stream.content,
+                            stream.bitrate,
+                            stream.audioLocale?.language ?: "Default",
+                            codec
                         )
-                    }
+                    }.sortedWith(
+                        compareByDescending<AudioStream> { it.bitrate }
+                            .thenByDescending {
+                                when (it.codec) {
+                                    "opus" -> 2
+                                    "aac" -> 1
+                                    else -> 0
+                                }
+                            }
+                    )
                 } else {
                     val video = downloadedVideo!!
-                    videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded"))
-                    audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default")) else emptyList()
+                    videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc"))
+                    audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac")) else emptyList()
                     segments = emptyList()
                 }
 
@@ -211,8 +245,8 @@ fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, vide
                     "",
                     ""
                 )
-                videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded"))
-                audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default")) else emptyList()
+                videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc"))
+                audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac")) else emptyList()
             } else {
                 error = true
                 e.printStackTrace()
@@ -223,8 +257,8 @@ fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, vide
     LaunchedEffect(downloadedVideo) {
         if (downloadedVideo != null) {
             val video = downloadedVideo!!
-            videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded"))
-            audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default")) else emptyList()
+            videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc"))
+            audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac")) else emptyList()
             segments = emptyList()
         }
     }
@@ -333,7 +367,6 @@ fun VideoDetails(
     audioStreams: List<AudioStream>
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val downloadedVideo by viewModel.getNullable<DownloadedVideo>(videoID)
     val activeDownloads by DownloadManager.activeDownloads.collectAsState()
     val downloadProgress = activeDownloads[videoID]?.progress
@@ -341,7 +374,7 @@ fun VideoDetails(
     var isDownloadDialogVisible by remember { mutableStateOf(false) }
 
     if (isDownloadDialogVisible) {
-        var selectedVideoStream by remember { mutableStateOf(videoStreams.maxByOrNull { it.width * it.height } ?: videoStreams.first()) }
+        var selectedVideoStream by remember { mutableStateOf(videoStreams.maxByOrNull { it.height } ?: videoStreams.first()) }
         var selectedAudioStream by remember { mutableStateOf(audioStreams.firstOrNull()) }
 
         val languages = remember(audioStreams) { audioStreams.map { it.language }.distinct().sorted() }
@@ -365,7 +398,7 @@ fun VideoDetails(
                         onExpandedChange = { videoExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = "${selectedVideoStream.quality} (${selectedVideoStream.width}x${selectedVideoStream.height})",
+                            value = "${selectedVideoStream.quality} (${getVideoCodecName(selectedVideoStream.codec)})",
                             onValueChange = {},
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = videoExpanded) },
@@ -376,9 +409,9 @@ fun VideoDetails(
                             expanded = videoExpanded,
                             onDismissRequest = { videoExpanded = false }
                         ) {
-                            videoStreams.distinctBy { it.quality }.forEach { stream ->
+                            videoStreams.forEach { stream ->
                                 DropdownMenuItem(
-                                    text = { Text("${stream.quality} (${stream.width}x${stream.height})") },
+                                    text = { Text("${stream.quality} (${getVideoCodecName(stream.codec)})") },
                                     onClick = {
                                         selectedVideoStream = stream
                                         videoExpanded = false
@@ -431,7 +464,7 @@ fun VideoDetails(
                             onExpandedChange = { audioExpanded = it }
                         ) {
                             OutlinedTextField(
-                                value = selectedAudioStream?.let { "${it.bitrate / 1000} kbps" } ?: "None",
+                                value = selectedAudioStream?.let { "${it.bitrate / 1000} kbps (${getAudioCodecName(it.codec)})" } ?: "None",
                                 onValueChange = {},
                                 readOnly = true,
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = audioExpanded) },
@@ -444,7 +477,7 @@ fun VideoDetails(
                             ) {
                                 filteredAudioStreams.forEach { stream ->
                                     DropdownMenuItem(
-                                        text = { Text("${stream.bitrate / 1000} kbps") },
+                                        text = { Text("${stream.bitrate / 1000} kbps (${getAudioCodecName(stream.codec)})") },
                                         onClick = {
                                             selectedAudioStream = stream
                                             audioExpanded = false
@@ -605,4 +638,21 @@ fun String.fromHTML(): String {
         this.replace("<br>", "\n"),
         HtmlCompat.FROM_HTML_MODE_LEGACY
     ).toString()
+}
+
+fun getVideoCodecName(codec: String): String {
+    return when {
+        codec.contains("av01", ignoreCase = true) -> "av1"
+        codec.contains("vp9", ignoreCase = true) -> "vp9"
+        codec.contains("avc", ignoreCase = true) -> "avc"
+        else -> codec
+    }
+}
+
+fun getAudioCodecName(codec: String): String {
+    return when {
+        codec.contains("opus", ignoreCase = true) -> "opus"
+        codec.contains("mp4a", ignoreCase = true) || codec.contains("aac", ignoreCase = true) -> "aac"
+        else -> codec
+    }
 }

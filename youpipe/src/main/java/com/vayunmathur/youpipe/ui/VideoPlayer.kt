@@ -232,14 +232,14 @@ fun VideoPlayer(
                             shape = RoundedCornerShape(4.dp)
                         ) {
                             Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = currentVideoStream.quality, color = Color.White, style = MaterialTheme.typography.labelMedium)
+                                Text(text = "${currentVideoStream.quality} (${getVideoCodecName(currentVideoStream.codec)})", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
                             }
                         }
                         DropdownMenu(expanded = isVideoMenuExpanded, onDismissRequest = { isVideoMenuExpanded = false }) {
                             videoStreams.forEach { stream ->
                                 DropdownMenuItem(
-                                    text = { Text("${stream.quality} (${stream.fps}fps)") },
+                                    text = { Text("${stream.quality} (${stream.fps}fps) ${getVideoCodecName(stream.codec)}") },
                                     onClick = { currentVideoStream = stream; isVideoMenuExpanded = false }
                                 )
                             }
@@ -274,14 +274,14 @@ fun VideoPlayer(
                             shape = RoundedCornerShape(4.dp)
                         ) {
                             Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = "${currentAudioStream.bitrate / 1000}kbps", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                                Text(text = "${currentAudioStream.bitrate / 1000}kbps (${getAudioCodecName(currentAudioStream.codec)})", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
                             }
                         }
                         DropdownMenu(expanded = isAudioMenuExpanded, onDismissRequest = { isAudioMenuExpanded = false }) {
                             audioStreamOptions.forEach { stream ->
                                 DropdownMenuItem(
-                                    text = { Text("${stream.bitrate / 1000}kbps") },
+                                    text = { Text("${stream.bitrate / 1000}kbps (${getAudioCodecName(stream.codec)})") },
                                     onClick = { currentAudioStream = stream; isAudioMenuExpanded = false }
                                 )
                             }
