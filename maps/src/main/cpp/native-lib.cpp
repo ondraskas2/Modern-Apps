@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <mutex>
 #include <set>
+#include <map>
 #include <android/log.h>
 
 #include "scratchpad.h"
@@ -18,7 +19,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // User-specified Travel Mode mapping
-enum TravelMode { DRIVING = 0, WenALK = 2, BICYCLE = 3 };
+enum TravelMode { DRIVING = 0, WALK = 2, BICYCLE = 3 };
 
 // Road types based on OpenStreetMap tags
 enum RoadType {
@@ -65,7 +66,7 @@ static RoutingScratchpad g_scratchpad;
 static TrafficPageTable g_traffic_zones[NUM_ZONES];
 static RadixHeap g_heap; // Only one heap needed for unidirectional
 
-static std::vector<double> g_all_traffic_segments;
+static std::map<int, std::vector<double>> g_traffic_by_square;
 static std::vector<uint32_t> g_requested_squares; // Packed (lat_idx << 16 | lon_idx)
 static std::mutex g_traffic_mutex;
 
@@ -485,28 +486,25 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vayunmathur_maps_util_OfflineRouter_updateTrafficNative(JNIEnv* env, jobject thiz, jint zone_id, jintArray edge_ids, jbyteArray speeds, jint packed_square) {
     jsize len = env->GetArrayLength(edge_ids); jint* ids_ptr = env->GetIntArrayElements(edge_ids, nullptr);
     jbyte* speeds_ptr = env->GetByteArrayElements(speeds, nullptr);
-    LOGD("updateTrafficNative START: zone %d, count %d, packed %u", (int)zone_id, (int)len, (uint32_t)packed_square);
-    if (zone_id >= 0 && zone_id < NUM_ZONES) {
-        std::lock_guard<std::mutex> lock(g_traffic_mutex);
-        size_t total_edges_in_zone = g_edge_count_in_zone[zone_id];
-        for (jsize i = 0; i < len; i++) {
-            uint32_t local_id = (uint32_t)ids_ptr[i]; uint8_t speed = (uint8_t)speeds_ptr[i];
-            g_traffic_zones[zone_id].set_speed(local_id, speed);
+    std::lock_guard<std::mutex> lock(g_traffic_mutex);
+    auto& segments = g_traffic_by_square[packed_square];
+    if (segments.size() > 100000) segments.clear(); 
+    size_t total_edges_in_zone = g_edge_count_in_zone[zone_id];
+    for (jsize i = 0; i < len; i++) {
+        uint32_t local_id = (uint32_t)ids_ptr[i]; uint8_t speed = (uint8_t)speeds_ptr[i];
 
-            if (g_node_zones[zone_id] && local_id < total_edges_in_zone) {
-                uint32_t local_node_idx = find_node_idx_for_edge(zone_id, local_id);
-                const NodeMaster& node_u = g_node_zones[zone_id][local_node_idx];
-                const Edge& edge = g_edge_zones[zone_id][local_id];
-                int z_v = get_zone_for_id(edge.target);
-                if (is_zone_mapped(z_v)) {
-                    const NodeMaster& node_v = get_node(edge.target);
-                    double ratio = (edge.speed_limit > 0) ? (double)speed / edge.speed_limit : 1.0;
-                    g_all_traffic_segments.push_back(node_u.lat_e7 * 1e-7);
-                    g_all_traffic_segments.push_back(node_u.lon_e7 * 1e-7);
-                    g_all_traffic_segments.push_back(node_v.lat_e7 * 1e-7);
-                    g_all_traffic_segments.push_back(node_v.lon_e7 * 1e-7);
-                    g_all_traffic_segments.push_back(ratio);
-                }
+        if (g_node_zones[zone_id] && local_id < total_edges_in_zone) {
+            const Edge& edge = g_edge_zones[zone_id][local_id];
+            if (speed < 255) { // valid traffic data
+                g_traffic_zones[zone_id].set_speed(local_id, speed);
+                const NodeMaster& node_u = g_node_zones[zone_id][find_node_idx_for_edge(zone_id, local_id)];
+                const NodeMaster& node_v = g_node_zones[get_zone_for_id(edge.target)][edge.target - g_zone_offsets[get_zone_for_id(edge.target)]];
+                double ratio = (edge.speed_limit > 0) ? (double)speed / edge.speed_limit : 1.0;
+                segments.push_back(node_u.lat_e7 * 1e-7);
+                segments.push_back(node_u.lon_e7 * 1e-7);
+                segments.push_back(node_v.lat_e7 * 1e-7);
+                segments.push_back(node_v.lon_e7 * 1e-7);
+                segments.push_back(ratio);
             }
         }
     }
@@ -522,11 +520,65 @@ Java_com_vayunmathur_maps_util_OfflineRouter_notifyTrafficFetchFinishedNative(JN
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_vayunmathur_maps_util_OfflineRouter_getTrafficSegmentsNative(JNIEnv* env, jobject thiz) {
     std::lock_guard<std::mutex> lock(g_traffic_mutex);
-    size_t count = g_all_traffic_segments.size();
-    if (count > 250000) count = 250000;
+    std::vector<double> flattened;
+    for (auto const& [square, segments] : g_traffic_by_square) {
+        flattened.insert(flattened.end(), segments.begin(), segments.end());
+        if (flattened.size() > 50000) break;
+    }
+    size_t count = flattened.size();
+    if (count > 50000) count = 50000;
     jdoubleArray jRes = env->NewDoubleArray(count);
-    if (count > 0) env->SetDoubleArrayRegion(jRes, 0, count, g_all_traffic_segments.data());
+    if (count > 0) env->SetDoubleArrayRegion(jRes, 0, count, flattened.data());
     return jRes;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vayunmathur_maps_util_OfflineRouter_writeTrafficGeoJsonNative(JNIEnv* env, jobject thiz, jstring path) {
+    const char* path_ptr = env->GetStringUTFChars(path, nullptr);
+    FILE* f = fopen(path_ptr, "w");
+    if (!f) {
+        env->ReleaseStringUTFChars(path, path_ptr);
+        return JNI_FALSE;
+    }
+
+    std::lock_guard<std::mutex> lock(g_traffic_mutex);
+    fprintf(f, "{\"type\":\"FeatureCollection\",\"features\":[");
+
+    const char* colors[] = {"#FF0000", "#FFFF00", "#00FF00"};
+    bool first_feature = true;
+
+    for (auto const& [square, segments] : g_traffic_by_square) {
+        for (int c = 0; c < 3; ++c) {
+            bool first_line = true;
+            for (size_t i = 0; i + 4 < segments.size(); i += 5) {
+                double ratio = segments[i + 4];
+                if (ratio <= 0.0) continue;
+
+                int color_idx = (ratio < 0.5) ? 0 : (ratio < 0.9 ? 1 : 2);
+                if (color_idx != c) continue;
+
+                if (first_line) {
+                    if (!first_feature) fprintf(f, ",");
+                    fprintf(f, "{\"type\":\"Feature\",\"geometry\":{\"type\":\"MultiLineString\",\"coordinates\":[");
+                    first_feature = false;
+                    first_line = false;
+                } else {
+                    fprintf(f, ",");
+                }
+                fprintf(f, "[[%.5f,%.5f],[%.5f,%.5f]]",
+                        segments[i + 1], segments[i],
+                        segments[i + 3], segments[i + 2]);
+            }
+            if (!first_line) {
+                fprintf(f, "]},\"properties\":{\"color\":\"%s\"}}", colors[c]);
+            }
+        }
+    }
+    fprintf(f, "]}");
+    fclose(f);
+
+    env->ReleaseStringUTFChars(path, path_ptr);
+    return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT void JNICALL

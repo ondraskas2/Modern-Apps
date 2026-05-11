@@ -244,7 +244,7 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
                             ClickResult.Pass
                         }
                     ) {
-                        MyMapLayers(selectedFeature, route?.get(selectedRouteType))
+                        MyMapLayers(selectedFeature, route?.get(selectedRouteType), json)
                     }
                 }
 
