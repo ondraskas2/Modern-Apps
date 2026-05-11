@@ -15,8 +15,60 @@ import kotlinx.coroutines.withContext
 import org.maplibre.spatialk.geojson.Position
 
 object OfflineRouter {
+    private var serverPort = 0
+    val trafficTileUrl: String get() = if (serverPort > 0) "http://localhost:$serverPort/traffic/{z}/{x}/{y}" else ""
+
     init {
         System.loadLibrary("offlinerouter")
+        startLocalTileServer()
+    }
+
+    private fun startLocalTileServer() {
+        Thread {
+            try {
+                val serverSocket = java.net.ServerSocket(0)
+                serverPort = serverSocket.localPort
+                Log.d("OFFLINE_ROUTER", "Tile server started on port $serverPort")
+                while (true) {
+                    val client = serverSocket.accept()
+                    handleClient(client)
+                }
+            } catch (e: Exception) {
+                Log.e("OFFLINE_ROUTER", "Tile server error", e)
+            }
+        }.start()
+    }
+
+    private fun handleClient(client: java.net.Socket) {
+        try {
+            val reader = client.getInputStream().bufferedReader()
+            val firstLine = reader.readLine() ?: return
+            
+            // Expected: GET /traffic/{z}/{x}/{y} HTTP/1.1
+            val parts = firstLine.split(" ")
+            if (parts.size >= 2 && parts[0] == "GET") {
+                val pathParts = parts[1].removePrefix("/traffic/").split("/")
+                if (pathParts.size == 3) {
+                    val z = pathParts[0].toIntOrNull() ?: 0
+                    val x = pathParts[1].toIntOrNull() ?: 0
+                    val y = pathParts[2].substringBefore("?").toIntOrNull() ?: 0
+                    
+                    val bytes = getTrafficTileNative(z, x, y)
+                    val output = client.getOutputStream()
+                    if (bytes != null) {
+                        output.write("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.mapbox-vector-tile\r\nContent-Length: ${bytes.size}\r\nAccess-Control-Allow-Origin: *\r\n\r\n".toByteArray())
+                        output.write(bytes)
+                    } else {
+                        output.write("HTTP/1.1 204 No Content\r\n\r\n".toByteArray())
+                    }
+                    output.flush()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("OFFLINE_ROUTER", "Error handling client", e)
+        } finally {
+            client.close()
+        }
     }
 
     private external fun init(basePath: String): Boolean
@@ -35,23 +87,15 @@ object OfflineRouter {
     )
     private external fun getTrafficSegmentsNative(): DoubleArray
     private external fun notifyTrafficFetchFinishedNative(packedSquare: Int)
-    private external fun writeTrafficGeoJsonNative(path: String): Boolean
+    external fun getTrafficTileNative(z: Int, x: Int, y: Int): ByteArray?
 
-    private val _trafficGeoJsonUrl = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val trafficGeoJsonUrl = _trafficGeoJsonUrl.asStateFlow()
+    private val _trafficVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val trafficVersion = _trafficVersion.asStateFlow()
 
     private var cacheDirPath: String? = null
 
-    fun updateTrafficGeoJson(context: Context? = null) {
-        val path = context?.cacheDir?.absolutePath ?: cacheDirPath ?: return
-        if (cacheDirPath == null) cacheDirPath = path
-
-        val fileName = "traffic_${System.currentTimeMillis() % 100}.geojson"
-        val cacheFile = java.io.File(path, fileName)
-
-        if (writeTrafficGeoJsonNative(cacheFile.absolutePath)) {
-            _trafficGeoJsonUrl.value = "file://" + cacheFile.absolutePath
-        }
+    fun notifyTrafficUpdated() {
+        _trafficVersion.value++
     }
 
     private external fun ensureTrafficLoadedNative(lat: Double, lon: Double)
@@ -91,7 +135,7 @@ object OfflineRouter {
                     buffer.get(speeds)
                     Log.d("TRAFFIC_DATA", "fetchTrafficData PROCESSING: $n edges")
                     updateTrafficNative(zoneId, edgeIds, speeds, packedSquare)
-                    updateTrafficGeoJson()
+                    notifyTrafficUpdated()
                 } else {
                     Log.w("TRAFFIC_DATA", "fetchTrafficData NO DATA: status=$status")
                     notifyTrafficFetchFinishedNative(packedSquare)

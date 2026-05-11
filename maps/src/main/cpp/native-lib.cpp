@@ -70,6 +70,41 @@ static std::map<int, std::vector<double>> g_traffic_by_square;
 static std::vector<uint32_t> g_requested_squares; // Packed (lat_idx << 16 | lon_idx)
 static std::mutex g_traffic_mutex;
 
+// --- MVT ENCODING UTILS ---
+static void write_varint(std::vector<uint8_t>& buf, uint64_t value) {
+    while (value >= 0x80) {
+        buf.push_back((uint8_t)(value | 0x80));
+        value >>= 7;
+    }
+    buf.push_back((uint8_t)value);
+}
+
+static void write_tag(std::vector<uint8_t>& buf, uint32_t field, uint8_t type) {
+    write_varint(buf, (field << 3) | type);
+}
+
+static void write_string(std::vector<uint8_t>& buf, uint32_t field, const std::string& s) {
+    write_tag(buf, field, 2);
+    write_varint(buf, s.size());
+    buf.insert(buf.end(), s.begin(), s.end());
+}
+
+static int32_t zigzag(int32_t n) { return (n << 1) ^ (n >> 31); }
+
+static uint32_t mvt_command(uint32_t cmd, uint32_t count) { return (cmd & 0x7) | (count << 3); }
+
+struct TileProj {
+    double n;
+    int x, y;
+    void wgs84_to_tile_px(double lat, double lon, int32_t& px, int32_t& py) const {
+        double lat_rad = lat * M_PI / 180.0;
+        double tx = (lon + 180.0) / 360.0 * n;
+        double ty = (1.0 - std::log(std::tan(lat_rad) + (1.0 / std::cos(lat_rad))) / M_PI) / 2.0 * n;
+        px = (int32_t)((tx - x) * 4096.0);
+        py = (int32_t)((ty - y) * 4096.0);
+    }
+};
+
 uint64_t latlng_to_spatial(double lat, double lon) {
     double x = (lon + 180.0) / 360.0;
     double y = (lat + 90.0) / 180.0;
@@ -532,53 +567,124 @@ Java_com_vayunmathur_maps_util_OfflineRouter_getTrafficSegmentsNative(JNIEnv* en
     return jRes;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_vayunmathur_maps_util_OfflineRouter_writeTrafficGeoJsonNative(JNIEnv* env, jobject thiz, jstring path) {
-    const char* path_ptr = env->GetStringUTFChars(path, nullptr);
-    FILE* f = fopen(path_ptr, "w");
-    if (!f) {
-        env->ReleaseStringUTFChars(path, path_ptr);
-        return JNI_FALSE;
-    }
-
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vayunmathur_maps_util_OfflineRouter_getTrafficTileNative(JNIEnv* env, jobject thiz, jint z, jint x, jint y) {
     std::lock_guard<std::mutex> lock(g_traffic_mutex);
-    fprintf(f, "{\"type\":\"FeatureCollection\",\"features\":[");
 
-    const char* colors[] = {"#FF0000", "#FFFF00", "#00FF00"};
-    bool first_feature = true;
+    // 1. Calculate tile bounding box in WGS84
+    double n = std::pow(2.0, z);
+    double lon_min = (double)x / n * 360.0 - 180.0;
+    double lon_max = (double)(x + 1) / n * 360.0 - 180.0;
+    double lat_max = std::atan(std::sinh(M_PI * (1 - 2 * (double)y / n))) * 180.0 / M_PI;
+    double lat_min = std::atan(std::sinh(M_PI * (1 - 2 * (double)(y + 1) / n))) * 180.0 / M_PI;
 
-    for (auto const& [square, segments] : g_traffic_by_square) {
-        for (int c = 0; c < 3; ++c) {
-            bool first_line = true;
-            for (size_t i = 0; i + 4 < segments.size(); i += 5) {
-                double ratio = segments[i + 4];
-                if (ratio <= 0.0) continue;
+    TileProj proj{n, x, (int)y};
+    std::vector<uint8_t> layer_buf;
+    
+    // Layer Metadata
+    write_string(layer_buf, 1, "traffic"); // name (field 1)
+    write_tag(layer_buf, 15, 0); // version (field 15)
+    write_varint(layer_buf, 2);
+    write_tag(layer_buf, 5, 0); // extent (field 5)
+    write_varint(layer_buf, 4096);
 
-                int color_idx = (ratio < 0.5) ? 0 : (ratio < 0.9 ? 1 : 2);
-                if (color_idx != c) continue;
+    // Collect squares intersecting this tile
+    int min_lat_idx = (int)std::floor(lat_min);
+    int max_lat_idx = (int)std::floor(lat_max);
+    int min_lon_idx = (int)std::floor(lon_min);
+    int max_lon_idx = (int)std::floor(lon_max);
 
-                if (first_line) {
-                    if (!first_feature) fprintf(f, ",");
-                    fprintf(f, "{\"type\":\"Feature\",\"geometry\":{\"type\":\"MultiLineString\",\"coordinates\":[");
-                    first_feature = false;
-                    first_line = false;
-                } else {
-                    fprintf(f, ",");
-                }
-                fprintf(f, "[[%.5f,%.5f],[%.5f,%.5f]]",
-                        segments[i + 1], segments[i],
-                        segments[i + 3], segments[i + 2]);
-            }
-            if (!first_line) {
-                fprintf(f, "]},\"properties\":{\"color\":\"%s\"}}", colors[c]);
+    std::vector<std::string> keys = {"color"};
+    std::vector<std::string> values;
+    std::map<std::string, uint32_t> val_map;
+
+    auto get_val_idx = [&](const std::string& v) {
+        if (val_map.find(v) == val_map.end()) {
+            val_map[v] = values.size();
+            values.push_back(v);
+        }
+        return val_map[v];
+    };
+
+    for (int lat_i = min_lat_idx; lat_i <= max_lat_idx; ++lat_i) {
+        for (int lon_i = min_lon_idx; lon_i <= max_lon_idx; ++lon_i) {
+            uint32_t square_id = ((uint32_t)(lat_i + 360) << 16) | (uint32_t)(lon_i + 720);
+            auto it = g_traffic_by_square.find(square_id);
+            if (it == g_traffic_by_square.end()) continue;
+
+            const auto& data = it->second;
+            for (size_t i = 0; i + 4 < data.size(); i += 5) {
+                double lat1 = data[i], lon1 = data[i+1];
+                double lat2 = data[i+2], lon2 = data[i+3];
+                double speed_ratio = data[i+4];
+
+                if (speed_ratio <= 0.0) continue;
+
+                int32_t px1, py1, px2, py2;
+                proj.wgs84_to_tile_px(lat1, lon1, px1, py1);
+                proj.wgs84_to_tile_px(lat2, lon2, px2, py2);
+
+                // Expanded clipping buffer to avoid road segments disappearing prematurely
+                if (std::max(px1, px2) < -512 || std::min(px1, px2) > 4608 ||
+                    std::max(py1, py2) < -512 || std::min(py1, py2) > 4608) continue;
+
+                // Feature (field 2)
+                std::vector<uint8_t> feat_buf;
+                write_varint(feat_buf, (3 << 3) | 0); // type (field 3) = LINESTRING (2)
+                write_varint(feat_buf, 2);
+
+                // Geometry (field 4)
+                std::vector<uint8_t> geom_buf;
+                write_varint(geom_buf, mvt_command(1, 1)); // MoveTo, count 1
+                write_varint(geom_buf, zigzag(px1));
+                write_varint(geom_buf, zigzag(py1));
+                write_varint(geom_buf, mvt_command(2, 1)); // LineTo, count 1
+                write_varint(geom_buf, zigzag(px2 - px1));
+                write_varint(geom_buf, zigzag(py2 - py1));
+
+                write_tag(feat_buf, 4, 2);
+                write_varint(feat_buf, geom_buf.size());
+                feat_buf.insert(feat_buf.end(), geom_buf.begin(), geom_buf.end());
+
+                // Tags (field 2) - [key_idx, val_idx]
+                std::string color = "#4CAF50"; // Green for good traffic
+                if (speed_ratio < 0.5) color = "#F44336"; // Red for slow traffic
+                else if (speed_ratio < 0.9) color = "#FFC107"; // Amber/Yellow for moderate traffic
+                
+                write_tag(feat_buf, 2, 2); // tags (field 2)
+                std::vector<uint8_t> tag_buf;
+                write_varint(tag_buf, 0); // "color" is at index 0
+                write_varint(tag_buf, get_val_idx(color));
+                write_varint(feat_buf, tag_buf.size());
+                feat_buf.insert(feat_buf.end(), tag_buf.begin(), tag_buf.end());
+
+                write_tag(layer_buf, 2, 2);
+                write_varint(layer_buf, feat_buf.size());
+                layer_buf.insert(layer_buf.end(), feat_buf.begin(), feat_buf.end());
             }
         }
     }
-    fprintf(f, "]}");
-    fclose(f);
 
-    env->ReleaseStringUTFChars(path, path_ptr);
-    return JNI_TRUE;
+    // Keys (field 3)
+    for (const auto& k : keys) write_string(layer_buf, 3, k);
+    // Values (field 4)
+    for (const auto& v : values) {
+        write_tag(layer_buf, 4, 2);
+        std::vector<uint8_t> v_buf;
+        write_string(v_buf, 1, v); // string_value (field 1)
+        write_varint(layer_buf, v_buf.size());
+        layer_buf.insert(layer_buf.end(), v_buf.begin(), v_buf.end());
+    }
+
+    // Final Tile buffer (Tile is a collection of layers)
+    std::vector<uint8_t> tile_buf;
+    write_tag(tile_buf, 3, 2); // Layer (field 3)
+    write_varint(tile_buf, layer_buf.size());
+    tile_buf.insert(tile_buf.end(), layer_buf.begin(), layer_buf.end());
+
+    jbyteArray res = env->NewByteArray(tile_buf.size());
+    env->SetByteArrayRegion(res, 0, tile_buf.size(), (jbyte*)tile_buf.data());
+    return res;
 }
 
 extern "C" JNIEXPORT void JNICALL

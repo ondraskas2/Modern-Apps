@@ -32,6 +32,9 @@ import org.maplibre.compose.layers.LineLayer
 import org.maplibre.compose.sources.GeoJsonData
 import org.maplibre.compose.sources.GeoJsonOptions
 import org.maplibre.compose.sources.GeoJsonSource
+import org.maplibre.compose.sources.TileSetOptions
+import org.maplibre.compose.sources.VectorSource
+import org.maplibre.compose.sources.rememberVectorSource
 import org.maplibre.compose.util.MaplibreComposable
 import org.maplibre.spatialk.geojson.Feature
 import org.maplibre.spatialk.geojson.FeatureCollection
@@ -43,16 +46,18 @@ import org.maplibre.spatialk.geojson.Position
 @Composable
 @MaplibreComposable
 fun MyMapLayers(selectedFeature: SpecificFeature?, route: RouteService.RouteType?, styleJson: String?) {
-    val trafficGeoJsonUrl by OfflineRouter.trafficGeoJsonUrl.collectAsState()
+    val trafficVersion by OfflineRouter.trafficVersion.collectAsState()
     val context = LocalContext.current
 
     key(styleJson) {
         var routeSource by remember { mutableStateOf<GeoJsonSource?>(null) }
         var outlineSource by remember { mutableStateOf<GeoJsonSource?>(null) }
-        var trafficSource by remember { mutableStateOf<GeoJsonSource?>(null) }
+        val trafficSource = rememberVectorSource(
+                tiles = listOf("${OfflineRouter.trafficTileUrl}?v=$trafficVersion"),
+                options = TileSetOptions(maxZoom = 14)
+        )
 
         LaunchedEffect(Unit) {
-            OfflineRouter.updateTrafficGeoJson(context)
             outlineSource = GeoJsonSource(
                 "selected-country-geojson",
                 GeoJsonData.Features(
@@ -84,39 +89,13 @@ fun MyMapLayers(selectedFeature: SpecificFeature?, route: RouteService.RouteType
                 ),
                 GeoJsonOptions()
             )
-            trafficSource = GeoJsonSource(
-                "traffic-geojson",
-                GeoJsonData.Features(
-                    Feature1(
-                        LineString(listOf(Position(0.0, 0.0), Position(0.0, 0.0))),
-                        JsonObject(emptyMap())
-                    )
-                ),
-                GeoJsonOptions(maxZoom = 14, tolerance = 0.0f)
-            )
         }
 
-        LaunchedEffect(trafficGeoJsonUrl, trafficSource) {
-            val source = trafficSource ?: return@LaunchedEffect
-            trafficGeoJsonUrl?.let { url -> source.setData(GeoJsonData.Uri(url)) }
-                ?: run {
-                    source.setData(
-                        GeoJsonData.Features(
-                            Feature1(
-                                LineString(
-                                    listOf(Position(0.0, 0.0), Position(0.0, 0.0))
-                                ),
-                                JsonObject(emptyMap())
-                            )
-                        )
-                    )
-                }
-        }
 
-        trafficSource?.let { source ->
-            LineLayer(
-                "traffic-layer",
-                source,
+        LineLayer(
+            "traffic-layer",
+            trafficSource,
+            sourceLayer = "traffic",
                 color = feature["color"].cast<StringValue>().convertToColor(),
                 width =
                         interpolate(
@@ -130,7 +109,6 @@ fun MyMapLayers(selectedFeature: SpecificFeature?, route: RouteService.RouteType
                         ),
                 cap = const(LineCap.Butt)
         )
-    }
 
     outlineSource?.let { outlineSource ->
         routeSource?.let { routeSource ->
@@ -212,10 +190,10 @@ fun MyMapLayers(selectedFeature: SpecificFeature?, route: RouteService.RouteType
                                                             ) {
                                                                 when {
                                                                     it.speedRatio < 0.5 ->
-                                                                            "#FF0000" // Red
+                                                                            "#F44336" // Red
                                                                     it.speedRatio < 0.9 ->
-                                                                            "#FFFF00" // Yellow
-                                                                    else -> "#1710F1" // Blue
+                                                                            "#FFC107" // Amber/Yellow
+                                                                    else -> "#4CAF50" // Green
                                                                 }
                                                             } else "#1710F1"
 
