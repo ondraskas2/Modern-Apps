@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -16,12 +17,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -43,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -104,6 +108,8 @@ sealed interface Route : NavKey {
     @Serializable
     data object GameCenter : Route
 }
+
+data class ChooserLetter(val id: Int, val char: Char)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -249,6 +255,12 @@ fun WordGameScreen(
     val bonusShakeAnim = remember { Animatable(0f) }
 
     var scale by remember { mutableFloatStateOf(1f) }
+    var shuffledLetters by remember(crosswordData) {
+        mutableStateOf(crosswordData.lettersInChooser.mapIndexed { index, char ->
+            ChooserLetter(index, char)
+        })
+    }
+
 
     LaunchedEffect(wordToAnimate) {
         wordToAnimate?.let { word ->
@@ -369,7 +381,14 @@ fun WordGameScreen(
                         }
                     } else {
                         LetterChooser(
-                            letters = crosswordData.lettersInChooser,
+                            letters = shuffledLetters,
+                            onShuffle = {
+                                var nextLetters = shuffledLetters.shuffled()
+                                while (nextLetters == shuffledLetters && shuffledLetters.size > 1) {
+                                    nextLetters = shuffledLetters.shuffled()
+                                }
+                                shuffledLetters = nextLetters
+                            },
                             onWordSubmitted = { word ->
 
                                 suspend fun shakeWord() {
@@ -646,7 +665,8 @@ fun CrosswordBoard(
 
 @Composable
 fun LetterChooser(
-    letters: List<Char>,
+    letters: List<ChooserLetter>,
+    onShuffle: () -> Unit,
     onWordSubmitted: suspend CoroutineScope.(String) -> Unit,
     onWordBoxPositioned: (Offset) -> Unit,
     onLetterPositioned: (char: Char, offset: Offset) -> Unit,
@@ -663,7 +683,7 @@ fun LetterChooser(
         )
     }
     var selectedLettersIndices by remember(letters) { mutableStateOf(listOf<Int>()) }
-    val formedWord = selectedLettersIndices.map { letters[it] }.joinToString("")
+    val formedWord = selectedLettersIndices.map { letters[it].char }.joinToString("")
     var dragStartOffset by remember(letters) { mutableStateOf(Offset.Zero) }
     var currentDragPosition by remember(letters) { mutableStateOf<Offset?>(null) }
 
@@ -713,91 +733,111 @@ fun LetterChooser(
             null
         )
 
-        Box(
-            modifier = Modifier
-                .size(250.dp)
-                .onGloballyPositioned {
-                    dragStartOffset = it.localToRoot(Offset.Zero)
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { startOffset ->
-                            currentDragPosition = startOffset
-                            selectedLettersIndices = listOf(getLetterAtArc(startOffset))
-                        },
-                        onDrag = { change, _ ->
-                            currentDragPosition = change.position
-                            getLetterAtCircle(change.position)?.let { idx ->
-                                if (idx !in selectedLettersIndices) {
-                                    selectedLettersIndices = selectedLettersIndices + idx
-                                } else if (selectedLettersIndices.size > 1 && idx == selectedLettersIndices[selectedLettersIndices.size - 2]) {
-                                    selectedLettersIndices = selectedLettersIndices.dropLast(1)
+        Row(verticalAlignment = Alignment.Top) {
+            Spacer(modifier = Modifier.width(72.dp))
+            Box(
+                modifier = Modifier
+                    .size(250.dp)
+                    .onGloballyPositioned {
+                        dragStartOffset = it.localToRoot(Offset.Zero)
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { startOffset ->
+                                currentDragPosition = startOffset
+                                selectedLettersIndices = listOf(getLetterAtArc(startOffset))
+                            },
+                            onDrag = { change, _ ->
+                                currentDragPosition = change.position
+                                getLetterAtCircle(change.position)?.let { idx ->
+                                    if (idx !in selectedLettersIndices) {
+                                        selectedLettersIndices = selectedLettersIndices + idx
+                                    } else if (selectedLettersIndices.size > 1 && idx == selectedLettersIndices[selectedLettersIndices.size - 2]) {
+                                        selectedLettersIndices = selectedLettersIndices.dropLast(1)
+                                    }
+                                }
+                            },
+                            onDragEnd = {
+                                coroutineScope.launch {
+                                    if (selectedLettersIndices.isNotEmpty()) {
+                                        onWordSubmitted(selectedLettersIndices.map { letters[it].char }.joinToString(""))
+                                    }
+                                    selectedLettersIndices = emptyList()
+                                    currentDragPosition = null
                                 }
                             }
-                        },
-                        onDragEnd = {
-                            coroutineScope.launch {
-                                if (selectedLettersIndices.isNotEmpty()) {
-                                    onWordSubmitted(selectedLettersIndices.map{letters[it]}.joinToString(""))
-                                }
-                                selectedLettersIndices = emptyList()
-                                currentDragPosition = null
-                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                val primaryColor = colorScheme.primary
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    if (selectedLettersIndices.size > 1) {
+                        for (i in 0 until selectedLettersIndices.size - 1) {
+                            val startLetter = selectedLettersIndices[i]
+                            val endLetter = selectedLettersIndices[i + 1]
+                            val startCenter = letterCenters[startLetter]
+                            val endCenter = letterCenters[endLetter]
+                            drawLine(
+                                color = primaryColor,
+                                start = startCenter,
+                                end = endCenter,
+                                strokeWidth = 10f,
+                                cap = StrokeCap.Round
+                            )
                         }
-                    )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            val primaryColor = colorScheme.primary
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                if (selectedLettersIndices.size > 1) {
-                    for (i in 0 until selectedLettersIndices.size - 1) {
-                        val startLetter = selectedLettersIndices[i]
-                        val endLetter = selectedLettersIndices[i + 1]
-                        val startCenter = letterCenters[startLetter]
-                        val endCenter = letterCenters[endLetter]
+                    }
+                    val lastLetter = selectedLettersIndices.lastOrNull()
+                    if (lastLetter != null && currentDragPosition != null) {
+                        val lastCenter = letterCenters[lastLetter]
                         drawLine(
                             color = primaryColor,
-                            start = startCenter,
-                            end = endCenter,
+                            start = lastCenter,
+                            end = currentDragPosition!!,
                             strokeWidth = 10f,
                             cap = StrokeCap.Round
                         )
                     }
                 }
-                val lastLetter = selectedLettersIndices.lastOrNull()
-                if (lastLetter != null && currentDragPosition != null) {
-                    val lastCenter = letterCenters[lastLetter]
-                    drawLine(
-                        color = primaryColor,
-                        start = lastCenter,
-                        end = currentDragPosition!!,
-                        strokeWidth = 10f,
-                        cap = StrokeCap.Round
-                    )
+                Surface(
+                    Modifier.fillMaxSize(0.9f),
+                    CircleShape,
+                    colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                ) {}
+
+                val radius = 85.dp
+                letters.forEachIndexed { index, chooserLetter ->
+                    key(chooserLetter.id) {
+                        val angle = angleStep * index - (Math.PI / 2)
+                        val targetX = (cos(angle) * radius.value).dp
+                        val targetY = (sin(angle) * radius.value).dp
+
+                        val x by animateDpAsState(targetX, label = "x")
+                        val y by animateDpAsState(targetY, label = "y")
+
+                        SurfaceText(Modifier
+                            .align(Alignment.Center)
+                            .offset(x, y)
+                            .onGloballyPositioned { coordinates ->
+                                val localOffset = coordinates.localToRoot(Offset.Zero) - dragStartOffset
+                                val centerX = localOffset.x + letterCircleRadius
+                                val centerY = localOffset.y + letterCircleRadius
+                                letterCenters[index] = Offset(centerX, centerY)
+                                onLetterPositioned(chooserLetter.char, coordinates.localToRoot(Offset.Zero))
+                            },
+                            CircleShape,
+                            if (index in selectedLettersIndices) colorScheme.primary else colorScheme.secondary,
+                            chooserLetter.char.toString(),
+                            Modifier.padding(1.dp),
+                            FontWeight.Bold,
+                            42.sp,
+                            70.dp
+                        )
+                    }
                 }
             }
-            Surface(Modifier.fillMaxSize(0.9f), CircleShape, colorScheme.secondaryContainer.copy(alpha = 0.5f)){}
-
-            val radius = 85.dp
-            letters.forEachIndexed { index, letter ->
-                val angle = angleStep * index - (Math.PI / 2)
-                val x = (cos(angle) * radius.value).dp
-                val y = (sin(angle) * radius.value).dp
-
-                SurfaceText(Modifier
-                    .align(Alignment.Center)
-                    .offset(x, y)
-                    .onGloballyPositioned { coordinates ->
-                        val localOffset = coordinates.localToRoot(Offset.Zero) - dragStartOffset
-                        val centerX = localOffset.x + letterCircleRadius
-                        val centerY = localOffset.y + letterCircleRadius
-                        letterCenters[index] = Offset(centerX, centerY)
-                        onLetterPositioned(letter, coordinates.localToRoot(Offset.Zero))
-                    }
-                    , CircleShape,
-                    if (index in selectedLettersIndices) colorScheme.primary else colorScheme.secondary,
-                    letter.toString(), Modifier.padding(1.dp), FontWeight.Bold, 42.sp, 70.dp)
+            FilledIconButton(onClick = onShuffle) {
+                Icon(painterResource(R.drawable.ic_shuffle), contentDescription = "Shuffle")
             }
         }
     }
