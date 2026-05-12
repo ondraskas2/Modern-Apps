@@ -74,4 +74,5 @@
     <string name="show_account_labels">Show contact accounts</string>
     <string name="search">Search</string>
     <string name="search_contacts">Search contacts</string>
+    <string name="include_year">Include year</string>
 </resources>

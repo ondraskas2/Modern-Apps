@@ -1,56 +1,222 @@
 package com.vayunmathur.contacts.ui.dialogs
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.runtime.Composable
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vayunmathur.contacts.R
+import com.vayunmathur.contacts.data.hasYear
 import com.vayunmathur.library.util.LocalNavResultRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.atStartOfDayIn
-import kotlinx.datetime.toLocalDateTime
+import kotlinx.datetime.*
+import kotlinx.datetime.format.MonthNames
+import kotlin.math.abs
 import kotlin.time.Clock
-import kotlin.time.Instant
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EventDatePickerDialog(id: String, initialDate: LocalDate?, onDismiss: () -> Unit) {
     val registry = LocalNavResultRegistry.current
-    val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = (initialDate ?: Clock.System.now().toLocalDateTime(
-            TimeZone.currentSystemDefault()).date).atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds()
-    )
-    DatePickerDialog(
-        onDismissRequest = { onDismiss() },
+    val today = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date }
+    val baseDate = initialDate ?: today
+    
+    var includeYear by remember { mutableStateOf(initialDate?.hasYear ?: true) }
+    
+    val years = remember { (1900..2100).toList() }
+    val months = remember { (1..12).toList() }
+    
+    var selectedYear by remember { mutableStateOf(baseDate.year) }
+    var selectedMonth by remember { mutableStateOf(baseDate.month.number) }
+    var selectedDay by remember { mutableStateOf(baseDate.day) }
+
+    val daysInMonth = remember(selectedMonth, selectedYear) {
+        try {
+            val nextMonth = if (selectedMonth == 12) 1 else selectedMonth + 1
+            val nextMonthYear = if (selectedMonth == 12) selectedYear + 1 else selectedYear
+            val firstOfNextMonth = LocalDate(nextMonthYear, nextMonth, 1)
+            firstOfNextMonth.minus(1, DateTimeUnit.DAY).day
+        } catch (_: Exception) {
+            31
+        }
+    }
+    
+    LaunchedEffect(daysInMonth) {
+        if (selectedDay > daysInMonth) {
+            selectedDay = daysInMonth
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(
-                onClick = {
-                    datePickerState.selectedDateMillis?.let {
-                        val result = Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.UTC).date
-                        CoroutineScope(Dispatchers.Main).launch {
-                            registry.dispatchResult(id, result)
-                        }
-                    }
-                    onDismiss()
-                },
-                enabled = datePickerState.selectedDateMillis != null
-            ) {
+            TextButton(onClick = {
+                val result = LocalDate(if (includeYear) selectedYear else 1604, selectedMonth, selectedDay)
+                CoroutineScope(Dispatchers.Main).launch {
+                    registry.dispatchResult(id, result)
+                }
+                onDismiss()
+            }) {
                 Text(stringResource(R.string.ok))
             }
         },
         dismissButton = {
-            TextButton(onClick = { onDismiss() }) {
+            TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.cancel))
             }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Date Preview
+                val previewText = try {
+                    val date = LocalDate(selectedYear, selectedMonth, selectedDay)
+                    date.format(LocalDate.Format {
+                        monthName(MonthNames.ENGLISH_FULL)
+                        chars(" ")
+                        day()
+                        if (includeYear) {
+                            chars(", ")
+                            year()
+                        }
+                    })
+                } catch (_: Exception) { "" }
+                
+                Text(
+                    text = previewText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
+
+                // Spinners
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    WheelPicker(
+                        items = months.map { Month(it).name.take(3).lowercase().replaceFirstChar { it.uppercase() } },
+                        initialIndex = selectedMonth - 1,
+                        onIndexSelected = { selectedMonth = it + 1 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WheelPicker(
+                        items = (1..daysInMonth).map { it.toString() },
+                        initialIndex = selectedDay - 1,
+                        onIndexSelected = { selectedDay = it + 1 },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WheelPicker(
+                        items = years.map { it.toString() },
+                        initialIndex = years.indexOf(selectedYear).coerceAtLeast(0),
+                        onIndexSelected = { selectedYear = years[it] },
+                        modifier = Modifier.weight(1f),
+                        enabled = includeYear
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Include Year Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(stringResource(R.string.include_year))
+                    Switch(
+                        checked = includeYear,
+                        onCheckedChange = { includeYear = it }
+                    )
+                }
+            }
+        },
+        shape = RoundedCornerShape(28.dp)
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WheelPicker(
+    modifier: Modifier = Modifier,
+    items: List<String>,
+    initialIndex: Int,
+    onIndexSelected: (Int) -> Unit,
+    enabled: Boolean = true
+) {
+    val pagerState = rememberPagerState(initialPage = initialIndex.coerceIn(0, items.size - 1)) { items.size }
+    
+    LaunchedEffect(pagerState.currentPage) {
+        onIndexSelected(pagerState.currentPage)
+    }
+    
+    // Support dynamic items count (e.g. days in month changing)
+    LaunchedEffect(items.size) {
+        if (pagerState.currentPage >= items.size) {
+            pagerState.scrollToPage(items.size - 1)
         }
-    ) {
-        DatePicker(state = datePickerState)
+    }
+
+    Box(modifier = modifier.alpha(if (enabled) 1f else 0.3f)) {
+        // Selection Highlighters
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .align(Alignment.Center)
+                .background(Color.Transparent)
+        ) {
+            HorizontalDivider(modifier = Modifier.align(Alignment.TopCenter), color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(modifier = Modifier.align(Alignment.BottomCenter), color = MaterialTheme.colorScheme.outlineVariant)
+        }
+
+        VerticalPager(
+            state = pagerState,
+            modifier = Modifier.height(160.dp),
+            contentPadding = PaddingValues(vertical = 60.dp),
+            userScrollEnabled = enabled
+        ) { page ->
+            val pageOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+            val absOffset = abs(pageOffset)
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val scale = 1f - (absOffset * 0.2f).coerceIn(0f, 0.4f)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - (absOffset * 0.5f).coerceIn(0f, 0.7f)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = items.getOrNull(page) ?: "",
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = if (absOffset < 0.5f) FontWeight.Bold else FontWeight.Normal,
+                        fontSize = 18.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
     }
 }
