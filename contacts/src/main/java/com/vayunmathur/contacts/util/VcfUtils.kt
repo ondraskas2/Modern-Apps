@@ -72,7 +72,8 @@ object VcfUtils {
                     // Birthday
                     val bday = details.dates.firstOrNull { it.type == ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY }
                     if (bday != null) {
-                        writeFolded(writer, "BDAY:${bday.startDate}")
+                        val bdayStr = if (bday.startDate.hasYear) bday.startDate.toString() else "--${bday.startDate.toString().substring(5)}"
+                        writeFolded(writer, "BDAY:$bdayStr")
                     }
 
                     // Notes
@@ -212,6 +213,8 @@ object VcfUtils {
                     var dv = value
                     if (dv.matches(Regex("^\\d{8}"))) {
                         dv = dv.take(4) + "-" + dv.substring(4,6) + "-" + dv.substring(6,8)
+                    } else if (dv.startsWith("--")) {
+                        dv = "1604" + dv.substring(2)
                     }
                     try {
                         val date = LocalDate.parse(dv)

@@ -68,6 +68,7 @@ import com.vayunmathur.contacts.data.CDKNickname
 import com.vayunmathur.contacts.data.CDKPhone
 import com.vayunmathur.contacts.data.CDKStructuredPostal
 import com.vayunmathur.contacts.data.Contact
+import com.vayunmathur.contacts.data.formatDisplay
 import com.vayunmathur.contacts.data.ContactDetail
 import com.vayunmathur.contacts.data.ContactDetails
 import com.vayunmathur.contacts.data.Event
@@ -440,13 +441,7 @@ private fun Birthday(
     }
     Box {
         OutlinedTextField(
-            value = birthday?.format(LocalDate.Format {
-                monthName(MonthNames.ENGLISH_FULL)
-                chars(" ")
-                day()
-                chars(", ")
-                year()
-            }) ?: "",
+            value = birthday?.formatDisplay() ?: "",
             onValueChange = { },
             readOnly = true,
             label = {Text(stringResource(R.string.birthday))},
@@ -489,13 +484,7 @@ private fun ColumnScope.DateDetailsSection(
                 details[index] = detail.withValue(it.toString())
             }
             OutlinedTextField(
-                value = detail.startDate.format(LocalDate.Format {
-                    monthName(MonthNames.ENGLISH_FULL)
-                    chars(" ")
-                    day()
-                    chars(", ")
-                    year()
-                }),
+                value = detail.startDate.formatDisplay(),
                 onValueChange = { },
                 readOnly = true,
                 label = { Text(detailType) },

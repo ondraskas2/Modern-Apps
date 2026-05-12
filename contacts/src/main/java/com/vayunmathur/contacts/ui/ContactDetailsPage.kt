@@ -58,6 +58,7 @@ import com.google.i18n.phonenumbers.NumberParseException
 import com.google.i18n.phonenumbers.PhoneNumberUtil
 import com.vayunmathur.contacts.data.CDKEvent
 import com.vayunmathur.contacts.data.Contact
+import com.vayunmathur.contacts.data.formatDisplay
 import com.vayunmathur.contacts.util.ContactViewModel
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.util.VcfUtils
@@ -208,16 +209,9 @@ fun ContactDetailsPage(
             if(details.dates.isNotEmpty()) {
                 item {
                     GroupedSection(title = stringResource(R.string.about_name, contact!!.name.firstName)) {
-                        val format = LocalDate.Format {
-                            monthName(MonthNames.ENGLISH_FULL)
-                            chars(" ")
-                            day()
-                            chars(", ")
-                            year()
-                        }
                         contact!!.birthday?.let { birthday ->
                             ListItem(
-                                headlineContent = { Text(birthday.startDate.format(format)) },
+                                headlineContent = { Text(birthday.startDate.formatDisplay()) },
                                 supportingContent = { Text(stringResource(R.string.birthday)) },
                                 leadingContent = { Icon(painterResource(R.drawable.outline_cake_24), birthday.typeString(context)) },
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
@@ -225,7 +219,7 @@ fun ContactDetailsPage(
                         }
                         details.dates.filter{it.type != CDKEvent.TYPE_BIRTHDAY }.forEach { event ->
                             ListItem(
-                                headlineContent = { Text(event.startDate.format(format)) },
+                                headlineContent = { Text(event.startDate.formatDisplay()) },
                                 supportingContent = { Text(event.typeString(context)) },
                                 leadingContent = { Icon(painterResource(R.drawable.outline_event_24), event.typeString(context)) },
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)

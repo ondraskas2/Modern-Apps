@@ -10,6 +10,7 @@ import android.util.Log
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.data.CDKEvent
 import com.vayunmathur.contacts.data.Contact
+import com.vayunmathur.contacts.data.hasYear
 import kotlinx.datetime.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -164,11 +165,12 @@ object CalendarSyncHelper {
             context.getString(R.string.anniversary)
         }
 
-        val startYear = maxOf(originalDate.year, currentYear - 100)
+        val hasYear = originalDate.hasYear
+        val startYear = if (hasYear) maxOf(originalDate.year, currentYear - 100) else currentYear - 1
 
         for (year in startYear..endYear) {
-            val age = year - originalDate.year
-            if (age < 0) continue
+            val age = if (hasYear) year - originalDate.year else -1
+            if (hasYear && age < 0) continue
             
             val eventDate = try {
                 LocalDate(year, originalDate.month, originalDate.day)
@@ -178,7 +180,11 @@ object CalendarSyncHelper {
                 } else continue
             }
 
-            val title = "${contact.name.value}: $eventTypeStr ($age)"
+            val title = if (hasYear) {
+                "${contact.name.value}: $eventTypeStr ($age)"
+            } else {
+                "${contact.name.value}: $eventTypeStr"
+            }
             val startMillis = eventDate.atTime(0, 0).toInstant(TimeZone.UTC).toEpochMilliseconds()
 
             ops.add(ContentProviderOperation.newInsert(eventUri)

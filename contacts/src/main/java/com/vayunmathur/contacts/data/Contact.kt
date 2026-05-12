@@ -11,11 +11,32 @@ import androidx.core.database.getStringOrNull
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format
+import kotlinx.datetime.format.MonthNames
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import kotlin.io.encoding.Base64
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+
+val LocalDate.hasYear: Boolean get() = year >= 1901
+
+fun LocalDate.formatDisplay(): String {
+    return if (hasYear) {
+        format(LocalDate.Format {
+            monthName(MonthNames.ENGLISH_FULL)
+            chars(" ")
+            day()
+            chars(", ")
+            year()
+        })
+    } else {
+        format(LocalDate.Format {
+            monthName(MonthNames.ENGLISH_FULL)
+            chars(" ")
+            day()
+        })
+    }
+}
 
 
 @Serializable
@@ -540,6 +561,10 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
                                 LocalDate.parse(date, LocalDate.Formats.ISO)
                             } else if (date.matches(Regex("\\d{8}"))) {
                                 LocalDate.parse(date, LocalDate.Format { year(); monthNumber(); day() })
+                            } else if (date.startsWith("--")) {
+                                try {
+                                    LocalDate.parse("1604" + date.substring(2))
+                                } catch (_: Exception) { null }
                             } else null
 
                             if (localDate != null) {
