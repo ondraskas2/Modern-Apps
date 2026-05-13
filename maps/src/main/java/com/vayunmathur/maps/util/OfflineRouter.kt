@@ -9,8 +9,11 @@ import com.vayunmathur.maps.data.SpecificFeature
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.maplibre.spatialk.geojson.Position
 
@@ -102,9 +105,9 @@ object OfflineRouter {
         _trafficVersion.value++
     }
 
-    private external fun ensureTrafficLoadedNative(lat: Double, lon: Double)
+    external fun ensureTrafficLoadedNative(lat: Double, lon: Double, forceAsync: Boolean)
 
-    private val trafficScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
+    private val trafficScope = CoroutineScope(Dispatchers.IO)
 
     @Keep
     private fun fetchTrafficData(
@@ -113,14 +116,16 @@ object OfflineRouter {
             maxLat: Double,
             maxLon: Double,
             zoneId: Int,
-            packedSquare: Int
+            packedSquare: Int,
+            forceAsync: Boolean
     ) {
         Log.d(
                 "TRAFFIC_DATA",
-                "fetchTrafficData START: bbox ($minLat,$minLon)-($maxLat,$maxLon) zone=$zoneId packed=$packedSquare"
+                "fetchTrafficData START: bbox ($minLat,$minLon)-($maxLat,$maxLon) zone=$zoneId packed=$packedSquare forceAsync=$forceAsync"
         )
-        try {
-            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+        
+        val block: suspend () -> Unit = {
+            try {
                 val (status, bytes) =
                         NetworkClient.performRequestBytes(
                                 url =
@@ -144,12 +149,18 @@ object OfflineRouter {
                     Log.w("TRAFFIC_DATA", "fetchTrafficData NO DATA: status=$status")
                     notifyTrafficFetchFinishedNative(packedSquare)
                 }
+            } catch (e: Exception) {
+                Log.e("TRAFFIC_DATA", "fetchTrafficData ERROR", e)
+                notifyTrafficFetchFinishedNative(packedSquare)
             }
-        } catch (e: Exception) {
-            Log.e("TRAFFIC_DATA", "fetchTrafficData ERROR", e)
-            notifyTrafficFetchFinishedNative(packedSquare)
+            Log.d("TRAFFIC_DATA", "fetchTrafficData END: packed=$packedSquare")
         }
-        Log.d("TRAFFIC_DATA", "fetchTrafficData END: packed=$packedSquare")
+
+        if (forceAsync) {
+            trafficScope.launch { block() }
+        } else {
+            runBlocking(Dispatchers.IO) { block() }
+        }
     }
 
     class RawStep

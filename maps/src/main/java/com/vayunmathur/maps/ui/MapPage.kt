@@ -61,10 +61,12 @@ import com.vayunmathur.maps.data.AmenityDatabase
 import com.vayunmathur.maps.data.SpecificFeature
 import com.vayunmathur.maps.data.parse
 import com.vayunmathur.maps.ensurePmtilesReady
+import com.vayunmathur.maps.util.OfflineRouter
 import com.vayunmathur.maps.util.RouteService
 import com.vayunmathur.maps.util.SelectedFeatureViewModel
 import com.vayunmathur.maps.util.ZoneDownloadManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -108,6 +110,21 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
             camera.position.target.longitude,
             camera.position.zoom.toFloat()
         )
+    }
+
+    LaunchedEffect(camera.position) {
+        if (camera.position.zoom >= 11.0) {
+            delay(300) // Debounce traffic loading
+            val projection = camera.projection
+            if (projection != null) {
+                val bbox = projection.queryVisibleBoundingBox()
+                // Load traffic for all four corners to ensure the current view is covered
+                OfflineRouter.ensureTrafficLoadedNative(bbox.north, bbox.east, true)
+                OfflineRouter.ensureTrafficLoadedNative(bbox.north, bbox.west, true)
+                OfflineRouter.ensureTrafficLoadedNative(bbox.south, bbox.east, true)
+                OfflineRouter.ensureTrafficLoadedNative(bbox.south, bbox.west, true)
+            }
+        }
     }
 
     val hybridUrl = remember(activeZone) {

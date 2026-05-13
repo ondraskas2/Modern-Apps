@@ -213,7 +213,7 @@ inline const NodeMaster& get_node(uint32_t global_id) {
     return g_node_zones[zone][global_id - g_zone_offsets[zone]];
 }
 
-void ensure_traffic_loaded(JNIEnv* env, jobject thiz, int32_t lat_e7, int32_t lon_e7) {
+void ensure_traffic_loaded(JNIEnv* env, jobject thiz, int32_t lat_e7, int32_t lon_e7, bool force_async) {
     int32_t lat_idx = (int32_t)floor(lat_e7 * 1e-7);
     int32_t lon_idx = (int32_t)floor(lon_e7 * 1e-7);
     uint32_t packed = ((uint32_t)(lat_idx + 360) << 16) | (uint32_t)(lon_idx + 720);
@@ -231,10 +231,10 @@ void ensure_traffic_loaded(JNIEnv* env, jobject thiz, int32_t lat_e7, int32_t lo
     int zone_id = (int)((spatial >> 58) & 0x3F);
 
     jclass clazz = env->GetObjectClass(thiz);
-    jmethodID method = env->GetMethodID(clazz, "fetchTrafficData", "(DDDDII)V");
+    jmethodID method = env->GetMethodID(clazz, "fetchTrafficData", "(DDDDIIZ)V");
     if (method) {
-        LOGD("ensure_traffic_loaded: CALLING fetchTrafficData for square %u (zone %d)", packed, zone_id);
-        env->CallVoidMethod(thiz, method, (double)lat_idx, (double)lon_idx, (double)lat_idx + 1.0, (double)lon_idx + 1.0, zone_id, (jint)packed);
+        LOGD("ensure_traffic_loaded: CALLING fetchTrafficData for square %u (zone %d), async=%d", packed, zone_id, force_async);
+        env->CallVoidMethod(thiz, method, (double)lat_idx, (double)lon_idx, (double)lat_idx + 1.0, (double)lon_idx + 1.0, zone_id, (jint)packed, (jboolean)force_async);
         LOGD("ensure_traffic_loaded: RETURNED from fetchTrafficData for square %u", packed);
     }
 }
@@ -392,7 +392,7 @@ bool prepare_routing(JNIEnv* env, jobject thiz, double sLat, double sLon, double
     ctx.start = find_nearest_edge(sLat, sLon, mode);
     ctx.end = find_nearest_edge(eLat, eLon, mode);
     if (ctx.start.nodeA == 0xFFFFFFFF || ctx.end.nodeA == 0xFFFFFFFF) return false;
-    if (mode == DRIVING) ensure_traffic_loaded(env, thiz, ctx.start.proj_lat, ctx.start.proj_lon);
+    if (mode == DRIVING) ensure_traffic_loaded(env, thiz, ctx.start.proj_lat, ctx.start.proj_lon, false);
     auto push = [&](uint32_t node, uint32_t travel_dist_mm) {
         uint32_t g = get_edge_time_10ms(-1, 0, travel_dist_mm, ctx.start.type, ctx.start.speed_limit, mode);
         auto& entry = g_scratchpad[node]; entry.g_fwd = g;
@@ -414,7 +414,7 @@ void perform_search_loop(JNIEnv* env, jobject thiz, int mode, RoutingContext& ct
         int zone_u = get_zone_for_id(u);
         if (zone_u < 0 || !g_node_zones[zone_u]) continue;
         const auto& n_u = g_node_zones[zone_u][u - g_zone_offsets[zone_u]];
-        if (mode == DRIVING) ensure_traffic_loaded(env, thiz, n_u.lat_e7, n_u.lon_e7);
+        if (mode == DRIVING) ensure_traffic_loaded(env, thiz, n_u.lat_e7, n_u.lon_e7, false);
         uint32_t s = n_u.edge_ptr;
         uint32_t node_idx = u - g_zone_offsets[zone_u];
         uint32_t node_count = g_zone_offsets[zone_u + 1] - g_zone_offsets[zone_u];
@@ -754,6 +754,6 @@ Java_com_vayunmathur_maps_util_OfflineRouter_getTrafficTileNative(JNIEnv* env, j
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vayunmathur_maps_util_OfflineRouter_ensureTrafficLoadedNative(JNIEnv* env, jobject thiz, jdouble lat, jdouble lon) {
-    ensure_traffic_loaded(env, thiz, (int32_t)(lat * 1e7), (int32_t)(lon * 1e7));
+Java_com_vayunmathur_maps_util_OfflineRouter_ensureTrafficLoadedNative(JNIEnv* env, jobject thiz, jdouble lat, jdouble lon, jboolean force_async) {
+    ensure_traffic_loaded(env, thiz, (int32_t)(lat * 1e7), (int32_t)(lon * 1e7), force_async);
 }
