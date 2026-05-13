@@ -62,7 +62,6 @@ import com.vayunmathur.health.Route
 import com.vayunmathur.health.data.RecordType
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.health.util.displayString
 import com.vayunmathur.library.ui.IconCheck
@@ -307,7 +306,7 @@ fun BarChartDetails(
 
     val tz = TimeZone.currentSystemDefault()
     val context = LocalContext.current
-    val resources = LocalResources.current
+    val resources = context.resources
 
     val dayLabelFormat = stringResource(R.string.history_day_label)
     val monthLabelFormat = stringResource(R.string.history_month_label)
@@ -734,7 +733,7 @@ fun GenericLineChart(
     val sideLabelWidth = 40.dp
 
     val context = LocalContext.current
-
+    val resources = context.resources
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -908,7 +907,7 @@ fun GenericBarChart(
     val sideLabelWidth = 40.dp
 
     val context = LocalContext.current
-
+    val resources = context.resources
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()

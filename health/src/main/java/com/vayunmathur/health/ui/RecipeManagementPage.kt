@@ -393,12 +393,12 @@ fun IngredientSearchDialog(
                                 if (includeLocal && localResults.any { it.id == result.id.toString() }) return@items
 
                                 ListItem(
-                                    headlineContent = { Text(result.display_name) },
+                                    headlineContent = { Text(result.displayName) },
                                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                     modifier = Modifier.clickable {
                                         isFetchingData = true
                                         scope.launch {
-                                            val ingredient = FoodSearchAPI.getIngredientData(result.id, result.display_name)
+                                            val ingredient = FoodSearchAPI.getIngredientData(result.id, result.displayName)
                                             isFetchingData = false
                                             if (ingredient != null) {
                                                 onIngredientSelected(ingredient)
