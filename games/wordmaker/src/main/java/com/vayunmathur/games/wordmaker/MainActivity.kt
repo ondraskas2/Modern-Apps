@@ -674,14 +674,6 @@ fun LetterChooser(
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    val angleStep = 2 * Math.PI / letters.size.toDouble()
-    val letterCenters = remember(letters) {
-        mutableStateListOf(
-            *List(
-                letters.size
-            ) { Offset.Zero }.toTypedArray()
-        )
-    }
     var selectedLettersIndices by remember(letters) { mutableStateOf(listOf<Int>()) }
     val formedWord = selectedLettersIndices.map { letters[it].char }.joinToString("")
     var dragStartOffset by remember(letters) { mutableStateOf(Offset.Zero) }
@@ -691,6 +683,16 @@ fun LetterChooser(
     val letterCircleRadius = with(density) { 35.dp.toPx() }
     val boxSizePx = with(density) { 250.dp.toPx() }
     val boxCenter = Offset(boxSizePx / 2, boxSizePx / 2)
+
+    val angleStep = 2 * Math.PI / letters.size.toDouble()
+    val radius = 85.dp
+    val radiusPx = with(density) { radius.toPx() }
+    val letterCenters = remember(letters, boxCenter, radiusPx) {
+        List(letters.size) { index ->
+            val angle = angleStep * index - (Math.PI / 2)
+            boxCenter + Offset(cos(angle).toFloat() * radiusPx, sin(angle).toFloat() * radiusPx)
+        }
+    }
 
     fun getLetterAtArc(position: Offset): Int {
         val relative = position - boxCenter
@@ -741,7 +743,7 @@ fun LetterChooser(
                     .onGloballyPositioned {
                         dragStartOffset = it.localToRoot(Offset.Zero)
                     }
-                    .pointerInput(Unit) {
+                    .pointerInput(letters) {
                         detectDragGestures(
                             onDragStart = { startOffset ->
                                 currentDragPosition = startOffset
@@ -805,7 +807,6 @@ fun LetterChooser(
                     colorScheme.secondaryContainer.copy(alpha = 0.5f)
                 ) {}
 
-                val radius = 85.dp
                 letters.forEachIndexed { index, chooserLetter ->
                     key(chooserLetter.id) {
                         val angle = angleStep * index - (Math.PI / 2)
@@ -819,10 +820,6 @@ fun LetterChooser(
                             .align(Alignment.Center)
                             .offset(x, y)
                             .onGloballyPositioned { coordinates ->
-                                val localOffset = coordinates.localToRoot(Offset.Zero) - dragStartOffset
-                                val centerX = localOffset.x + letterCircleRadius
-                                val centerY = localOffset.y + letterCircleRadius
-                                letterCenters[index] = Offset(centerX, centerY)
                                 onLetterPositioned(chooserLetter.char, coordinates.localToRoot(Offset.Zero))
                             },
                             CircleShape,
