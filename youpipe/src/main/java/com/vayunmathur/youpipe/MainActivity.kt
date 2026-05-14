@@ -38,7 +38,6 @@ import com.vayunmathur.youpipe.ui.ChannelPage
 import com.vayunmathur.youpipe.ui.DownloadedVideosPage
 import com.vayunmathur.youpipe.ui.HistoryPage
 import com.vayunmathur.youpipe.util.PlaybackService
-import com.vayunmathur.youpipe.util.MyDownloader
 import com.vayunmathur.youpipe.ui.SearchPage
 import com.vayunmathur.youpipe.ui.SubscriptionVideosPage
 import com.vayunmathur.youpipe.ui.SubscriptionsPage
@@ -47,7 +46,6 @@ import com.vayunmathur.youpipe.ui.dialogs.CreateSubscriptionCategory
 import com.vayunmathur.youpipe.util.setupHourlyTask
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
-import org.schabi.newpipe.extractor.NewPipe
 import com.vayunmathur.youpipe.util.videoURLtoID
 
 internal fun Context.findActivity(): ComponentActivity {
@@ -89,11 +87,9 @@ class MainActivity : ComponentActivity() {
             SubscriptionCategory::class to db.subscriptionCategoryDao(),
             DownloadedVideo::class to db.downloadedVideoDao()
         )
-        NewPipe.init(MyDownloader())
         setContent {
             DynamicTheme {
                 LaunchedEffect(Unit) {
-                    delay(2000)
                     setupHourlyTask(this@MainActivity)
                 }
                 Navigation(getRoute(intent.data), viewModel)

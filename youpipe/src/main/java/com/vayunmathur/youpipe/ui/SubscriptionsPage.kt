@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,8 +23,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +38,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import com.vayunmathur.library.ui.IconAdd
@@ -75,6 +80,10 @@ fun SubscriptionsPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
     val coroutineScope = rememberCoroutineScope()
 
     var isLoading by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(Unit) {
+        setupHourlyTask(context)
+    }
     var progress by remember { mutableFloatStateOf(0f) }
 
     val youtubeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -260,6 +269,12 @@ fun SubscriptionsPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
         }
     }
 
+    val workInfos by WorkManager.getInstance(context)
+        .getWorkInfosForUniqueWorkLiveData("subscription_fetch_immediate")
+        .observeAsState()
+    val currentWorkInfo = workInfos?.firstOrNull { it.state == WorkInfo.State.RUNNING }
+    val fetchProgress = currentWorkInfo?.progress?.getFloat("progress", -1f) ?: -1f
+
     Scaffold(topBar = {
         TopAppBar({Text(stringResource(R.string.title_subscriptions))}, actions = {
             if(!isLoading) {
@@ -305,6 +320,20 @@ fun SubscriptionsPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
     }, bottomBar = { BottomNavBar(backStack, MAIN_BOTTOM_BAR_ITEMS, Route.SubscriptionsPage) }) { paddingValues ->
         if(!isLoading) {
             LazyColumn(Modifier.padding(paddingValues)) {
+                if (fetchProgress in 0f..1f) {
+                    item {
+                        ListItem(
+                            headlineContent = { Text("Loading recent subscriptions") },
+                            trailingContent = {
+                                CircularProgressIndicator(
+                                    progress = { fetchProgress },
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        )
+                    }
+                }
                 item {
                     ListItem({
                         Text(stringResource(R.string.label_groups))

@@ -42,14 +42,14 @@ inline fun <reified T : ListenableWorker> startRepeatedTask(
     // Run the immediate task first
     workManager.enqueueUniqueWork(
         "${name}_immediate",
-        ExistingWorkPolicy.REPLACE,
+        ExistingWorkPolicy.KEEP,
         immediateRequest
     )
 
     // Schedule the recurring task
     workManager.enqueueUniquePeriodicWork(
         "${name}_periodic",
-        ExistingPeriodicWorkPolicy.REPLACE,
+        ExistingPeriodicWorkPolicy.KEEP,
         hourlyRequest
     )
 }

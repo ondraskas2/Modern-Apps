@@ -1,58 +1,73 @@
 package com.vayunmathur.youpipe.util
+
 import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.youpipe.util.startRepeatedTask
 import com.vayunmathur.youpipe.data.Subscription
 import com.vayunmathur.youpipe.data.SubscriptionDatabase
 import com.vayunmathur.youpipe.data.SubscriptionVideo
-import com.vayunmathur.youpipe.util.getChannelVideos
 import kotlin.time.Duration.Companion.minutes
+import kotlinx.coroutines.CancellationException
 
 /**
- * FIXED: The constructor must match (Context, WorkerParameters) exactly.
- * Removed 'val' from context to prevent property shadowing and passed
- * parameters correctly to the super constructor.
+ * FIXED: The constructor must match (Context, WorkerParameters) exactly. Removed 'val' from context
+ * to prevent property shadowing and passed parameters correctly to the super constructor.
  */
-class SubscriptionFetchTask(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+class SubscriptionFetchTask(context: Context, params: WorkerParameters) :
+        CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         Log.d("SubscriptionFetchTask", "Starting...")
         return try {
             val db = applicationContext.buildDatabase<SubscriptionDatabase>()
-            val viewModel = DatabaseViewModel(db,
-                Subscription::class to db.subscriptionDao(),
-                SubscriptionVideo::class to db.subscriptionVideoDao()
-            )
-
+            val viewModel =
+                    DatabaseViewModel(
+                            db,
+                            Subscription::class to db.subscriptionDao(),
+                            SubscriptionVideo::class to db.subscriptionVideoDao()
+                    )
 
             val subscriptions = viewModel.getAll<Subscription>()
             Log.d("SubscriptionFetchTask", "Fetched ${subscriptions.size} subscriptions")
 
-            val videoIDs = (subscriptions.map { getChannelVideos(it.channelID).toList() }).flatten()
-            Log.d("SubscriptionFetchTask", "Fetched ${videoIDs.size} video IDs")
+            subscriptions.forEachIndexed { index, sub ->
+                try {
+                    val channelVideos = getChannelVideos(sub.channelID).toList()
+                    val videosFromSub =
+                            channelVideos.map {
+                                SubscriptionVideo(
+                                        id = it.videoID,
+                                        name = it.name,
+                                        duration = it.duration,
+                                        views = it.views,
+                                        uploadDate = it.uploadDate,
+                                        thumbnailURL = it.thumbnailURL,
+                                        author = it.author,
+                                        channelID = sub.id
+                                )
+                            }
 
-            val videos = videoIDs.map {
-                SubscriptionVideo(
-                    id = it.videoID,
-                    name = it.name,
-                    duration = it.duration,
-                    views = it.views,
-                    uploadDate = it.uploadDate,
-                    thumbnailURL = it.thumbnailURL,
-                    author = it.author,
-                    channelID = subscriptions.first { sub -> sub.name == it.author }.id
-                )
-            }.sortedByDescending { it.uploadDate }
-
-            viewModel.replaceAll(videos)
+                    viewModel.upsertAll(videosFromSub)
+                } catch (e: Exception) {
+                    Log.e("SubscriptionFetchTask", "Failed to fetch videos for ${sub.name}", e)
+                    if (e is java.nio.channels.UnresolvedAddressException ||
+                                    e is java.net.UnknownHostException
+                    ) {
+                        throw e
+                    }
+                }
+                setProgress(workDataOf("progress" to (index + 1).toFloat() / subscriptions.size))
+            }
             Result.success()
+        } catch (e: CancellationException) {
+            Log.d("SubscriptionFetchTask", "Task cancelled")
+            throw e
         } catch (e: Exception) {
-            Log.d("SubscriptionFetchTask", "Error: ${e.message}")
-            Log.d("SubscriptionFetchTask", "Stack Trace: ${e.stackTraceToString()}")
-
+            val message = e.message ?: e.javaClass.simpleName
+            Log.e("SubscriptionFetchTask", "Error during fetch: $message", e)
             Result.retry()
         }
     }
