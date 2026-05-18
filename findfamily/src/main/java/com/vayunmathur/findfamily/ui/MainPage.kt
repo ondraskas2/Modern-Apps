@@ -157,11 +157,9 @@ fun MainPage(
                 },
                 navigationIcon = {
                     if (selectedUserId != null || selectedWaypointId != null) {
-                        IconButton({
+                        IconNavigation {
                             selectedUserId = null
                             selectedWaypointId = null
-                        }) {
-                            IconNavigation(backStack)
                         }
                     }
                 },
