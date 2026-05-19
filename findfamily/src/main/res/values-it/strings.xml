@@ -82,4 +82,9 @@
     <string name="clipboard_label">testo</string>
     <string name="me_label">Io</string>
     <string name="missing_features_title">Funzionalità richieste disabilitate</string>
+    <string name="notification_channel_location_tracking_name">Tracciamento della posizione</string>
+    <string name="notification_channel_entry_exit_desc">Notifiche di ingresso o uscita dei familiari dai punti di interesse</string>
+    <string name="section_saved_places">Luoghi salvati</string>
+    <string name="contact_findfamily_id">ID FindFamily del contatto</string>
+    <string name="missing_features_explanation">FindFamily richiede la geolocalizzazione di rete e un geocoder per funzionare correttamente. Devi attivarli per continuare.</string>
 </resources>
