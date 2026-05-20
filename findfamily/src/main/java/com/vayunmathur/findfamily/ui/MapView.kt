@@ -91,7 +91,7 @@ fun MapView(
 
     LaunchedEffect(Unit) {
         delay(1000)
-        if (users.isEmpty()) {
+        if (users.none { it.id == Networking.userid }) {
             withContext(Dispatchers.IO) {
                 viewModel.upsertAsync(
                     User(

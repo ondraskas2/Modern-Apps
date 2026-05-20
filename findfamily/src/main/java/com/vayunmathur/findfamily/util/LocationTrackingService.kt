@@ -66,9 +66,6 @@ class LocationTrackingService : Service(), SensorEventListener {
     private var accelerometer: Sensor? = null
     
     private lateinit var viewModel: DatabaseViewModel
-    private lateinit var users: StateFlow<List<User>>
-    private lateinit var waypoints: StateFlow<List<Waypoint>>
-    private lateinit var temporaryLinks: StateFlow<List<TemporaryLink>>
     private lateinit var bm: BatteryManager
     
     private var isGpsRunning = false
@@ -92,9 +89,9 @@ class LocationTrackingService : Service(), SensorEventListener {
         val location = lastKnownLocation ?: return
         if (Networking.userid == 0L) return
         
-        val currentUsers = users.value
-        val currentWaypoints = waypoints.value
-        val currentLinks = temporaryLinks.value
+        val currentUsers = viewModel.getAll<User>()
+        val currentWaypoints = viewModel.getAll<Waypoint>()
+        val currentLinks = viewModel.getAll<TemporaryLink>()
         val userIDs = currentUsers.map { it.id }
         val now = Clock.System.now()
 
@@ -111,6 +108,21 @@ class LocationTrackingService : Service(), SensorEventListener {
             viewModel.upsertAsync(locationValue)
             Networking.ensureUserExists()
             
+            if (currentUsers.none { it.id == Networking.userid }) {
+                viewModel.upsert(
+                    User(
+                        getString(R.string.me_label),
+                        null,
+                        "Unnamed Location",
+                        true,
+                        RequestStatus.MUTUAL_CONNECTION,
+                        Clock.System.now(),
+                        null,
+                        Networking.userid
+                    )
+                )
+            }
+
             currentUsers.forEach { Networking.publishLocation(locationValue, it) }
             currentLinks.filter { now < it.deleteAt }.forEach { Networking.publishLocation(locationValue, it) }
             currentLinks.filter { now >= it.deleteAt }.forEach { viewModel.delete(it) }
@@ -118,7 +130,7 @@ class LocationTrackingService : Service(), SensorEventListener {
             delay(3000)
             Networking.receiveLocations()?.let { locations ->
                 val usersRecieved = locations.map { it.userid }.distinct()
-                val newUsers = usersRecieved.filter { it !in userIDs }
+                val newUsers = usersRecieved.filter { it !in userIDs && it != Networking.userid }
                 viewModel.upsertAll(newUsers.map {
                     User(" ", null, "Unknown Location", false, RequestStatus.AWAITING_REQUEST, Clock.System.now(), null, it)
                 })
@@ -204,9 +216,6 @@ class LocationTrackingService : Service(), SensorEventListener {
                 LocationValue::class to db.locationValueDao(),
                 TemporaryLink::class to db.temporaryLinkDao()
             )
-            users = viewModel.data<User>()
-            waypoints = viewModel.data<Waypoint>()
-            temporaryLinks = viewModel.data<TemporaryLink>()
             Networking.init(viewModel, DataStoreUtils.getInstance(this@LocationTrackingService))
             
             launch {
