@@ -89,6 +89,7 @@ import kotlinx.datetime.todayIn
 import androidx.core.text.util.LocalePreferences
 import java.util.Locale
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 private fun getFirstDayOfWeekValue(locale: Locale): Int {
@@ -387,12 +388,15 @@ fun SummaryGrid(
             .verticalScroll(rememberScrollState())
             .padding(bottom = 8.dp)
     ) {
+        val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
         weekDays.forEachIndexed { index, day ->
             val dayInstances = instances.filter { day in it.spanDays }.sortedBy { it.startDateTime }
+            val isToday = day == today
             Column(
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .background(if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else Color.Transparent)
                     .padding(2.dp)
             ) {
                 dayInstances.forEach { instance ->
@@ -550,6 +554,7 @@ fun MonthWeekRow(
                     .weight(1f)
                     .fillMaxHeight()
                     .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                    .background(if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else Color.Transparent)
                     .clickable { onDayClick(date) }
                     .padding(2.dp)
             ) {
@@ -615,12 +620,15 @@ fun AgendaView(
                     .sortedBy { it.startDateTime }
             }
 
-            Column(Modifier.fillMaxWidth()) {
+            val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
+            val isToday = date == today
+
+            Column(Modifier.fillMaxWidth().then(if (isToday) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)) else Modifier)) {
                 Text(
                     text = date.format(dateFormat),
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
                 dayInstances.forEach { instance ->
                     val ev = vEventsByID[instance.eventID]!!
@@ -647,11 +655,32 @@ fun LocalDate.atEndOfDayIn(currentSystemDefault: TimeZone): Instant {
 
 @Composable
 private fun WeekHeader(weekDays: List<LocalDate>) {
+    val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
     Row(modifier = Modifier.fillMaxWidth(), Arrangement.spacedBy(4.dp)) {
         weekDays.forEach { d ->
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(d.dayOfWeek.name.take(3), Modifier, MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                Text(d.day.toString(), fontWeight = FontWeight.Bold)
+            val isToday = d == today
+            Column(
+                Modifier
+                    .weight(1f)
+                    .then(
+                        if (isToday) Modifier.background(
+                            MaterialTheme.colorScheme.primaryContainer,
+                            RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+                        ) else Modifier
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    d.dayOfWeek.name.take(3),
+                    Modifier,
+                    if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                Text(
+                    d.day.toString(),
+                    fontWeight = FontWeight.Bold,
+                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }
@@ -714,6 +743,16 @@ private fun HourlyGrid(
     val minEventHeight = 18.dp
     val minEventWidth = 56.dp
 
+    val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
+    var now by remember { mutableStateOf(Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+            kotlinx.coroutines.delay(60.seconds)
+        }
+    }
+
     Row(
         Modifier
             .fillMaxSize()
@@ -722,10 +761,11 @@ private fun HourlyGrid(
     ) {
         // create 7 equal columns with weight so all 7 fit on screen
         for (d in weekDays) {
+            val isToday = d == today
             // collect unique timed events for this day (timedByDateHour groups by hour)
             val eventsForDay = timedByDateHour[d]?.values?.flatten().orEmpty().distinctBy { it.id }
 
-            Box(Modifier.weight(1f)) {
+            Box(Modifier.weight(1f).background(if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f) else Color.Transparent)) {
                 // background hourly grid — fixed 24 rows
                 Column {
                     for (hour in 0..23) {
@@ -736,6 +776,19 @@ private fun HourlyGrid(
                                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         )
                     }
+                }
+
+                if (isToday) {
+                    val minutesPassed = now.hour * 60 + now.minute
+                    val yOffset = hourRowHeight * (minutesPassed.toFloat() / 60f)
+                    Box(
+                        Modifier
+                            .offset(y = yOffset - 1.dp)
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(Color.Red)
+                            .zIndex(10f)
+                    )
                 }
 
                 // compute positioned events using the helper that assigns columns for overlaps

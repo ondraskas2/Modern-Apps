@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val db = buildDatabase<NoteDatabase>()
+        val db = buildDatabase<NoteDatabase>(dbName = "notes-db")
         viewModel = DatabaseViewModel(db, Note::class to db.noteDao())
         
         handleIntent(intent)
