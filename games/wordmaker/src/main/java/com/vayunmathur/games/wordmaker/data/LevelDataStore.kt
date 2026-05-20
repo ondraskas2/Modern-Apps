@@ -19,6 +19,7 @@ class LevelDataStore(context: Context) {
         private val LEVEL_KEY = intPreferencesKey("current_level")
         private val FOUND_WORDS_KEY = stringSetPreferencesKey("found_words")
         private val BONUS_WORDS_KEY = stringSetPreferencesKey("bonus_words")
+        private val TOTAL_BONUS_WORDS_KEY = intPreferencesKey("total_bonus_words")
     }
 
     val currentLevel: Flow<Int> = appContext.dataStore.data
@@ -28,12 +29,22 @@ class LevelDataStore(context: Context) {
 
     val foundWords: Flow<Set<String>> = appContext.dataStore.data.map { it[FOUND_WORDS_KEY] ?: emptySet() }
     val bonusWords: Flow<Set<String>> = appContext.dataStore.data.map { it[BONUS_WORDS_KEY] ?: emptySet() }
+    val totalBonusWords: Flow<Int> = appContext.dataStore.data.map { it[TOTAL_BONUS_WORDS_KEY] ?: 0 }
 
-    suspend fun addBonusWord(word: String) {
+    suspend fun addBonusWord(word: String): Int {
+        var newTotal = 0
         appContext.dataStore.edit { settings ->
             val currentBonusWords = settings[BONUS_WORDS_KEY] ?: emptySet()
-            settings[BONUS_WORDS_KEY] = currentBonusWords + word
+            if (word !in currentBonusWords) {
+                settings[BONUS_WORDS_KEY] = currentBonusWords + word
+                val currentTotal = settings[TOTAL_BONUS_WORDS_KEY] ?: 0
+                newTotal = currentTotal + 1
+                settings[TOTAL_BONUS_WORDS_KEY] = newTotal
+            } else {
+                newTotal = settings[TOTAL_BONUS_WORDS_KEY] ?: 0
+            }
         }
+        return newTotal
     }
 
     suspend fun addFoundWord(word: String) {

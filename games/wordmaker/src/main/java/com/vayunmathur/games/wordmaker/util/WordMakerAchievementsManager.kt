@@ -23,8 +23,8 @@ class WordMakerAchievementsManager(
             onProgressUpdated("level_100", currentLevel)
             onProgressUpdated("level_500", currentLevel)
             
-            val bonus = levelDataStore.bonusWords.first()
-            onProgressUpdated("bonus_hunter", bonus.size)
+            val totalBonus = levelDataStore.totalBonusWords.first()
+            onProgressUpdated("bonus_hunter", totalBonus)
         }
     }
 }

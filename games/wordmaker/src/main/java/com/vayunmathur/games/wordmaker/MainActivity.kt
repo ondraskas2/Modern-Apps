@@ -418,8 +418,8 @@ fun WordGameScreen(
                                             1f,
                                             animationSpec = tween(durationMillis = 800)
                                         )
-                                        levelDataStore.addBonusWord(word)
-                                        achievementsManager.onProgressUpdated("bonus_hunter", bonusWords.size + 1)
+                                        val newTotal = levelDataStore.addBonusWord(word)
+                                        achievementsManager.onProgressUpdated("bonus_hunter", newTotal)
                                         animatedWord = null
                                     }
                                 } else if (word.lowercase() in dictionary && word in bonusWords) {
