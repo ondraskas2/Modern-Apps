@@ -153,7 +153,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                             headlineContent = { Text(cal.displayName) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .then(if (isSelected) Modifier.background(Color(0x11000000)) else Modifier)
+                                .then(if (isSelected) Modifier.background(MaterialTheme.colorScheme.surfaceVariant) else Modifier)
                                 .clickable {
                                     // select this calendar (or deselect if already selected)
                                     selectedCalendarId = if (isSelected) null else cal.id
@@ -168,7 +168,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                                         .background(Color(cal.color))
                                         .border(
                                             width = 1.dp,
-                                            color = Color.Black.copy(alpha = 0.12f),
+                                            color = MaterialTheme.colorScheme.outlineVariant,
                                             shape = CircleShape
                                         )
                                         .then(if (cal.canModify) Modifier.clickable {

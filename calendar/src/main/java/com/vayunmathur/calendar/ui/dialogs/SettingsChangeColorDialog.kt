@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -71,7 +72,7 @@ fun SettingsChangeColorDialog(viewModel: CalendarViewModel, backStack: NavBackSt
                                 .background(Color(c))
                                 .border(
                                     width = if (selected) 3.dp else 1.dp,
-                                    color = if (selected) Color.Black else Color.Black.copy(alpha = 0.12f),
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                                     shape = CircleShape
                                 )
                                 .clickable {

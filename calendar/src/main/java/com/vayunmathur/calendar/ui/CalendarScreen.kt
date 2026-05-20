@@ -378,7 +378,7 @@ fun SummaryGrid(
                 }
             }
             if (index < weekDays.size - 1) {
-                VerticalDivider(color = Color.DarkGray.copy(alpha = 0.5f), modifier = Modifier.fillMaxHeight())
+                VerticalDivider(modifier = Modifier.fillMaxHeight())
             }
         }
     }
@@ -521,14 +521,14 @@ fun MonthWeekRow(
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .border(0.5.dp, Color.DarkGray)
+                    .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                     .clickable { onDayClick(date) }
                     .padding(2.dp)
             ) {
                 Text(
                     text = date.day.toString(),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isToday) MaterialTheme.colorScheme.primary else if (isPartOfViewingMonth) MaterialTheme.colorScheme.primary else Color.Gray,
+                    color = if (isToday) MaterialTheme.colorScheme.primary else if (isPartOfViewingMonth) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = if (isToday || isPartOfViewingMonth) FontWeight.Bold else FontWeight.Normal
                 )
                 dayInstances.forEach { instance ->
@@ -607,7 +607,7 @@ fun AgendaView(
                         modifier = Modifier.clickable { onEventClick(instance) }
                     )
                 }
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = Color.DarkGray.copy(alpha = 0.3f))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             }
         }
     }
@@ -622,7 +622,7 @@ private fun WeekHeader(weekDays: List<LocalDate>) {
     Row(modifier = Modifier.fillMaxWidth(), Arrangement.spacedBy(4.dp)) {
         weekDays.forEach { d ->
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(d.dayOfWeek.name.take(3), Modifier, Color.Gray, fontSize = 12.sp)
+                Text(d.dayOfWeek.name.take(3), Modifier, MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 Text(d.day.toString(), fontWeight = FontWeight.Bold)
             }
         }
@@ -644,7 +644,7 @@ private fun AllDayRow(
                 if (instances.isEmpty()) {
                     Box(modifier = Modifier
                         .height(32.dp)
-                        .border(1.dp, Color.DarkGray)) {}
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {}
                 } else {
                     Column {
                         instances.forEach { instance ->
@@ -652,7 +652,7 @@ private fun AllDayRow(
                             Box(
                                 Modifier
                                     .padding(bottom = 4.dp)
-                                    .border(1.dp, Color.Black)
+                                    .border(1.dp, MaterialTheme.colorScheme.outline)
                                     .background(Color(ev.color ?: calendars[ev.calendarID]!!.color))
                                     .height(28.dp)
                                     .clickable { onEventClick(instance) }
@@ -705,8 +705,7 @@ private fun HourlyGrid(
                             Modifier
                                 .height(hourRowHeight)
                                 .fillMaxWidth()
-                                .border(1.dp, Color(0xFF222222))
-                                .background(Color(0xFF0F0F0F))
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         )
                     }
                 }
@@ -740,7 +739,7 @@ private fun HourlyGrid(
                                 .size(widthDp, heightDp)
                                 .padding(2.dp)
                                 .zIndex(1f + ev.columnIndex * 0.01f)
-                                .border(1.dp, Color.Black)
+                                .border(1.dp, MaterialTheme.colorScheme.outline)
                                 .background(Color(ev.color))
                                 .clickable { onEventClick(instance) }
                         ) {
