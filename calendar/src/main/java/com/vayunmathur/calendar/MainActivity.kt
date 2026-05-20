@@ -31,8 +31,11 @@ import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.dialog.DatePickerDialog
 import com.vayunmathur.library.ui.dialog.TimePickerDialogContent
 import com.vayunmathur.library.util.*
+import kotlin.time.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -51,6 +54,16 @@ class MainActivity : ComponentActivity() {
                     NoPermissionsScreen(permissions) { hasPermissions = it }
                 } else {
                     val viewModel: CalendarViewModel = viewModel()
+
+                    LaunchedEffect(intent) {
+                        if (intent?.action == Intent.ACTION_VIEW && intent.type == "time/epoch") {
+                            intent.data?.lastPathSegment?.toLongOrNull()?.let { timestamp ->
+                                val date = Instant.fromEpochMilliseconds(timestamp)
+                                    .toLocalDateTime(TimeZone.currentSystemDefault()).date
+                                viewModel.setLastViewedDate(date)
+                            }
+                        }
+                    }
                     
                     val uris by importUris
                     if (uris.isNotEmpty()) {
@@ -89,6 +102,9 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent?.let {
+            // Only handle URIs if they are actually intended for import (ignore time/epoch VIEW intents)
+            if (it.action == Intent.ACTION_VIEW && it.type == "time/epoch") return
+
             val uris = IntentHelper.getUrisFromIntent(it)
             if (uris.isNotEmpty()) {
                 importUris.value = uris

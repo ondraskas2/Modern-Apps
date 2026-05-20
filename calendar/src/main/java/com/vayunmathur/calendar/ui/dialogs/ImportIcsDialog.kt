@@ -63,6 +63,11 @@ fun ImportIcsDialog(
                         }
                     }
                     events = allEvents
+                    if (allEvents.isEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            onDismiss()
+                        }
+                    }
                 }
                 calendars = Calendar.getAllCalendars(context)
                 isLoading = false
