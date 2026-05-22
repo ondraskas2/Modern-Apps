@@ -1,3 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="recording">Nahrávám…</string>
+    <string name="message_placeholder">Zpráva…</string>
+    <string name="voice_message">Hlasová zpráva</string>
+    <string name="mic_error_format">Chyba mikrofonu: %1$s</string>
+    <string name="new_conversation">Nová konverzace</string>
+    <string name="error_prefix">Chyba: %1$s</string>
 </resources>
