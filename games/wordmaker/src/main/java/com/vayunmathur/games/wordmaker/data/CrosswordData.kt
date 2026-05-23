@@ -59,10 +59,13 @@ data class CrosswordData(
 
         fun fromString(content: String): CrosswordData? {
             return try {
-                val lines = content.lines().filter { it.isNotEmpty() }
+                val lines = content.lines().dropWhile { it.isBlank() }.dropLastWhile { it.isBlank() }
                 if (lines.isEmpty()) return null
                 val maxLength = lines.maxOf { it.length }
-                val grid = lines.map { it.padEnd(maxLength).replace(' ', '.') }
+                val grid = lines.map {
+                    val padded = it.padEnd(maxLength)
+                    if (padded.isBlank()) ".".repeat(maxLength) else padded.replace(' ', '.')
+                }
                 val (words, positions) = extractWordsAndPositions(grid)
                 val chooserLetters = words
                     .map { word ->
