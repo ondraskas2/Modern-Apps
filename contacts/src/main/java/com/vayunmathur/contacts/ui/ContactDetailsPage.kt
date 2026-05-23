@@ -182,6 +182,11 @@ fun ContactDetailsPage(
                         val intent = Intent(Intent.ACTION_SENDTO)
                         intent.data = "sms:${phone.number}".toUri()
                         context.startActivity(intent)
+                    },
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL)
+                        intent.data = "tel:${phone.number}".toUri()
+                        context.startActivity(intent)
                     }
                 )
             }
@@ -189,7 +194,12 @@ fun ContactDetailsPage(
                 DetailItem(
                     icon = painterResource(R.drawable.outline_mail_24),
                     data = email.address,
-                    label = email.typeString(context)
+                    label = email.typeString(context),
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_SENDTO)
+                        intent.data = "mailto:${email.address}".toUri()
+                        context.startActivity(intent)
+                    }
                 )
             }
             items(details.addresses, key = { it.id }) { address ->
@@ -308,23 +318,27 @@ fun ActionButtonsRow(number: String?, email: String?) {
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        ActionButton(icon = painterResource(R.drawable.outline_call_24), label = stringResource(R.string.action_call), active = number != null) {
-            val intent = Intent(Intent.ACTION_DIAL)
-            intent.data = "tel:$number".toUri()
-            context.startActivity(intent)
-        }
-        ActionButton(icon = painterResource(R.drawable.outline_sms_24), label = stringResource(R.string.action_message), active = number != null) {
-            val intent = Intent(Intent.ACTION_SENDTO)
-            intent.data = "sms:$number".toUri()
-            context.startActivity(intent)
-        }
-        ActionButton(icon = painterResource(R.drawable.outline_videocam_24), label = stringResource(R.string.action_video), active = number != null) {
+        if (number != null) {
+            ActionButton(icon = painterResource(R.drawable.outline_call_24), label = stringResource(R.string.action_call)) {
+                val intent = Intent(Intent.ACTION_DIAL)
+                intent.data = "tel:$number".toUri()
+                context.startActivity(intent)
+            }
+            ActionButton(icon = painterResource(R.drawable.outline_sms_24), label = stringResource(R.string.action_message)) {
+                val intent = Intent(Intent.ACTION_SENDTO)
+                intent.data = "sms:$number".toUri()
+                context.startActivity(intent)
+            }
+            ActionButton(icon = painterResource(R.drawable.outline_videocam_24), label = stringResource(R.string.action_video)) {
 
+            }
         }
-        ActionButton(icon = painterResource(R.drawable.outline_mail_24), label = stringResource(R.string.email), active = email != null) {
-            val intent = Intent(Intent.ACTION_SENDTO)
-            intent.data = "mailto:$email".toUri()
-            context.startActivity(intent)
+        if (email != null) {
+            ActionButton(icon = painterResource(R.drawable.outline_mail_24), label = stringResource(R.string.email)) {
+                val intent = Intent(Intent.ACTION_SENDTO)
+                intent.data = "mailto:$email".toUri()
+                context.startActivity(intent)
+            }
         }
     }
 }
@@ -334,7 +348,6 @@ fun ActionButtonsRow(number: String?, email: String?) {
 fun ActionButton(
     icon: Painter,
     label: String,
-    active: Boolean = true,
     action: () -> Unit
 ) {
     Column(
@@ -349,7 +362,7 @@ fun ActionButton(
                     .size(56.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { if(active) action() },
+                    .clickable { action() },
                 contentAlignment = androidx.compose.ui.Alignment.Center
             ) {
                 Icon(
@@ -369,12 +382,15 @@ fun DetailItem(
     data: String,
     label: String,
     trailingIcon: Painter? = null,
-    onTrailingIconClick: (() -> Unit)? = null
+    onTrailingIconClick: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         ListItem(
             headlineContent = { Text(data, style = MaterialTheme.typography.bodyLarge) },
