@@ -75,4 +75,7 @@
     <string name="search">Search</string>
     <string name="search_contacts">Search contacts</string>
     <string name="include_year">Include year</string>
+    <string name="system_default">System Default</string>
+    <string name="signal">Signal</string>
+    <string name="whatsapp">WhatsApp</string>
 </resources>

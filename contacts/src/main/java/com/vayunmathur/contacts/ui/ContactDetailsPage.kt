@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -61,6 +64,7 @@ import com.vayunmathur.contacts.data.Contact
 import com.vayunmathur.contacts.data.formatDisplay
 import com.vayunmathur.contacts.util.ContactViewModel
 import com.vayunmathur.contacts.R
+import com.vayunmathur.contacts.util.PackageUtils
 import com.vayunmathur.contacts.util.VcfUtils
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
@@ -98,6 +102,9 @@ fun ContactDetailsPage(
         return
     }
     val context = LocalContext.current
+    val isSignalInstalled = remember { PackageUtils.isSignalInstalled(context) }
+    val isWhatsAppInstalled = remember { PackageUtils.isWhatsAppInstalled(context) }
+
     val scope = rememberCoroutineScope()
     val shareContactLabel = stringResource(R.string.share_contact)
 
@@ -169,24 +176,61 @@ fun ContactDetailsPage(
             }
 
             item {
-                ActionButtonsRow(details.phoneNumbers.firstOrNull()?.number, details.emails.firstOrNull()?.address)
+                ActionButtonsRow(
+                    details.phoneNumbers.firstOrNull()?.number,
+                    details.emails.firstOrNull()?.address,
+                    isSignalInstalled,
+                    isWhatsAppInstalled
+                )
             }
 
             items(details.phoneNumbers, key = { it.id }) { phone ->
+                var showCallDropdown by remember { mutableStateOf(false) }
+                var showSmsDropdown by remember { mutableStateOf(false) }
+                val hasAlternativeApps = isSignalInstalled || isWhatsAppInstalled
+
                 DetailItem(
                     icon = painterResource(R.drawable.outline_call_24),
                     data = formatPhoneNumber(phone.number),
                     label = phone.typeString(context),
                     trailingIcon = painterResource(R.drawable.outline_chat_24),
                     onTrailingIconClick = {
-                        val intent = Intent(Intent.ACTION_SENDTO)
-                        intent.data = "sms:${phone.number}".toUri()
-                        context.startActivity(intent)
+                        if (hasAlternativeApps) {
+                            showSmsDropdown = true
+                        } else {
+                            val intent = Intent(Intent.ACTION_SENDTO)
+                            intent.data = "sms:${phone.number}".toUri()
+                            context.startActivity(intent)
+                        }
                     },
                     onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL)
-                        intent.data = "tel:${phone.number}".toUri()
-                        context.startActivity(intent)
+                        if (hasAlternativeApps) {
+                            showCallDropdown = true
+                        } else {
+                            val intent = Intent(Intent.ACTION_DIAL)
+                            intent.data = "tel:${phone.number}".toUri()
+                            context.startActivity(intent)
+                        }
+                    },
+                    dropdownContent = {
+                        CommunicationDropdown(
+                            expanded = showCallDropdown,
+                            onDismiss = { showCallDropdown = false },
+                            number = phone.number,
+                            type = CommunicationType.CALL,
+                            isSignalInstalled = isSignalInstalled,
+                            isWhatsAppInstalled = isWhatsAppInstalled
+                        )
+                    },
+                    trailingDropdownContent = {
+                        CommunicationDropdown(
+                            expanded = showSmsDropdown,
+                            onDismiss = { showSmsDropdown = false },
+                            number = phone.number,
+                            type = CommunicationType.SMS,
+                            isSignalInstalled = isSignalInstalled,
+                            isWhatsAppInstalled = isWhatsAppInstalled
+                        )
                     }
                 )
             }
@@ -310,7 +354,12 @@ fun ProfileHeader(contact: Contact) {
 }
 
 @Composable
-fun ActionButtonsRow(number: String?, email: String?) {
+fun ActionButtonsRow(
+    number: String?,
+    email: String?,
+    isSignalInstalled: Boolean,
+    isWhatsAppInstalled: Boolean
+) {
     val context = LocalContext.current
     Row(
         modifier = Modifier
@@ -319,16 +368,56 @@ fun ActionButtonsRow(number: String?, email: String?) {
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         if (number != null) {
-            ActionButton(icon = painterResource(R.drawable.outline_call_24), label = stringResource(R.string.action_call)) {
-                val intent = Intent(Intent.ACTION_DIAL)
-                intent.data = "tel:$number".toUri()
-                context.startActivity(intent)
-            }
-            ActionButton(icon = painterResource(R.drawable.outline_sms_24), label = stringResource(R.string.action_message)) {
-                val intent = Intent(Intent.ACTION_SENDTO)
-                intent.data = "sms:$number".toUri()
-                context.startActivity(intent)
-            }
+            val hasAlternativeApps = isSignalInstalled || isWhatsAppInstalled
+            var showCallDropdown by remember { mutableStateOf(false) }
+            var showSmsDropdown by remember { mutableStateOf(false) }
+
+            ActionButton(
+                icon = painterResource(R.drawable.outline_call_24),
+                label = stringResource(R.string.action_call),
+                action = {
+                    if (hasAlternativeApps) {
+                        showCallDropdown = true
+                    } else {
+                        val intent = Intent(Intent.ACTION_DIAL)
+                        intent.data = "tel:$number".toUri()
+                        context.startActivity(intent)
+                    }
+                },
+                dropdownContent = {
+                    CommunicationDropdown(
+                        expanded = showCallDropdown,
+                        onDismiss = { showCallDropdown = false },
+                        number = number,
+                        type = CommunicationType.CALL,
+                        isSignalInstalled = isSignalInstalled,
+                        isWhatsAppInstalled = isWhatsAppInstalled
+                    )
+                }
+            )
+            ActionButton(
+                icon = painterResource(R.drawable.outline_sms_24),
+                label = stringResource(R.string.action_message),
+                action = {
+                    if (hasAlternativeApps) {
+                        showSmsDropdown = true
+                    } else {
+                        val intent = Intent(Intent.ACTION_SENDTO)
+                        intent.data = "sms:$number".toUri()
+                        context.startActivity(intent)
+                    }
+                },
+                dropdownContent = {
+                    CommunicationDropdown(
+                        expanded = showSmsDropdown,
+                        onDismiss = { showSmsDropdown = false },
+                        number = number,
+                        type = CommunicationType.SMS,
+                        isSignalInstalled = isSignalInstalled,
+                        isWhatsAppInstalled = isWhatsAppInstalled
+                    )
+                }
+            )
             ActionButton(icon = painterResource(R.drawable.outline_videocam_24), label = stringResource(R.string.action_video)) {
 
             }
@@ -348,6 +437,7 @@ fun ActionButtonsRow(number: String?, email: String?) {
 fun ActionButton(
     icon: Painter,
     label: String,
+    dropdownContent: (@Composable () -> Unit)? = null,
     action: () -> Unit
 ) {
     Column(
@@ -370,6 +460,7 @@ fun ActionButton(
                     contentDescription = label,
                     modifier = Modifier.size(24.dp)
                 )
+                dropdownContent?.invoke()
             }
         }
         Text(text = label, style = MaterialTheme.typography.labelMedium)
@@ -383,7 +474,9 @@ fun DetailItem(
     label: String,
     trailingIcon: Painter? = null,
     onTrailingIconClick: (() -> Unit)? = null,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    dropdownContent: (@Composable () -> Unit)? = null,
+    trailingDropdownContent: (@Composable () -> Unit)? = null
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -393,18 +486,107 @@ fun DetailItem(
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
     ) {
         ListItem(
-            headlineContent = { Text(data, style = MaterialTheme.typography.bodyLarge) },
+            headlineContent = {
+                Box {
+                    Text(data, style = MaterialTheme.typography.bodyLarge)
+                    dropdownContent?.invoke()
+                }
+            },
             supportingContent = { Text(label, style = MaterialTheme.typography.bodySmall) },
             leadingContent = { Icon(icon, label) },
             trailingContent = {
                 if (trailingIcon != null && onTrailingIconClick != null) {
-                    IconButton(onClick = onTrailingIconClick) {
-                        Icon(trailingIcon, stringResource(R.string.action))
+                    Box {
+                        IconButton(onClick = onTrailingIconClick) {
+                            Icon(trailingIcon, stringResource(R.string.action))
+                        }
+                        trailingDropdownContent?.invoke()
                     }
                 }
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
+    }
+}
+
+enum class CommunicationType { CALL, SMS }
+
+@Composable
+fun CommunicationDropdown(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    number: String,
+    type: CommunicationType,
+    isSignalInstalled: Boolean,
+    isWhatsAppInstalled: Boolean
+) {
+    val context = LocalContext.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.system_default)) },
+            onClick = {
+                handleCommunication(context, number, type, null)
+                onDismiss()
+            }
+        )
+        if (isSignalInstalled) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.signal)) },
+                onClick = {
+                    handleCommunication(context, number, type, PackageUtils.SIGNAL_PACKAGE)
+                    onDismiss()
+                }
+            )
+        }
+        if (isWhatsAppInstalled) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.whatsapp)) },
+                onClick = {
+                    handleCommunication(context, number, type, PackageUtils.WHATSAPP_PACKAGE)
+                    onDismiss()
+                }
+            )
+        }
+    }
+}
+
+private fun handleCommunication(
+    context: android.content.Context,
+    number: String,
+    type: CommunicationType,
+    packageName: String?
+) {
+    val intent = when (packageName) {
+        PackageUtils.SIGNAL_PACKAGE -> {
+            if (type == CommunicationType.CALL) {
+                Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
+                    setPackage(PackageUtils.SIGNAL_PACKAGE)
+                }
+            } else {
+                Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply {
+                    setPackage(PackageUtils.SIGNAL_PACKAGE)
+                }
+            }
+        }
+        PackageUtils.WHATSAPP_PACKAGE -> {
+            val formattedNumber = number.filter { it.isDigit() }
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$formattedNumber"))
+        }
+        else -> {
+            if (type == CommunicationType.CALL) {
+                Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
+            } else {
+                Intent(Intent.ACTION_SENDTO, Uri.parse("sms:$number"))
+            }
+        }
+    }
+    try {
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // Fallback to default if specific package fails
+        if (packageName != null) {
+            handleCommunication(context, number, type, null)
+        }
     }
 }
 
