@@ -70,8 +70,8 @@
                 <action android:name="android.intent.action.EDIT" />
                 <data android:scheme="content" />
                 <data android:host="com.android.contacts" />
-                <data android:pathPrefix="/contacts/" />
-                <data android:pathPrefix="/people/" />
+                <data android:pathPrefix="/contacts" />
+                <data android:pathPrefix="/people" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
