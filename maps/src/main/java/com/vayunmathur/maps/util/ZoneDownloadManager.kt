@@ -67,7 +67,7 @@ class ZoneDownloadManager(private val context: Context) {
             // 2. Cross-reference with disk for any parts not found in DownloadManager
             // (e.g. if system cleared the record but file exists)
             activeZones.forEach { zoneId ->
-                val expectedParts = listOf("Map", "Nodes", "Graph")
+                val expectedParts = listOf("Map", "Nodes", "Graph", "Transit")
                 val foundInDM = foundParts[zoneId] ?: emptySet()
                 
                 expectedParts.forEach { part ->
@@ -75,7 +75,8 @@ class ZoneDownloadManager(private val context: Context) {
                         val fileName = when(part) {
                             "Map" -> "zone_$zoneId.pmtiles"
                             "Nodes" -> "nodes_zone_$zoneId.bin"
-                            else -> "edges_zone_$zoneId.bin"
+                            "Graph" -> "edges_zone_$zoneId.bin"
+                            else -> "transit_voyages_zone_$zoneId.bin"
                         }
                         val file = File(context.getExternalFilesDir(null), fileName)
                         if (file.exists()) {
@@ -86,7 +87,7 @@ class ZoneDownloadManager(private val context: Context) {
             }
 
             val finalProgressMap = activeZones.mapNotNull { zoneId ->
-                val avg = (progressMap[zoneId] ?: 0.0) / 3.0
+                val avg = (progressMap[zoneId] ?: 0.0) / 4.0
                 if (avg < 0.999) zoneId to avg.toFloat() else null
             }.toMap()
 
@@ -117,7 +118,8 @@ class ZoneDownloadManager(private val context: Context) {
         val files = listOf(
             "zone_$zoneId.pmtiles",
             "nodes_zone_$zoneId.bin",
-            "edges_zone_$zoneId.bin"
+            "edges_zone_$zoneId.bin",
+            "transit_voyages_zone_$zoneId.bin"
         )
         files.forEach { fileName ->
             val file = File(context.getExternalFilesDir(null), fileName)
@@ -147,8 +149,10 @@ class ZoneDownloadManager(private val context: Context) {
         val pmtilesFile = File(context.getExternalFilesDir(null), "zone_$zoneId.pmtiles")
         val nodesFile = File(context.getExternalFilesDir(null), "nodes_zone_$zoneId.bin")
         val edgesFile = File(context.getExternalFilesDir(null), "edges_zone_$zoneId.bin")
+        val transitFile = File(context.getExternalFilesDir(null), "transit_voyages_zone_$zoneId.bin")
 
-        val allFilesExist = pmtilesFile.exists() && nodesFile.exists() && edgesFile.exists()
+        val allFilesExist = pmtilesFile.exists() && nodesFile.exists() && 
+                          edgesFile.exists() && transitFile.exists()
         if (allFilesExist) return ZoneStatus.FINISHED
 
         val query = DownloadManager.Query()
@@ -177,14 +181,16 @@ class ZoneDownloadManager(private val context: Context) {
         val files = listOf(
             "Map" to "https://data.vayunmathur.com/zone_$zoneId.pmtiles",
             "Nodes" to "https://data.vayunmathur.com/nodes_zone_$zoneId.bin",
-            "Graph" to "https://data.vayunmathur.com/edges_zone_$zoneId.bin"
+            "Graph" to "https://data.vayunmathur.com/edges_zone_$zoneId.bin",
+            "Transit" to "https://data.vayunmathur.com/transit_voyages_zone_$zoneId.bin"
         )
 
         files.forEach { (partName, url) ->
             val fileName = when(partName) {
                 "Map" -> "zone_$zoneId.pmtiles"
                 "Nodes" -> "nodes_zone_$zoneId.bin"
-                else -> "edges_zone_$zoneId.bin"
+                "Graph" -> "edges_zone_$zoneId.bin"
+                else -> "transit_voyages_zone_$zoneId.bin"
             }
             val request = DownloadManager.Request(url.toUri())
                 .setTitle("Map Zone $zoneId ($partName)")

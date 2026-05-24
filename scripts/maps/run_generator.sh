@@ -1,11 +1,19 @@
 #!/bin/bash
 
 # --- CONFIGURATION ---
-R2_ENDPOINT="https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
-BUCKET_NAME="maps"
-ACCESS_KEY="ACCESS_KEY_HERE"
-SECRET_KEY="SECRET_KEY_HERE"
-DEFAULT_PBF="planet-latest.osm.pbf"
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading configuration from .env..."
+    set -a
+    source .env
+    set +a
+fi
+
+R2_ENDPOINT="${R2_ENDPOINT:-https://<ACCOUNT_ID>.r2.cloudflarestorage.com}"
+BUCKET_NAME="${BUCKET_NAME:-maps}"
+ACCESS_KEY="${R2_ACCESS_KEY:-ACCESS_KEY_HERE}"
+SECRET_KEY="${R2_SECRET_KEY:-SECRET_KEY_HERE}"
+DEFAULT_PBF="california-latest.osm.pbf"
 DATA_DIR="map_data"
 
 # Helper to run commands with sudo only if available
@@ -17,13 +25,13 @@ run_cmd() {
     fi
 }
 
-# Use provided argument or default to planet-latest.osm.pbf
+# Use provided argument or default to california-latest.osm.pbf
 INPUT_PBF="${1:-$DEFAULT_PBF}"
 
 # --- 1. SYSTEM DEPENDENCIES ---
 echo "[1/6] Installing system dependencies..."
-run_cmd apt-get update
-run_cmd apt-get install -y \
+run_cmd dnf update
+run_cmd dnf install -y \
     build-essential libosmium2-dev libsqlite3-dev \
     libprotozero-dev libexpat1-dev zlib1g-dev libbz2-dev \
     curl unzip wget
@@ -41,8 +49,8 @@ fi
 
 # --- 3. DATA DOWNLOAD ---
 if [ ! -f "$INPUT_PBF" ]; then
-    echo "[3/6] $INPUT_PBF not found. Downloading latest planet file..."
-    curl -OL "https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf"
+    echo "[3/6] $INPUT_PBF not found. Downloading California extract..."
+    curl -OL "https://download.geofabrik.de/north-america/us/california-latest.osm.pbf"
 else
     echo "[3/6] $INPUT_PBF already exists. Skipping download."
 fi
@@ -87,7 +95,8 @@ aws s3 sync "$DATA_DIR" "s3://$BUCKET_NAME/" \
     --include "metadata.bin" \
     --include "amenities.db" \
     --include "nodes_zone_*.bin" \
-    --include "edges_zone_*.bin"
+    --include "edges_zone_*.bin" \
+    --include "transit_voyages_zone_*.bin"
 
 echo "---------------------------------------------------------"
 echo "Pipeline Finished Successfully."

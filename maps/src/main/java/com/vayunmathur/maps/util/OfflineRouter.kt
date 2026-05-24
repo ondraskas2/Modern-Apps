@@ -86,7 +86,8 @@ object OfflineRouter {
             sLon: Double,
             eLat: Double,
             eLon: Double,
-            mode: Int
+            mode: Int,
+            startTime: Long
     ): Array<RawStep>?
     private external fun updateTrafficNative(
             zoneId: Int,
@@ -112,6 +113,7 @@ object OfflineRouter {
     }
 
     external fun ensureTrafficLoadedNative(lat: Double, lon: Double, forceAsync: Boolean)
+    external fun ensureZoneLoadedNative(zoneId: Int): Boolean
 
     private val trafficScope = CoroutineScope(Dispatchers.IO)
 
@@ -177,7 +179,8 @@ object OfflineRouter {
             val distanceMm: Long,
             val duration10ms: Long,
             val geometry: DoubleArray,
-            val speedRatio: Double
+            val speedRatio: Double,
+            val isTransit: Boolean
     )
 
     private var isInitialized = false
@@ -185,8 +188,16 @@ object OfflineRouter {
     fun initialize(context: Context) {
         if (isInitialized) return
         val path = context.getExternalFilesDir(null)?.absolutePath ?: return
+        Log.d("OfflineRouter", "Initializing with path: $path")
         isInitialized = init(path)
+        Log.d("OfflineRouter", "Initialization result: $isInitialized")
         cacheDirPath = context.cacheDir.absolutePath
+    }
+
+    fun ensureZoneLoaded(zoneId: Int) {
+        if (isInitialized) {
+            ensureZoneLoadedNative(zoneId)
+        }
     }
 
     suspend fun getRoute(
@@ -208,9 +219,17 @@ object OfflineRouter {
             mode: RouteService.TravelMode
     ): RouteService.Route =
             withContext(Dispatchers.Default) {
+                Log.d("OfflineRouter", "getRoute: mode=$mode, start=$start, end=$end")
                 if (!isInitialized) {
                     initialize(context)
                 }
+                Log.d("OfflineRouter", "isInitialized=$isInitialized")
+
+                val now = java.util.Calendar.getInstance()
+                val secondsSinceMidnight = now.get(java.util.Calendar.HOUR_OF_DAY) * 3600 +
+                        now.get(java.util.Calendar.MINUTE) * 60 +
+                        now.get(java.util.Calendar.SECOND)
+                val startTime10ms = secondsSinceMidnight * 100L
 
                 val rawSteps =
                         findRouteNative(
@@ -218,7 +237,8 @@ object OfflineRouter {
                                 start.longitude,
                                 end.latitude,
                                 end.longitude,
-                                mode.ordinal
+                                mode.ordinal,
+                                startTime10ms
                         )
                                 ?: throw IllegalStateException("No route found")
 
@@ -419,7 +439,9 @@ object OfflineRouter {
                                                     maneuver,
                                                     instructionText
                                             ),
-                                    travelMode = mode,
+                                    travelMode = if (raw.isTransit) RouteService.TravelMode.TRANSIT
+                                    else if (mode == RouteService.TravelMode.TRANSIT) RouteService.TravelMode.WALK
+                                    else mode,
                                     speedRatio = raw.speedRatio
                             )
                         }

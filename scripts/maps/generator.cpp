@@ -51,8 +51,15 @@ struct FinalEdge {
     uint32_t dist_mm;
     uint32_t name_offset;
     uint8_t type;
-    uint8_t speed_limit; // Added
+    uint8_t speed_limit;
 };
+
+struct TransitVoyage {
+    uint32_t dep_10ms;
+    uint32_t arr_10ms;
+};
+
+#define TRANSIT_FLAG 0x80
 
 struct NodeTemp {
     uint64_t osm_id;
@@ -295,6 +302,15 @@ uint8_t get_hw_id(const char* type) {
     return it != m.end() ? it->second : 0;
 }
 
+bool is_transit_way(const osmium::TagList& tags) {
+    const char* railway = tags.get_value_by_key("railway");
+    if (railway && (strcmp(railway, "rail") == 0 || strcmp(railway, "subway") == 0 ||
+                    strcmp(railway, "tram") == 0 || strcmp(railway, "light_rail") == 0)) return true;
+    const char* route = tags.get_value_by_key("route");
+    if (route && (strcmp(route, "bus") == 0 || strcmp(route, "train") == 0)) return true;
+    return false;
+}
+
 void print_progress(const string& label, uint64_t current, uint64_t total) {
     static auto last_update = chrono::steady_clock::now();
     auto now = chrono::steady_clock::now();
@@ -305,12 +321,41 @@ void print_progress(const string& label, uint64_t current, uint64_t total) {
     if (current >= total) cout << endl;
 }
 
+uint32_t parse_time_10ms(const string& s) {
+    int h, m, sec;
+    if (sscanf(s.c_str(), "%d:%d:%d", &h, &m, &sec) == 3) {
+        return (h * 3600 + m * 60 + sec) * 100;
+    }
+    return 0;
+}
+
+struct TransitInput {
+    uint64_t u_osm, v_osm;
+    string line_name;
+    uint32_t dep, arr;
+};
+
 int main(int argc, char* argv[]) {
-    if (argc < 2) { cerr << "Usage: " << argv[0] << " map.osm.pbf" << endl; return 1; }
+    if (argc < 2) { cerr << "Usage: " << argv[0] << " map.osm.pbf [transit.csv]" << endl; return 1; }
 
     mkdir(DATA_DIR.c_str(), 0777);
     init_lookup_table();
     ThreadPool pool(thread::hardware_concurrency());
+
+    vector<TransitInput> transit_inputs;
+    if (argc >= 3) {
+        ifstream transit_in(argv[2]);
+        string line;
+        while (getline(transit_in, line)) {
+            // u_osm,v_osm,line_name,dep,arr
+            stringstream ss(line);
+            string u_s, v_s, name, dep_s, arr_s;
+            if (getline(ss, u_s, ',') && getline(ss, v_s, ',') && getline(ss, name, ',') &&
+                getline(ss, dep_s, ',') && getline(ss, arr_s, ',')) {
+                transit_inputs.push_back({stoull(u_s), stoull(v_s), name, parse_time_10ms(dep_s), parse_time_10ms(arr_s)});
+            }
+        }
+    }
 
     uint8_t* useful_nodes_mask = (uint8_t*)calloc(BITSET_SIZE, sizeof(uint8_t));
     atomic<uint64_t> total_useful_nodes{0};
@@ -321,13 +366,14 @@ int main(int argc, char* argv[]) {
     mutex way_cache_mtx;
 
     // STEP 1: Discovery & Caching (Pass 1 - Ways)
+    unordered_map<string, uint32_t> name_pool;
+    mutex name_pool_mtx;
+    uint32_t name_offset = 0;
+    ofstream name_out(DATA_DIR + "road_names.bin", ios::binary);
+
     {
         osmium::io::Reader reader{argv[1], osmium::osm_entity_bits::way};
         uint64_t total_size = reader.file_size();
-        unordered_map<string, uint32_t> name_pool;
-        mutex name_pool_mtx;
-        uint32_t name_offset = 0;
-        ofstream name_out(DATA_DIR + "road_names.bin", ios::binary);
 
         while (auto buf = reader.read()) {
             pool.enqueue([&, buf = move(buf)]() mutable {
@@ -336,10 +382,12 @@ int main(int argc, char* argv[]) {
 
                 for (const auto& way : buf.select<osmium::Way>()) {
                     uint8_t hw = get_hw_id(way.tags().get_value_by_key("highway"));
-                    if (hw == 0) continue;
+                    bool is_transit = is_transit_way(way.tags());
+                    if (hw == 0 && !is_transit) continue;
 
                     uint32_t n_off = 0xFFFFFFFF;
                     const char* name_str = way.tags().get_value_by_key("name");
+                    if (!name_str && is_transit) name_str = way.tags().get_value_by_key("ref");
                     if (name_str) {
                         lock_guard<mutex> lock(name_pool_mtx);
                         auto it = name_pool.find(name_str);
@@ -365,7 +413,7 @@ int main(int argc, char* argv[]) {
                         local_topology.push_back(n.ref());
                     }
 
-                    local_ways.push_back({ n_off, topology_start, (uint16_t)nodes.size(), hw, speed, oneway });
+                    local_ways.push_back({ n_off, topology_start, (uint16_t)nodes.size(), (uint8_t)(is_transit ? (hw | TRANSIT_FLAG) : hw), speed, oneway });
                     total_edges += (nodes.size() - 1) * (oneway ? 1 : 2);
                 }
 
@@ -384,6 +432,15 @@ int main(int argc, char* argv[]) {
     }
 
     // STEP 2: Node Collection (Pass 2 - Nodes)
+    for (auto& ti : transit_inputs) {
+        if (ti.u_osm < BITSET_SIZE && useful_nodes_mask[ti.u_osm] == 0) {
+            useful_nodes_mask[ti.u_osm] = 1; total_useful_nodes++;
+        }
+        if (ti.v_osm < BITSET_SIZE && useful_nodes_mask[ti.v_osm] == 0) {
+            useful_nodes_mask[ti.v_osm] = 1; total_useful_nodes++;
+        }
+    }
+
     vector<NodeTemp> nodes_raw(total_useful_nodes);
     {
         osmium::io::Reader reader{argv[1], osmium::osm_entity_bits::node};
@@ -424,7 +481,64 @@ int main(int argc, char* argv[]) {
     parallel_radix_sort(id_to_local, 64);
     build_id_tile_index(id_to_local);
 
-    // STEP 3: Graph Construction (In-Memory from cached ways)
+    // Group transit inputs by (u, v)
+    struct TransitEdgeGroup {
+        vector<TransitVoyage> voyages;
+        uint32_t name_off;
+    };
+    map<pair<uint32_t, uint32_t>, TransitEdgeGroup> transit_groups;
+
+    if (transit_inputs.empty()) {
+        cout << "Synthesizing transit voyages (15-min frequency)..." << endl;
+        lock_guard<mutex> lock(name_pool_mtx);
+        for (const auto& cw : cached_ways) {
+            if (cw.type & TRANSIT_FLAG) {
+                for (size_t i = 0; i < (size_t)cw.node_count - 1; ++i) {
+                    uint64_t u_osm = way_nodes_topology[cw.first_node_idx + i];
+                    uint64_t v_osm = way_nodes_topology[cw.first_node_idx + i + 1];
+                    uint32_t u_lid = get_local_id_by_osm(u_osm, id_to_local);
+                    uint32_t v_lid = get_local_id_by_osm(v_osm, id_to_local);
+                    if (u_lid == 0xFFFFFFFF || v_lid == 0xFFFFFFFF) continue;
+
+                    uint32_t dist = accurate_dist_mm(node_masters[u_lid].lat_e7, node_masters[u_lid].lon_e7,
+                                                     node_masters[v_lid].lat_e7, node_masters[v_lid].lon_e7);
+                    // Speed estimate: 40 km/h for rail (11.1 m/s), 20 km/h for others (5.5 m/s)
+                    double speed_m_s = (cw.type & 0x7F) == 0 ? 11.1 : 5.5;
+                    uint32_t travel_time_10ms = (uint32_t)((dist / 1000.0) / speed_m_s * 100.0);
+
+                    auto& group = transit_groups[{u_lid, v_lid}];
+                    group.name_off = cw.name_offset;
+                    for (int h = 0; h < 24; ++h) {
+                        for (int m = 0; m < 60; m += 15) {
+                            uint32_t dep = (h * 3600 + m * 60) * 100;
+                            group.voyages.push_back({dep, dep + travel_time_10ms});
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        lock_guard<mutex> lock(name_pool_mtx);
+        for (auto& ti : transit_inputs) {
+            uint32_t u_lid = get_local_id_by_osm(ti.u_osm, id_to_local);
+            uint32_t v_lid = get_local_id_by_osm(ti.v_osm, id_to_local);
+            if (u_lid != 0xFFFFFFFF && v_lid != 0xFFFFFFFF) {
+                uint32_t n_off = 0xFFFFFFFF;
+                auto it = name_pool.find(ti.line_name);
+                if (it != name_pool.end()) n_off = it->second;
+                else {
+                    n_off = name_offset;
+                    name_pool[ti.line_name] = n_off;
+                    name_out.write(ti.line_name.c_str(), ti.line_name.size() + 1);
+                    name_offset += (ti.line_name.size() + 1);
+                }
+                transit_groups[{u_lid, v_lid}].voyages.push_back({ti.dep, ti.arr});
+                transit_groups[{u_lid, v_lid}].name_off = n_off;
+            }
+        }
+    }
+    total_edges += transit_groups.size();
+
     vector<TmpEdge> tmp_edges(total_edges);
     atomic<uint64_t> global_edge_idx{0};
     {
@@ -463,6 +577,16 @@ int main(int argc, char* argv[]) {
             }));
         }
         for (auto& task : construction_tasks) task.wait();
+
+        // Add transit edges to tmp_edges
+        for (auto& entry : transit_groups) {
+            uint32_t u_lid = entry.first.first;
+            uint32_t v_lid = entry.first.second;
+            // dist_mm will store the voyage offset, speed_limit will store the count
+            // We'll set these correctly in the finalization step when we know the zone offsets
+            tmp_edges[global_edge_idx.fetch_add(1)] = { u_lid, v_lid, 0, entry.second.name_off, TRANSIT_FLAG, (uint8_t)min((size_t)255, entry.second.voyages.size()) };
+        }
+
         cout << "Step 3: Graph Construction from Memory Complete." << endl;
     }
 
@@ -492,19 +616,32 @@ int main(int argc, char* argv[]) {
 
     vector<future<void>> zone_tasks;
     for (int zid = 0; zid < NUM_ZONES; ++zid) {
-        zone_tasks.push_back(async(launch::async, [=, &node_masters, &tmp_edges, &zone_node_counts, &current_zone_node_starts, &current_zone_edge_starts]() {
+        zone_tasks.push_back(async(launch::async, [=, &node_masters, &tmp_edges, &zone_node_counts, &current_zone_node_starts, &current_zone_edge_starts, &transit_groups]() {
             uint32_t node_count = zone_node_counts[zid];
             if (node_count == 0) return;
             uint32_t edge_start = current_zone_edge_starts[zid];
             uint32_t node_start = current_zone_node_starts[zid];
             uint32_t local_edge_ptr = 0;
+            uint32_t local_transit_voyage_ptr = 0;
             ofstream node_out(DATA_DIR + "nodes_zone_" + to_string(zid) + ".bin", ios::binary);
             ofstream edge_out(DATA_DIR + "edges_zone_" + to_string(zid) + ".bin", ios::binary);
+            ofstream transit_out(DATA_DIR + "transit_voyages_zone_" + to_string(zid) + ".bin", ios::binary);
             for (uint32_t i = 0; i < node_count; ++i) {
                 uint32_t lid = node_start + i;
                 node_masters[lid].edge_ptr = local_edge_ptr;
                 while (edge_start + local_edge_ptr < tmp_edges.size() && tmp_edges[edge_start + local_edge_ptr].source_lid == lid) {
-                    const auto& te = tmp_edges[edge_start + local_edge_ptr];
+                    auto te = tmp_edges[edge_start + local_edge_ptr];
+                    if (te.type & TRANSIT_FLAG) {
+                        auto it = transit_groups.find({te.source_lid, te.target_lid});
+                        if (it != transit_groups.end()) {
+                            te.dist_mm = local_transit_voyage_ptr;
+                            te.speed_limit = (uint8_t)min((size_t)255, it->second.voyages.size());
+                            for (size_t v = 0; v < te.speed_limit; ++v) {
+                                transit_out.write((char*)&it->second.voyages[v], sizeof(TransitVoyage));
+                            }
+                            local_transit_voyage_ptr += te.speed_limit;
+                        }
+                    }
                     FinalEdge fe = { te.target_lid, te.dist_mm, te.name_offset, te.type, te.speed_limit };
                     edge_out.write((char*)&fe, sizeof(FinalEdge));
                     local_edge_ptr++;

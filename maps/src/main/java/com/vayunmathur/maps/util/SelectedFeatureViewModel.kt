@@ -3,7 +3,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.maps.data.SpecificFeature
-import com.vayunmathur.maps.data.TransitRoute
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -53,19 +52,22 @@ class SelectedFeatureViewModel(application: Application): AndroidViewModel(appli
 
                 // Run calculations for each mode
                 RouteService.TravelMode.entries.forEach { mode ->
-                    val result = try {
-                        when (mode) {
-                            RouteService.TravelMode.TRANSIT -> TransitRoute.computeRoute(routeFeature, pos)
-                            RouteService.TravelMode.BICYCLE, RouteService.TravelMode.WALK, RouteService.TravelMode.DRIVE -> {
-                                OfflineRouter.getRoute(application, routeFeature, pos, mode)
-                            }
-//                            else -> RouteService.computeRoute(routeFeature, pos, mode)
-                        }
+                    var result: RouteService.RouteType? = try {
+                        OfflineRouter.getRoute(application, routeFeature, pos, mode)
                     } catch (_: Exception) {
-                        RouteService.EmptyRoute()
+                        null
                     }
+
+                    if (result == null || result is RouteService.EmptyRoute) {
+                        result = try {
+                            RouteService.computeRoute(routeFeature, pos, mode)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+
                     // Emit the new pair
-                    emit(mapOf(mode to result))
+                    emit(mapOf(mode to (result ?: RouteService.EmptyRoute())))
                 }
             }
                 .scan(RouteService.TravelMode.entries.associateWith { null as RouteService.RouteType? }) { accumulator, newEntry ->

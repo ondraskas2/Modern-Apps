@@ -104,6 +104,11 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
 
     // --- ZONE DOWNLOAD STATE ---
     val camera = rememberCameraState(CameraPosition(target = Position(-118.243683,34.052235), zoom = 5.0))
+    val downloadedZones by zoneManager.getDownloadedZonesFlow().collectAsState(emptyList())
+
+    LaunchedEffect(downloadedZones) {
+        downloadedZones.forEach { OfflineRouter.ensureZoneLoaded(it) }
+    }
 
     val activeZone = remember(camera.position) {
         calculateZoneId(

@@ -25,8 +25,8 @@ public:
 
 private:
     static constexpr uint32_t PAGE_BITS = 14;
-    static constexpr uint32_t PAGE_SIZE = (1 << PAGE_BITS);
-    static constexpr uint32_t PAGE_MASK = (PAGE_SIZE - 1);
+    static constexpr uint32_t ROUTING_PAGE_SIZE = (1 << PAGE_BITS);
+    static constexpr uint32_t ROUTING_PAGE_MASK = (ROUTING_PAGE_SIZE - 1);
     static constexpr uint32_t DIR_SIZE = (1ULL << 32) >> PAGE_BITS;
 
     Entry** m_directory;
@@ -59,11 +59,11 @@ public:
 
     inline Entry& get_entry(uint32_t node_id) {
         uint32_t dir_idx = node_id >> PAGE_BITS;
-        uint32_t page_offset = node_id & PAGE_MASK;
+        uint32_t page_offset = node_id & ROUTING_PAGE_MASK;
 
         if (__builtin_expect(m_directory[dir_idx] == nullptr, 0)) {
-            Entry* new_page = (Entry*)malloc(PAGE_SIZE * sizeof(Entry));
-            memset(new_page, 0xFF, PAGE_SIZE * sizeof(Entry));
+            Entry* new_page = (Entry*)malloc(ROUTING_PAGE_SIZE * sizeof(Entry));
+            memset(new_page, 0xFF, ROUTING_PAGE_SIZE * sizeof(Entry));
             m_directory[dir_idx] = new_page;
             m_active_pages.push_back(dir_idx);
         }
@@ -86,8 +86,8 @@ public:
 class TrafficPageTable {
 private:
     static constexpr uint32_t PAGE_BITS = 14;
-    static constexpr uint32_t PAGE_SIZE = (1 << PAGE_BITS);
-    static constexpr uint32_t PAGE_MASK = (PAGE_SIZE - 1);
+    static constexpr uint32_t TRAFFIC_PAGE_SIZE = (1 << PAGE_BITS);
+    static constexpr uint32_t TRAFFIC_PAGE_MASK = (TRAFFIC_PAGE_SIZE - 1);
     static constexpr uint32_t DIR_SIZE = (1ULL << 32) >> PAGE_BITS; // Support full 32-bit ID space
 
     uint8_t** m_directory;
@@ -105,11 +105,11 @@ public:
 
     inline void set_speed(uint32_t local_edge_id, uint8_t speed_kph) {
         uint32_t dir_idx = local_edge_id >> PAGE_BITS;
-        uint32_t page_offset = local_edge_id & PAGE_MASK;
+        uint32_t page_offset = local_edge_id & TRAFFIC_PAGE_MASK;
 
         if (__builtin_expect(m_directory[dir_idx] == nullptr, 0)) {
-            uint8_t* new_page = (uint8_t*)malloc(PAGE_SIZE * sizeof(uint8_t));
-            memset(new_page, 0, PAGE_SIZE * sizeof(uint8_t));
+            uint8_t* new_page = (uint8_t*)malloc(TRAFFIC_PAGE_SIZE * sizeof(uint8_t));
+            memset(new_page, 0, TRAFFIC_PAGE_SIZE * sizeof(uint8_t));
             m_directory[dir_idx] = new_page;
             m_active_pages.push_back(dir_idx);
         }
@@ -118,7 +118,7 @@ public:
 
     inline uint8_t get_speed(uint32_t local_edge_id) const {
         uint32_t dir_idx = local_edge_id >> PAGE_BITS;
-        uint32_t page_offset = local_edge_id & PAGE_MASK;
+        uint32_t page_offset = local_edge_id & TRAFFIC_PAGE_MASK;
         if (m_directory[dir_idx] == nullptr) return 0;
         return m_directory[dir_idx][page_offset];
     }
