@@ -230,7 +230,7 @@ fun LogMealDialog(initialTime: Instant? = null, onDismiss: () -> Unit) {
                     OutlinedTextField(
                             value = quantityStr,
                             onValueChange = { quantityStr = it },
-                            label = { Text("Quantity (Servings / 100g)") },
+                            label = { Text("Servings") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.fillMaxWidth()
                     )
@@ -317,8 +317,8 @@ fun LogMealDialog(initialTime: Instant? = null, onDismiss: () -> Unit) {
                                                     )
                                                 }
                                                 is Loggable.IngredientWrapper -> {
-                                                    // For single ingredients marked as recipe,
-                                                    // quantity is treated as 100g servings
+                                                    // For single ingredients marked as recipes,
+                                                    // 1 serving is treated as 100g
                                                     val ing = loggable.ingredient
                                                     NutritionData(
                                                             protein =
