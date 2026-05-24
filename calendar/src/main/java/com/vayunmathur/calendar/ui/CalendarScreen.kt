@@ -635,7 +635,7 @@ fun AgendaView(
                     ListItem(
                         headlineContent = { Text(ev.title.ifEmpty { context.getString(R.string.no_title) }) },
                         supportingContent = {
-                            Text(dateRangeString(context, instance.startDateTimeDisplay.date, instance.endDateTimeDisplay.date, instance.startDateTimeDisplay.time, instance.endDateTimeDisplay.time, instance.allDay))
+                            Text(dateRangeString(context, instance.startDateTimeDisplay.date, instance.endDateTimeDisplay.date, instance.startDateTimeDisplay.time, instance.endDateTimeDisplay.time, instance.allDay, includeDate = false))
                         },
                         leadingContent = {
                             Box(Modifier.size(16.dp).background(Color(ev.color ?: calendars[ev.calendarID]!!.color), CircleShape))
