@@ -191,7 +191,8 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                                     nickname,
                                     CDKNickname.TYPE_DEFAULT
                                 )
-                            )
+                            ),
+                            groups = details?.groups ?: emptyList()
                         )
                         val newContact = contact?.copy(details = details) ?: Contact(
                             0,

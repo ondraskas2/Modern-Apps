@@ -75,6 +75,7 @@ import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.CommonSearchBar
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
@@ -156,6 +157,11 @@ fun ContactList(
                     },
                     actions = {
                         IconButton(onClick = {
+                            backStack.add(Route.AddToGroupDialog(selectedIds.toList()))
+                        }) {
+                            Icon(painterResource(R.drawable.baseline_group_24), contentDescription = stringResource(R.string.add_to_group))
+                        }
+                        IconButton(onClick = {
                             val toExport = contacts.filter { it.id in selectedIds }
                             scope.launch(Dispatchers.IO) {
                                 val vcfFile = context.cacheDir.toOkioPath().resolve("selected_contacts.vcf")
@@ -206,9 +212,6 @@ fun ContactList(
                         }) {
                             IconShare()
                         }
-                        IconButton(onClick = { backStack.add(Route.Settings) }) {
-                            IconSettings()
-                        }
                     }
                 )
             }
@@ -218,6 +221,11 @@ fun ContactList(
                 FloatingActionButton(onClick = { onAddContactClick() }) {
                     IconAdd()
                 }
+            }
+        },
+        bottomBar = {
+            if (!isSelectionMode) {
+                ContactsBottomNavBar(backStack)
             }
         }
     ) { paddingValues ->
@@ -234,6 +242,7 @@ fun ContactList(
                         contact = contact,
                         isSelected = if (isSelectionMode) contact.id in selectedIds else selectedID == contact.id,
                         showAccountLabels = showAccountLabels,
+                        viewModel = viewModel,
                         onClick = {
                             if (isSelectionMode) {
                                 if (contact.id in selectedIds) {
@@ -261,6 +270,7 @@ fun ContactList(
                         contact = contact,
                         isSelected = if (isSelectionMode) contact.id in selectedIds else selectedID == contact.id,
                         showAccountLabels = showAccountLabels,
+                        viewModel = viewModel,
                         onClick = {
                             if (isSelectionMode) {
                                 if (contact.id in selectedIds) {
@@ -322,11 +332,16 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
 @Composable
 fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit) {
     if(mimeType == null || mimeType == ContactsContract.Contacts.CONTENT_ITEM_TYPE || mimeType == ContactsContract.Contacts.CONTENT_TYPE) {
-        ContactItem(contact, false, true, {
-            onClick(Uri.withAppendedPath(
-                ContactsContract.RawContacts.CONTENT_URI,
-                contact.id.toString()))
-        })
+        ContactItem(
+            contact = contact,
+            isSelected = false,
+            showAccountLabels = true,
+            onClick = {
+                onClick(Uri.withAppendedPath(
+                    ContactsContract.RawContacts.CONTENT_URI,
+                    contact.id.toString()))
+            }
+        )
     } else {
         val details = contact.details
         val relevantList = when(mimeType) {
@@ -341,12 +356,19 @@ fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit)
             CDKStructuredPostal.CONTENT_ITEM_TYPE -> CDKStructuredPostal.CONTENT_URI
             else -> throw IllegalArgumentException("Unsupported MIME type: $mimeType")
         }
-        ContactItem(contact, false, true, {  }, dropdownList = relevantList.map { it.value }, dropdownListClick = { index ->
-            onClick(Uri.withAppendedPath(
-                baseURI,
-                relevantList[index].id.toString()
-            ))
-        })
+        ContactItem(
+            contact = contact,
+            isSelected = false,
+            showAccountLabels = true,
+            onClick = {  },
+            dropdownList = relevantList.map { it.value },
+            dropdownListClick = { index ->
+                onClick(Uri.withAppendedPath(
+                    baseURI,
+                    relevantList[index].id.toString()
+                ))
+            }
+        )
     }
 }
 
@@ -419,18 +441,20 @@ fun ContactItem(
     contact: Contact,
     isSelected: Boolean,
     showAccountLabels: Boolean,
+    viewModel: ContactViewModel? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     dropdownList: List<String>? = null,
-    dropdownListClick: (Int) -> Unit = {}
+    dropdownListClick: (Int) -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
-    val modifier = if (dropdownList == null) {
-        Modifier.combinedClickable(
+    val combinedModifier = if (dropdownList == null) {
+        modifier.combinedClickable(
             onClick = onClick,
             onLongClick = onLongClick
         )
     } else {
-        Modifier
+        modifier
     }
 
     val photoBase64 = contact.photo?.photo
@@ -443,97 +467,128 @@ fun ContactItem(
         }
     }
 
-    Column {
+    val allGroups by (viewModel?.groups ?: flowOf(emptyList())).collectAsState(initial = emptyList())
+    val contactGroups = allGroups.filter { group ->
+        contact.details.groups.any { it.groupId == group.id } && group.name.trim().isNotEmpty()
+    }
+
+    val trimmedOrg = contact.org.company.trim()
+    val showOrg = trimmedOrg.isNotEmpty()
+    val showGroups = contactGroups.size > 0
+
+    val content = @Composable {
         val hasDropdown = !dropdownList.isNullOrEmpty()
-        ListItem(
-            modifier = modifier
-                .clip(RoundedCornerShape(16.dp, 16.dp, if(hasDropdown) 0.dp else 16.dp, if(hasDropdown) 0.dp else 16.dp)),
-            headlineContent = {
-                val nameString = if(contact.nickname.value.isNotBlank()) stringResource(R.string.name_nickname_format, contact.name.value, contact.nickname.value) else contact.name.value
-                Text(
-                    text = nameString,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            leadingContent = {
-                Box(
-                    modifier = Modifier.size(50.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    avatarBitmap?.let { bitmap ->
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = stringResource(R.string.contact_photo_description, contact.name.value),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(CircleShape)
-                        )
-                    }
-                    if (contact.photo == null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    color = getAvatarColor(contact.id),
-                                    shape = CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = contact.name.value.firstOrNull()?.uppercase()?: "",
-                                color = Color.White,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Bold
+
+        key(showOrg, showGroups, contactGroups.size) {
+            ListItem(
+                modifier = combinedModifier
+                    .clip(RoundedCornerShape(16.dp, 16.dp, if(hasDropdown) 0.dp else 16.dp, if(hasDropdown) 0.dp else 16.dp)),
+                headlineContent = {
+                    val nameString = if(contact.nickname.value.isNotBlank()) stringResource(R.string.name_nickname_format, contact.name.value, contact.nickname.value) else contact.name.value
+                    Text(
+                        text = nameString,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                leadingContent = {
+                    Box(
+                        modifier = Modifier.size(50.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        avatarBitmap?.let { bitmap ->
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = stringResource(R.string.contact_photo_description, contact.name.value),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape)
                             )
                         }
+                        if (contact.photo == null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        color = getAvatarColor(contact.id),
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = contact.name.value.firstOrNull()?.uppercase()?: "",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
-                }
-            },
+                },
 
-            supportingContent = {
-                if(contact.org.company.isNotEmpty()) {
-                    Text(contact.org.company)
-                }
-            },
+                supportingContent = if (showOrg || showGroups) {
+                    {
+                        Column {
+                            if (showOrg) {
+                                Text(trimmedOrg)
+                            }
+                            if (showGroups) {
+                                Text(
+                                    text = contactGroups.joinToString(", ") { it.name },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                } else null,
 
-            trailingContent = if (showAccountLabels) {
-                {
-                    val onDevice = stringResource(R.string.on_device)
-                    Text(
-                        text = contact.accountName ?: onDevice,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 120.dp)
-                    )
-                }
-            } else null,
+                trailingContent = if (showAccountLabels) {
+                    {
+                        val onDevice = stringResource(R.string.on_device)
+                        Text(
+                            text = contact.accountName ?: onDevice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 120.dp)
+                        )
+                    }
+                } else null,
 
-            colors = ListItemDefaults.colors(
-                containerColor = if (isSelected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                }
+                colors = ListItemDefaults.colors(
+                    containerColor = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                )
             )
-        )
-        dropdownList?.forEachIndexed { idx, it ->
-            Spacer(Modifier.height(4.dp))
-            ListItem({
-                Text(text = it)
-            }, Modifier.clickable {
-                dropdownListClick(idx)
-            }.clip(RoundedCornerShape(0.dp, 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp)), colors = ListItemDefaults.colors(
-                containerColor = if (isSelected) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainer
-                }
-            ))
         }
+    }
+
+    if (dropdownList != null) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            content()
+            dropdownList.forEachIndexed { idx, it ->
+                Spacer(Modifier.height(4.dp))
+                ListItem({
+                    Text(text = it)
+                }, Modifier.clickable {
+                    dropdownListClick(idx)
+                }.clip(RoundedCornerShape(0.dp, 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp)), colors = ListItemDefaults.colors(
+                    containerColor = if (isSelected) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainer
+                    }
+                ))
+            }
+        }
+    } else {
+        content()
     }
 }

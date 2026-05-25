@@ -27,9 +27,11 @@ import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.*
 import kotlinx.datetime.LocalDate
 import kotlinx.serialization.Serializable
+import androidx.compose.ui.res.painterResource
 
 class MainActivity : ComponentActivity() {
     private val importUris = mutableStateOf<List<Uri>>(emptyList())
+    private val externalRoute = mutableStateOf<Route?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,35 +67,9 @@ class MainActivity : ComponentActivity() {
                             finish()
                         }
                     } else {
-                        val initialRoute = when (intent.action) {
-                            Intent.ACTION_INSERT -> {
-                                Route.EditContact(
-                                    contactId = null,
-                                    name = intent.getStringExtra(ContactsContract.Intents.Insert.NAME),
-                                    phone = intent.getStringExtra(ContactsContract.Intents.Insert.PHONE),
-                                    email = intent.getStringExtra(ContactsContract.Intents.Insert.EMAIL),
-                                    company = intent.getStringExtra(ContactsContract.Intents.Insert.COMPANY),
-                                    jobTitle = intent.getStringExtra(ContactsContract.Intents.Insert.JOB_TITLE),
-                                    notes = intent.getStringExtra(ContactsContract.Intents.Insert.NOTES)
-                                )
-                            }
-                            Intent.ACTION_EDIT -> {
-                                val contactId = intent.data?.lastPathSegment?.toLongOrNull()
-                                Route.EditContact(
-                                    contactId = contactId,
-                                    name = intent.getStringExtra(ContactsContract.Intents.Insert.NAME),
-                                    phone = intent.getStringExtra(ContactsContract.Intents.Insert.PHONE),
-                                    email = intent.getStringExtra(ContactsContract.Intents.Insert.EMAIL)
-                                )
-                            }
-                            Intent.ACTION_VIEW -> {
-                                val contactId = intent.data?.lastPathSegment?.toLongOrNull()
-                                contactId?.let { Route.ContactDetail(it) }
-                            }
-                            else -> null
-                        }
+                        val route by externalRoute
                         Box(Modifier.fillMaxSize().onFileDrop { importUris.value = it }) {
-                            Navigation(viewModel, initialRoute)
+                            Navigation(viewModel, route)
                         }
                     }
                 }
@@ -108,9 +84,53 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent?.let {
-            val uris = IntentHelper.getUrisFromIntent(it)
-            if (uris.isNotEmpty()) {
-                importUris.value = uris
+            val type = it.type ?: ""
+            val isVcf = type.contains("vcard") || type.contains("vcf") || it.data?.path?.endsWith(".vcf", ignoreCase = true) == true
+            
+            if (isVcf) {
+                val uris = IntentHelper.getUrisFromIntent(it)
+                if (uris.isNotEmpty()) {
+                    importUris.value = uris
+                }
+            }
+
+            if (it.action == Intent.ACTION_VIEW || it.action == Intent.ACTION_EDIT || it.action == Intent.ACTION_INSERT) {
+                externalRoute.value = when (it.action) {
+                    Intent.ACTION_INSERT -> {
+                        Route.EditContact(
+                            contactId = null,
+                            name = it.getStringExtra(ContactsContract.Intents.Insert.NAME),
+                            phone = it.getStringExtra(ContactsContract.Intents.Insert.PHONE),
+                            email = it.getStringExtra(ContactsContract.Intents.Insert.EMAIL),
+                            company = it.getStringExtra(ContactsContract.Intents.Insert.COMPANY),
+                            jobTitle = it.getStringExtra(ContactsContract.Intents.Insert.JOB_TITLE),
+                            notes = it.getStringExtra(ContactsContract.Intents.Insert.NOTES)
+                        )
+                    }
+                    Intent.ACTION_EDIT -> {
+                        val contactId = it.data?.lastPathSegment?.toLongOrNull()
+                        Route.EditContact(
+                            contactId = contactId,
+                            name = it.getStringExtra(ContactsContract.Intents.Insert.NAME),
+                            phone = it.getStringExtra(ContactsContract.Intents.Insert.PHONE),
+                            email = it.getStringExtra(ContactsContract.Intents.Insert.EMAIL)
+                        )
+                    }
+                    Intent.ACTION_VIEW -> {
+                        val lastSegment = it.data?.lastPathSegment
+                        val path = it.data?.path ?: ""
+                        val type = it.type
+                        when {
+                            path.contains("/groups") || type?.contains("group") == true -> {
+                                lastSegment?.toLongOrNull()?.let { Route.GroupsList(it) }
+                            }
+                            else -> {
+                                lastSegment?.toLongOrNull()?.let { Route.ContactDetail(it) }
+                            }
+                        }
+                    }
+                    else -> null
+                }
             }
         }
     }
@@ -145,6 +165,13 @@ fun NoPermissionsScreen(permissions: Array<String>, setHasPermissions: (Boolean)
 @Composable
 fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
     val backStack = rememberNavBackStack<Route>(listOfNotNull(Route.ContactsList, initialRoute).distinct())
+
+    LaunchedEffect(initialRoute) {
+        if (initialRoute != null && backStack.last() != initialRoute) {
+            backStack.add(initialRoute)
+        }
+    }
+
     val isCalendarSyncEnabled by viewModel.isCalendarSyncEnabled.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -164,20 +191,29 @@ fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
                 viewModel = viewModel,
                 backStack = backStack,
                 onContactClick = { contact ->
-                    if(backStack.last() is Route.ContactDetail || backStack.last() is Route.EditContact) {
+                    if (backStack.last() is Route.ContactDetail || backStack.last() is Route.EditContact) {
                         backStack.setLast(Route.ContactDetail(contact.id))
                     } else {
                         backStack.add(Route.ContactDetail(contact.id))
                     }
                 },
                 onAddContactClick = {
-                    if(backStack.last() is Route.ContactDetail) {
+                    if (backStack.last() is Route.ContactDetail) {
                         backStack.pop()
                     }
                     backStack.add(Route.EditContact(null))
                 }
             )
         }
+
+        entry<Route.GroupsList>(metadata = ListPage {
+            Column(Modifier.fillMaxSize(), Arrangement.Center, Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.select_group_hint))
+            }
+        }) { key ->
+            GroupsPage(viewModel, backStack, key.expandGroupId)
+        }
+
         entry<Route.ContactDetail>(metadata = ListDetailPage()) { key ->
             ContactDetailsPage(
                 viewModel = viewModel,
@@ -218,12 +254,22 @@ fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
                 backStack.pop()
             })
         }
+
+        entry<Route.AddToGroupDialog>(metadata = DialogPage()) { key ->
+            AddToGroupDialog(viewModel, key.contactIds) { backStack.pop() }
+        }
     }
 }
 
 sealed interface Route: NavKey {
     @Serializable
     object ContactsList : Route
+
+    @Serializable
+    data class GroupsList(val expandGroupId: Long? = null) : Route
+
+    @Serializable
+    data class AddToGroupDialog(val contactIds: List<Long>) : Route
 
     @Serializable
     data class ContactDetail(val contactId: Long) : Route

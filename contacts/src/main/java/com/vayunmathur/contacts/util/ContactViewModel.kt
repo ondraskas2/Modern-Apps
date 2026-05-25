@@ -1,5 +1,7 @@
 package com.vayunmathur.contacts.util
 import android.app.Application
+import android.content.ContentProviderOperation
+import android.content.ContentUris
 import android.provider.ContactsContract
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -7,14 +9,18 @@ import androidx.lifecycle.viewModelScope
 import com.vayunmathur.contacts.data.Contact
 import com.vayunmathur.contacts.data.ContactDatabase
 import com.vayunmathur.contacts.data.ContactEntity
+import com.vayunmathur.contacts.data.ContactGroup
 import com.vayunmathur.contacts.data.ContactSearchEntity
 import com.vayunmathur.library.util.DataStoreUtils
+import com.vayunmathur.library.util.ManyManyMatching
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -50,6 +56,45 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     ) { entities, hidden ->
         entities.map { it.toContact() }.filter { it.accountName !in hidden }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val groups: StateFlow<List<ContactGroup>> = callbackFlow {
+        val resolver = getApplication<Application>().contentResolver
+        val observer = object : android.database.ContentObserver(null) {
+            override fun onChange(selfChange: Boolean) {
+                launch { send(fetchGroups()) }
+            }
+        }
+        resolver.registerContentObserver(ContactsContract.Groups.CONTENT_URI, true, observer)
+        send(fetchGroups())
+        awaitClose { resolver.unregisterContentObserver(observer) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private fun fetchGroups(): List<ContactGroup> {
+        val resolver = getApplication<Application>().contentResolver
+        val uri = ContactsContract.Groups.CONTENT_URI
+        val projection = arrayOf(ContactsContract.Groups._ID, ContactsContract.Groups.TITLE)
+        val list = mutableListOf<ContactGroup>()
+        resolver.query(uri, projection, "${ContactsContract.Groups.GROUP_VISIBLE} = 1 AND ${ContactsContract.Groups.DELETED} = 0", null, null)?.use { cursor ->
+            val idIdx = cursor.getColumnIndexOrThrow(ContactsContract.Groups._ID)
+            val titleIdx = cursor.getColumnIndexOrThrow(ContactsContract.Groups.TITLE)
+            while (cursor.moveToNext()) {
+                list.add(ContactGroup(cursor.getLong(idIdx), cursor.getString(titleIdx) ?: "Unnamed"))
+            }
+        }
+        return list.sortedBy { it.name }
+    }
+
+    val allMatches: StateFlow<List<ManyManyMatching>> = contacts.map { contactList ->
+        contactList.flatMap { contact ->
+            contact.details.groups.map { membership ->
+                ManyManyMatching(leftID = contact.id, rightID = membership.groupId, type = GROUP_MATCH_TYPE)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    companion object {
+        const val GROUP_MATCH_TYPE = 101 // arbitrary type for contact-group matching
+    }
 
     private val _accounts = MutableStateFlow<List<ContactAccount>>(emptyList())
     val accounts: StateFlow<List<ContactAccount>> = _accounts.asStateFlow()
@@ -197,6 +242,94 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
                 CalendarSyncHelper.syncContact(getApplication(), contact.copy(details = contact.details.copy(dates = emptyList())))
             }
             contactDao.deleteContact(contact.id)
+        }
+    }
+
+    // Groups Management
+    fun addGroup(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val values = android.content.ContentValues().apply {
+                put(ContactsContract.Groups.TITLE, name)
+                put(ContactsContract.Groups.GROUP_VISIBLE, 1)
+                // Optionally add account info if needed
+            }
+            resolver.insert(ContactsContract.Groups.CONTENT_URI, values)
+        }
+    }
+
+    fun deleteGroup(groupId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            resolver.delete(ContentUris.withAppendedId(ContactsContract.Groups.CONTENT_URI, groupId), null, null)
+        }
+    }
+
+    fun addContactToGroup(contactId: Long, groupId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val values = android.content.ContentValues().apply {
+                put(ContactsContract.Data.RAW_CONTACT_ID, contactId)
+                put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE)
+                put(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupId)
+            }
+            resolver.insert(ContactsContract.Data.CONTENT_URI, values)
+            syncWithSystemContacts()
+        }
+    }
+
+    fun removeContactFromGroup(contactId: Long, groupId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val where = "${ContactsContract.Data.RAW_CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID} = ?"
+            val args = arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE, groupId.toString())
+            resolver.delete(ContactsContract.Data.CONTENT_URI, where, args)
+            syncWithSystemContacts()
+        }
+    }
+
+    fun addContactsToGroup(contactIds: List<Long>, groupId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val ops = ArrayList<ContentProviderOperation>()
+            contactIds.forEach { contactId ->
+                ops.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                    .withValue(ContactsContract.Data.RAW_CONTACT_ID, contactId)
+                    .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE)
+                    .withValue(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupId)
+                    .build())
+            }
+            resolver.applyBatch(ContactsContract.AUTHORITY, ops)
+            syncWithSystemContacts()
+        }
+    }
+
+    fun removeContactsFromGroup(contactIds: List<Long>, groupId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolver = getApplication<Application>().contentResolver
+            val ops = ArrayList<ContentProviderOperation>()
+            contactIds.forEach { contactId ->
+                ops.add(ContentProviderOperation.newDelete(ContactsContract.Data.CONTENT_URI)
+                    .withSelection("${ContactsContract.Data.RAW_CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID} = ?", 
+                        arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE, groupId.toString()))
+                    .build())
+            }
+            resolver.applyBatch(ContactsContract.AUTHORITY, ops)
+            syncWithSystemContacts()
+        }
+    }
+
+    fun getGroupsForContact(contactId: Long): Flow<List<ContactGroup>> {
+        return combine(groups, allMatches) { groups, matches ->
+            val groupIds = matches.filter { it.leftID == contactId && it.type == GROUP_MATCH_TYPE }.map { it.rightID }
+            groups.filter { it.id in groupIds }
+        }
+    }
+
+    fun getContactsForGroup(groupId: Long): Flow<List<Contact>> {
+        return combine(contacts, allMatches) { contacts, matches ->
+            val contactIds = matches.filter { it.rightID == groupId && it.type == GROUP_MATCH_TYPE }.map { it.leftID }
+            contacts.filter { it.id in contactIds }
         }
     }
 

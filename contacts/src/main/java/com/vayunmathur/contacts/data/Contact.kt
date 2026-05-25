@@ -49,15 +49,16 @@ data class ContactDetails(
     val names: List<Name>,
     val orgs: List<Organization>,
     val notes: List<Note>,
-    val nicknames: List<Nickname>
+    val nicknames: List<Nickname>,
+    val groups: List<GroupMembership>
 ) {
     fun all(): List<ContactDetail<*>> {
-        return phoneNumbers + emails + addresses + dates + photos + names + orgs + notes + nicknames
+        return phoneNumbers + emails + addresses + dates + photos + names + orgs + notes + nicknames + groups
     }
 
     companion object {
         fun empty(): ContactDetails {
-            return ContactDetails(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+            return ContactDetails(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
         }
     }
 }
@@ -71,6 +72,7 @@ typealias CDKSName = ContactsContract.CommonDataKinds.StructuredName
 typealias CDKOrg = ContactsContract.CommonDataKinds.Organization
 typealias CDKNote = ContactsContract.CommonDataKinds.Note
 typealias CDKNickname = ContactsContract.CommonDataKinds.Nickname
+typealias CDKGroupMembership = ContactsContract.CommonDataKinds.GroupMembership
 
 interface ContactDetail<T: ContactDetail<T>> {
     val id: Long
@@ -205,6 +207,18 @@ data class Nickname(override val id: Long, val nickname: String, override val ty
 }
 
 @Serializable
+data class GroupMembership(override val id: Long, val groupId: Long): ContactDetail<GroupMembership> {
+    override val type: Int = 0
+    override val value: String
+        get() = groupId.toString()
+
+    override fun withType(type: Int) = throw UnsupportedOperationException("Cannot change type of group membership")
+    override fun withValue(value: String) = copy(groupId = value.toLong())
+
+    override fun typeString(context: Context) = throw UnsupportedOperationException("Group membership doesn't have type")
+}
+
+@Serializable
 data class Contact(
     val id: Long,
     val accountType: String?,
@@ -314,6 +328,7 @@ data class Contact(
                 is Organization -> CDKOrg.CONTENT_ITEM_TYPE
                 is Note -> CDKNote.CONTENT_ITEM_TYPE
                 is Nickname -> CDKNickname.CONTENT_ITEM_TYPE
+                is GroupMembership -> CDKGroupMembership.CONTENT_ITEM_TYPE
                 else -> throw IllegalArgumentException("Unknown detail type")
             })
         }
@@ -354,6 +369,9 @@ data class Contact(
             is Nickname -> this
                 .withValue(CDKNickname.NAME, detail.nickname)
                 .withValue(CDKNickname.TYPE, detail.type)
+                .build()
+            is GroupMembership -> this
+                .withValue(CDKGroupMembership.GROUP_ROW_ID, detail.groupId)
                 .build()
 
             else -> throw IllegalArgumentException("Unknown detail type")
@@ -497,6 +515,7 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
     val orgsMap = mutableMapOf<Long, MutableList<Organization>>()
     val notesMap = mutableMapOf<Long, MutableList<Note>>()
     val nicknamesMap = mutableMapOf<Long, MutableList<Nickname>>()
+    val groupsMap = mutableMapOf<Long, MutableList<GroupMembership>>()
 
     val rawContactIds = mutableSetOf<Long>()
 
@@ -598,6 +617,10 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
                             val type = cursor.getInt(d2Idx)
                             nicknamesMap.getOrPut(rawId) { mutableListOf() }.add(Nickname(dataId, nickname, type))
                         }
+                        CDKGroupMembership.CONTENT_ITEM_TYPE -> {
+                            val groupId = cursor.getLong(d1Idx)
+                            groupsMap.getOrPut(rawId) { mutableListOf() }.add(GroupMembership(dataId, groupId))
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e("Contact", "Error constructing contact detail from cursor", e)
@@ -618,7 +641,8 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
             namesMap[rawId]?.distinct() ?: emptyList(),
             orgsMap[rawId]?.distinct() ?: emptyList(),
             notesMap[rawId]?.distinct() ?: emptyList(),
-            nicknamesMap[rawId]?.distinct() ?: emptyList()
+            nicknamesMap[rawId]?.distinct() ?: emptyList(),
+            groupsMap[rawId]?.distinct() ?: emptyList()
         )
     }
 }

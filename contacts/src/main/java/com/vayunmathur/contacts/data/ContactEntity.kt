@@ -5,17 +5,18 @@ import androidx.room.Entity
 import androidx.room.Fts4
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
+import com.vayunmathur.library.util.DatabaseItem
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Entity(tableName = "contacts")
 data class ContactEntity(
-    @PrimaryKey val id: Long, // Maps to ContactsContract.RawContacts._ID
+    @PrimaryKey override val id: Long, // Maps to ContactsContract.RawContacts._ID
     val accountType: String?,
     val accountName: String?,
     val isFavorite: Boolean,
     val detailsJson: String // Serialized ContactDetails
-) {
+) : DatabaseItem {
     fun toContact(): Contact {
         return Contact(
             id = id,

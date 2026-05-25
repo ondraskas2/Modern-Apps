@@ -303,6 +303,10 @@ interface MatchingDao {
     suspend fun getFromLeft(leftID: Long, type: Int): List<Long>
     @Query("SELECT leftID FROM ManyManyMatching WHERE rightID = :rightID AND type = :type")
     suspend fun getFromRight(rightID: Long, type: Int): List<Long>
+    @Query("DELETE FROM ManyManyMatching WHERE leftID = :leftID AND type = :type")
+    suspend fun deleteFromLeft(leftID: Long, type: Int)
+    @Query("DELETE FROM ManyManyMatching WHERE rightID = :rightID AND type = :type")
+    suspend fun deleteFromRight(rightID: Long, type: Int)
     @Query("DELETE FROM ManyManyMatching WHERE leftID = :left AND rightID = :right AND type = :type")
     suspend fun deleteMatch(left: Long, right: Long, type: Int)
     @Query("DELETE FROM ManyManyMatching WHERE type = :type")

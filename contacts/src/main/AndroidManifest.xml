@@ -79,6 +79,31 @@
                 <data android:pathPrefix="/people" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <data android:mimeType="vnd.android.cursor.item/contact" />
+                <data android:mimeType="vnd.android.cursor.item/person" />
+                <data android:mimeType="vnd.android.cursor.dir/contact" />
+                <data android:mimeType="vnd.android.cursor.dir/person" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:host="com.android.contacts" />
+                <data android:pathPrefix="/groups" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.item/group" />
+                <data android:mimeType="vnd.android.cursor.dir/group" />
+            </intent-filter>
         </activity>
 
         <activity

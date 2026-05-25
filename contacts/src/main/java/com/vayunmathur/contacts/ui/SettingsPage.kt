@@ -79,6 +79,9 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
             FloatingActionButton(onClick = { backStack.add(Route.AddAccountDialog) }) {
                 IconAdd()
             }
+        },
+        bottomBar = {
+            ContactsBottomNavBar(backStack)
         }
     ) { paddingValues ->
         LazyColumn(

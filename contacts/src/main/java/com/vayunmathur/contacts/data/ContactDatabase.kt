@@ -59,7 +59,7 @@ interface ContactDao {
     fun search(query: String): Flow<List<ContactEntity>>
 }
 
-@Database(entities = [ContactEntity::class, ContactSearchEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ContactEntity::class, ContactSearchEntity::class], version = 3, exportSchema = false)
 abstract class ContactDatabase : RoomDatabase() {
     abstract fun contactDao(): ContactDao
 
@@ -73,7 +73,8 @@ abstract class ContactDatabase : RoomDatabase() {
                     context.applicationContext,
                     ContactDatabase::class.java,
                     "contacts_database"
-                ).build()
+                ).fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }

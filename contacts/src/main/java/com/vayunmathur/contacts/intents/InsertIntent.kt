@@ -23,7 +23,8 @@ class InsertIntent: AssistantIntent<ContactData, Unit>(serializer<ContactData>()
             names = listOf(Name(0, "", input.name, "", "", "")),
             orgs = emptyList(),
             notes = emptyList(),
-            nicknames = emptyList()
+            nicknames = emptyList(),
+            groups = emptyList()
         ))
         contact.save(this, contact.details, ContactDetails.empty())
     }

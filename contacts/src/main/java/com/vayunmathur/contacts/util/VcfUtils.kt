@@ -133,7 +133,8 @@ object VcfUtils {
                         names = builder.names.toList(),
                         orgs = builder.orgs.toList(),
                         notes = builder.notes.toList(),
-                        nicknames = builder.nicknames.toList()
+                        nicknames = builder.nicknames.toList(),
+                        groups = emptyList()
                     )
                     val newContact = Contact(
                         id = 0L,
