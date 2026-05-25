@@ -20,6 +20,5 @@ dependencies {
     // room
     implementRoom(libs)
 
-    // ktor
     implementation(project(":library:network"))
 }

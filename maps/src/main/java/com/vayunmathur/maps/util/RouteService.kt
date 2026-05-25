@@ -114,7 +114,7 @@ object RouteService {
             MANEUVER_UNSPECIFIED, TURN_SLIGHT_LEFT, TURN_SHARP_LEFT, UTURN_LEFT, TURN_LEFT,
             TURN_SLIGHT_RIGHT, TURN_SHARP_RIGHT, UTURN_RIGHT, TURN_RIGHT, STRAIGHT,
             RAMP_LEFT, RAMP_RIGHT, MERGE, FORK_LEFT, FORK_RIGHT, FERRY, FERRY_TRAIN,
-            ROUNDABOUT_LEFT, ROUNDABOUT_RIGHT, DEPART, NAME_CHANGE, WAIT;
+            ROUNDABOUT_LEFT, ROUNDABOUT_RIGHT, DEPART, NAME_CHANGE, WAIT, RIDE;
 
             fun icon(): Int? {
                 return when(this) {
@@ -139,6 +139,7 @@ object RouteService {
                     DEPART -> R.drawable.direction_depart
                     NAME_CHANGE -> R.drawable.direction_new_name_straight
                     WAIT -> R.drawable.outline_nest_clock_farsight_analog_24
+                    RIDE -> R.drawable.outline_menu_book_24 // Placeholder for ride icon
                     MANEUVER_UNSPECIFIED -> null
                 }
             }

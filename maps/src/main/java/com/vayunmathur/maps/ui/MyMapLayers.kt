@@ -243,9 +243,9 @@ fun MyMapLayers(
                                                 } else if (it.travelMode == RouteService.TravelMode.TRANSIT) {
                                                     val feed = it.transitDetails?.feedName
                                                     if (feed != null) {
-                                                        com.vayunmathur.maps.util.GTFSProvider.getRouteColor(context, feed, it.transitDetails.transitLine.name) ?: "#1710F1"
+                                                        com.vayunmathur.maps.util.GTFSProvider.getRouteColor(context, feed, it.transitDetails.transitLine.name) ?: "#FF0000"
                                                     } else {
-                                                        "#1710F1"
+                                                        "#FF0000"
                                                     }
                                                 } else "#1710F1"
 

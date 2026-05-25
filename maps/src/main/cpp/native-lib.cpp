@@ -647,7 +647,11 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
         };
 
         int maneuver = steps.empty() ? 0 : get_maneuver(last_bearing, bearing);
-        if (steps.empty() || name_off != steps.back().name_off || get_ratio_cat(ratio) != get_ratio_cat(steps.back().speed_ratio) || is_transit != steps.back().is_transit || (maneuver != 9 && maneuver != 0) || steps.back().maneuver == 21) {
+        if (is_transit && !steps.empty() && steps.back().maneuver != 21) {
+            maneuver = 23; // RIDE
+        }
+
+        if (steps.empty() || name_off != steps.back().name_off || get_ratio_cat(ratio) != get_ratio_cat(steps.back().speed_ratio) || is_transit != steps.back().is_transit || (maneuver != 9 && maneuver != 0 && maneuver != 23) || steps.back().maneuver == 21) {
             steps.push_back({name_off, 0, 0, {lon1, lat1}, maneuver, ratio, is_transit, feed_off, code_off, 0xFFFFFFFF, 0});
         }
         steps.back().dist_mm += dist_mm;
