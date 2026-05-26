@@ -14,9 +14,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.vayunmathur.library.ui.DynamicTheme
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vayunmathur.email.data.EmailSyncWorker
+import com.vayunmathur.library.ui.*
+import com.vayunmathur.library.util.*
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
@@ -28,8 +32,8 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
@@ -37,6 +41,7 @@ import java.security.SecureRandom
 
 class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(Dispatchers.Main)
+    private lateinit var dataStore: DataStoreUtils
 
     // Configuration Constants
     private val clientId = "827025129169-1ihnv9r1a8nd1i3qjs98tkvluo4vjbhe.apps.googleusercontent.com"
@@ -44,12 +49,35 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        dataStore = DataStoreUtils.getInstance(this)
+        
+        // Restore session from DataStore
+        TokenState.accessToken = dataStore.getString("access_token")
+        TokenState.userEmail = dataStore.getString("user_email")
+        
+        if (TokenState.accessToken != null) {
+            EmailSyncWorker.schedulePeriodicSync(this)
+        }
+
         handleIntent(intent)
         enableEdgeToEdge()
         setContent {
             DynamicTheme {
-                MainContent(onGoogleLogin = { startGoogleLogin() })
+                MainContent(
+                    onGoogleLogin = { startGoogleLogin() },
+                    onLogout = { logout() }
+                )
             }
+        }
+    }
+
+    private fun logout() {
+        scope.launch {
+            dataStore.setString("access_token", "")
+            dataStore.setString("user_email", "")
+            TokenState.accessToken = null
+            TokenState.userEmail = null
+            EmailSyncWorker.cancelSync(this@MainActivity)
         }
     }
 
@@ -102,7 +130,6 @@ class MainActivity : ComponentActivity() {
                         url = "https://oauth2.googleapis.com/token",
                         formParameters = parameters {
                             append("client_id", clientId)
-                            append("client_secret", clientSecret)
                             append("code", code)
                             append("code_verifier", verifier)
                             append("grant_type", "authorization_code")
@@ -120,6 +147,13 @@ class MainActivity : ComponentActivity() {
 
                         TokenState.userEmail = userInfo.email
                         TokenState.accessToken = response.accessToken
+                        
+                        // Persist to DataStore
+                        dataStore.setString("access_token", response.accessToken)
+                        dataStore.setString("user_email", userInfo.email)
+                        
+                        EmailSyncWorker.schedulePeriodicSync(this@MainActivity)
+                        EmailSyncWorker.runOneOffSync(this@MainActivity)
                     } else {
                         val errorText = httpResponse.bodyAsText()
                         android.util.Log.e("OAuthError", "Failed to exchange code: $errorText")
@@ -155,11 +189,11 @@ object TokenState {
 
 @Serializable
 data class TokenResponse(
-    @SerialName("access_token") val accessToken: String,
-    @SerialName("expires_in") val expiresIn: Int,
-    @SerialName("refresh_token") val refreshToken: String? = null,
-    @SerialName("scope") val scope: String,
-    @SerialName("token_type") val tokenType: String
+    @kotlinx.serialization.SerialName("access_token") val accessToken: String,
+    @kotlinx.serialization.SerialName("expires_in") val expiresIn: Int,
+    @kotlinx.serialization.SerialName("refresh_token") val refreshToken: String? = null,
+    @kotlinx.serialization.SerialName("scope") val scope: String,
+    @kotlinx.serialization.SerialName("token_type") val tokenType: String
 )
 
 @Serializable
@@ -170,14 +204,11 @@ data class UserInfo(
 )
 
 @Composable
-fun MainContent(onGoogleLogin: () -> Unit) {
+fun MainContent(onGoogleLogin: () -> Unit, onLogout: () -> Unit) {
     if (TokenState.accessToken == null || TokenState.userEmail == null) {
         LoginScreen(onGoogleLogin)
     } else {
-        InboxScreen(
-            accessToken = TokenState.accessToken!!,
-            userEmail = TokenState.userEmail!!
-        )
+        EmailApp(onLogout = onLogout)
     }
 }
 
@@ -209,51 +240,168 @@ fun LoginScreen(onGoogleLogin: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun InboxScreen(accessToken: String, userEmail: String) {
-    val emailManager = remember { EmailManager() }
-    var subjects by remember { mutableStateOf<List<String>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+@Serializable
+sealed interface Route : NavKey {
+    @Serializable
+    object MessageList : Route
+    @Serializable
+    data class MessageDetail(val folderName: String, val messageId: Long) : Route
+}
 
-    LaunchedEffect(accessToken, userEmail) {
-        emailManager.fetchLatestSubjects(
-            host = "imap.gmail.com",
-            user = userEmail,
-            auth = EmailManager.AuthType.OAuth2(accessToken),
-            onSuccess = {
-                subjects = it
-                isLoading = false
-            },
-            onError = {
-                errorMessage = it.message ?: "Unknown error"
-                isLoading = false
+@Composable
+fun EmailApp(viewModel: EmailViewModel = viewModel(), onLogout: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val folders by viewModel.folders.collectAsState(emptyList())
+    val selectedFolder by viewModel.selectedFolder.collectAsState()
+    
+    val backStack = rememberNavBackStack<Route>(Route.MessageList)
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text("Folders", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                FolderList(folders, selectedFolder) { folderName ->
+                    viewModel.selectFolder(folderName)
+                    scope.launch { drawerState.close() }
+                }
+                Spacer(Modifier.weight(1f))
+                NavigationDrawerItem(
+                    label = { Text("Logout") },
+                    selected = false,
+                    onClick = onLogout,
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
             }
+        }
+    ) {
+        MainNavigation(backStack) {
+            entry<Route.MessageList>(metadata = ListPage()) {
+                MessageListScreen(
+                    viewModel = viewModel,
+                    onMessageClick = { msg ->
+                        backStack.add(Route.MessageDetail(selectedFolder, msg.id))
+                    },
+                    onOpenDrawer = { scope.launch { drawerState.open() } }
+                )
+            }
+            entry<Route.MessageDetail>(metadata = ListDetailPage()) { route ->
+                MessageDetailScreen(
+                    viewModel = viewModel,
+                    folderName = route.folderName,
+                    messageId = route.messageId,
+                    onBack = { backStack.pop() }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun FolderList(folders: List<EmailFolder>, selectedFolder: String, onSelect: (String) -> Unit) {
+    val folderTree = remember(folders) { buildFolderTree(folders) }
+    
+    LazyColumn {
+        folderTree.forEach { root ->
+            renderFolderTree(root, 0, selectedFolder, onSelect)
+        }
+    }
+}
+
+data class FolderNode(val folder: EmailFolder, val children: List<FolderNode>)
+
+fun buildFolderTree(folders: List<EmailFolder>): List<FolderNode> {
+    val folderMap = folders.associateBy { it.fullName }
+    val childrenMap = folders.groupBy { it.parentFullName }
+    
+    fun buildNode(folder: EmailFolder): FolderNode {
+        return FolderNode(
+            folder = folder,
+            children = childrenMap[folder.fullName]?.map { buildNode(it) } ?: emptyList()
         )
     }
+    
+    return folders.filter { it.parentFullName == null }.map { buildNode(it) }
+}
+
+fun androidx.compose.foundation.lazy.LazyListScope.renderFolderTree(
+    node: FolderNode, 
+    depth: Int, 
+    selectedFolder: String, 
+    onSelect: (String) -> Unit
+) {
+    item {
+        NavigationDrawerItem(
+            label = { Text(node.folder.name) },
+            selected = node.folder.fullName == selectedFolder,
+            onClick = { onSelect(node.folder.fullName) },
+            modifier = Modifier
+                .padding(NavigationDrawerItemDefaults.ItemPadding)
+                .padding(start = (depth * 16).dp)
+        )
+    }
+    node.children.forEach { child ->
+        renderFolderTree(child, depth + 1, selectedFolder, onSelect)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MessageListScreen(
+    viewModel: EmailViewModel,
+    onMessageClick: (EmailMessage) -> Unit,
+    onOpenDrawer: () -> Unit
+) {
+    val messages by viewModel.messages.collectAsState(emptyList())
+    val selectedFolder by viewModel.selectedFolder.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    var isSearching by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Inbox") },
-                actions = {
-                    IconButton(onClick = { TokenState.accessToken = null }) {
-                        Text("Logout", style = MaterialTheme.typography.labelSmall)
+            if (isSearching) {
+                TopAppBar(
+                    title = {
+                        CommonSearchBar(
+                            value = searchQuery,
+                            onValueChange = { viewModel.setSearchQuery(it) },
+                            padding = PaddingValues(0.dp)
+                        )
+                    },
+                    navigationIcon = {
+                        IconNavigation { 
+                            isSearching = false
+                            viewModel.setSearchQuery("")
+                        }
                     }
-                }
-            )
+                )
+            } else {
+                TopAppBar(
+                    title = { Text(selectedFolder) },
+                    navigationIcon = {
+                        IconButton(onClick = onOpenDrawer) {
+                            IconMenu()
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { viewModel.refresh(context) }) {
+                            IconRestore()
+                        }
+                        IconButton(onClick = { isSearching = true }) {
+                            IconSearch()
+                        }
+                    }
+                )
+            }
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            } else if (errorMessage != null) {
+            if (messages.isEmpty() && searchQuery.isEmpty()) {
                 Text(
-                    text = errorMessage!!,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                    textAlign = TextAlign.Center
+                    text = "No messages found. Try refreshing.",
+                    modifier = Modifier.align(Alignment.Center)
                 )
             } else {
                 LazyColumn(
@@ -261,15 +409,67 @@ fun InboxScreen(accessToken: String, userEmail: String) {
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(subjects) { subject ->
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = subject,
-                                modifier = Modifier.padding(16.dp)
-                            )
+                    items(messages) { message ->
+                        Card(
+                            onClick = { onMessageClick(message) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(text = message.from, style = MaterialTheme.typography.labelMedium)
+                                Text(text = message.subject, style = MaterialTheme.typography.titleMedium)
+                                Text(text = message.date, style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MessageDetailScreen(
+    viewModel: EmailViewModel,
+    folderName: String,
+    messageId: Long,
+    onBack: () -> Unit
+) {
+    var message by remember { mutableStateOf<EmailMessage?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(messageId) {
+        message = viewModel.getMessage(folderName, messageId)
+        isLoading = false
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Message Detail") },
+                navigationIcon = {
+                    IconNavigation(onBack)
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            } else {
+                message?.let { msg ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        Text(text = "From: ${msg.from}", style = MaterialTheme.typography.titleMedium)
+                        Text(text = "Subject: ${msg.subject}", style = MaterialTheme.typography.titleLarge)
+                        Text(text = "Date: ${msg.date}", style = MaterialTheme.typography.labelMedium)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                        Text(text = msg.body ?: "(No Content Offline)", style = MaterialTheme.typography.bodyLarge)
+                    }
+                } ?: Text("Message not found offline.", modifier = Modifier.align(Alignment.Center))
             }
         }
     }
