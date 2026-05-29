@@ -36,9 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,7 +105,6 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                 }
             }
         } else {
-            val scope = rememberCoroutineScope()
             LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = paddingValues + PaddingValues(8.dp)) {
                 item {
                     val currentLayout by viewModel.currentLayout.collectAsState()
@@ -128,10 +125,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                                         DropdownMenuItem(
                                             text = { Text(layout.prettyName) },
                                             onClick = {
-                                                scope.launch {
-                                                    viewModel.dataStore.setString("default_calendar_layout", layout.name)
-                                                    viewModel.setLayout(layout)
-                                                }
+                                                viewModel.setLayout(layout)
                                                 showDefaultLayoutMenu = false
                                             }
                                         )

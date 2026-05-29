@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                             intent.data?.lastPathSegment?.toLongOrNull()?.let { timestamp ->
                                 val date = Instant.fromEpochMilliseconds(timestamp)
                                     .toLocalDateTime(TimeZone.currentSystemDefault()).date
+                                viewModel.setSelectedDate(date)
                                 viewModel.setLastViewedDate(date)
                             }
                         }

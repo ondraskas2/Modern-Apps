@@ -1,18 +1,28 @@
 package com.vayunmathur.calendar.util
 import android.app.Application
 import android.content.ContentValues
+import android.net.Uri
 import android.provider.CalendarContract
 import android.util.Log
 import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.calendar.glance.CalendarGlanceWidget
+import com.vayunmathur.calendar.ui.parseICSFile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atTime
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.milliseconds
 import com.vayunmathur.calendar.data.Event
 import com.vayunmathur.calendar.data.Calendar
 
@@ -72,6 +82,113 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
             if (d != null) {
                 dataStore.setString("last_viewed_date", d.toString())
             }
+        }
+    }
+
+    // Currently selected/viewed date in the calendar UI. Initialized from the
+    // persisted [lastViewedDate] (if present) so the user returns to where they
+    // left off; otherwise today. This is in-memory; persistence to DataStore is
+    // performed explicitly via [setLastViewedDate] at navigation transitions.
+    private val _selectedDate = MutableStateFlow<LocalDate>(
+        _lastViewedDate.value
+            ?: Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+    )
+    val selectedDate: StateFlow<LocalDate> = _selectedDate.asStateFlow()
+
+    fun setSelectedDate(d: LocalDate) {
+        _selectedDate.value = d
+    }
+
+    // Parsed-ICS state for the import dialog. null = not yet parsed (or cleared);
+    // empty list = parsed and found nothing; non-empty = parsed events ready to import.
+    private val _parsedIcsEvents = MutableStateFlow<List<Event>?>(null)
+    val parsedIcsEvents: StateFlow<List<Event>?> = _parsedIcsEvents.asStateFlow()
+
+    /** Parses every [uris] off the main thread and exposes the result via [parsedIcsEvents]. */
+    fun parseIcsUris(uris: List<Uri>) {
+        if (uris.isEmpty()) {
+            _parsedIcsEvents.value = emptyList()
+            return
+        }
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val allEvents = mutableListOf<Event>()
+            uris.forEach { uri ->
+                try {
+                    app.contentResolver.openInputStream(uri)?.use { iS ->
+                        allEvents.addAll(parseICSFile(iS))
+                    }
+                } catch (e: Exception) {
+                    Log.e("CalendarViewModel", "Error parsing ICS file: $uri", e)
+                }
+            }
+            _parsedIcsEvents.value = allEvents
+        }
+    }
+
+    /** Clears any parsed-ICS state held in the VM (called when the import dialog dismisses). */
+    fun clearParsedIcs() {
+        _parsedIcsEvents.value = null
+    }
+
+    /**
+     * Bulk-inserts the previously parsed [events] into the calendar with id [calendarId].
+     * Runs off the main thread; invokes [onDone] on the main thread when complete (or on failure).
+     */
+    fun importIcsEvents(
+        events: List<Event>,
+        calendarId: Long,
+        onDone: () -> Unit = {},
+    ) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val valuesList = events.map { event ->
+                        ContentValues().apply {
+                            put(CalendarContract.Events.TITLE, event.title)
+                            put(CalendarContract.Events.DESCRIPTION, event.description)
+                            put(CalendarContract.Events.EVENT_LOCATION, event.location)
+                            put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                            val startDate = event.startDateTimeDisplay.date
+                            val startTime = event.startDateTimeDisplay.time
+                            val endDate = event.endDateTimeDisplay.date
+                            val endTime = event.endDateTimeDisplay.time
+                            val tz = if (event.allDay) "UTC" else event.timezone
+                            val dtstart = startDate.atTime(startTime).toInstant(TimeZone.of(tz))
+                                .toEpochMilliseconds()
+                            val dtendActual = endDate.atTime(endTime).toInstant(TimeZone.of(tz))
+                                .toEpochMilliseconds()
+                            put(CalendarContract.Events.DTSTART, dtstart)
+                            if (event.rrule != null) {
+                                put(CalendarContract.Events.DTEND, null as Long?)
+                                var duration = (dtendActual - dtstart).milliseconds
+                                if (event.allDay) duration += 1.days
+                                put(CalendarContract.Events.DURATION, duration.toIsoString())
+                                put(
+                                    CalendarContract.Events.RRULE,
+                                    event.rrule.asString(startDate, TimeZone.of(tz)),
+                                )
+                            } else {
+                                put(CalendarContract.Events.DTEND, dtendActual)
+                                put(CalendarContract.Events.DURATION, null as String?)
+                                put(CalendarContract.Events.RRULE, null as String?)
+                            }
+                            put(CalendarContract.Events.ALL_DAY, if (event.allDay) 1 else 0)
+                            put(CalendarContract.Events.EVENT_TIMEZONE, tz)
+                        }
+                    }
+                    app.contentResolver.bulkInsert(
+                        CalendarContract.Events.CONTENT_URI,
+                        valuesList.toTypedArray(),
+                    )
+                    _events.value = Event.getAllEvents(app)
+                } catch (e: Exception) {
+                    Log.e("CalendarViewModel", "Error importing events", e)
+                }
+            }
+            updateWidgets()
+            onDone()
         }
     }
 

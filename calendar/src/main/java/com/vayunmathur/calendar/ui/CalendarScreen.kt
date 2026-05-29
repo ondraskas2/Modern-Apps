@@ -125,20 +125,18 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
     val calendarVisibility by viewModel.calendarVisibility.collectAsState()
     val currentLayout by viewModel.currentLayout.collectAsState()
 
-    // compute today's date and restore last viewed date if available
-    val lastViewed by viewModel.lastViewedDate.collectAsState()
-    val initialDate =
-        lastViewed ?: Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
-    
+    // currently-viewed date is owned by the VM (initialized from persisted
+    // last_viewed_date in DataStore, or today when absent).
+    val dateViewing by viewModel.selectedDate.collectAsState()
+
     // We use a stable anchor for pagers/scrollers so they don't shift bases.
-    val anchorDate = remember(initialDate) { initialDate }
-    var dateViewing by remember(initialDate) { mutableStateOf(initialDate) }
+    val anchorDate = remember { dateViewing }
 
     // shared vertical scroll so hour labels and grid scroll together
     val verticalState = rememberScrollState()
 
     ResultEffect<LocalDate>("GotoDate") { result ->
-        dateViewing = result
+        viewModel.setSelectedDate(result)
     }
 
     Scaffold(
@@ -198,13 +196,13 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                 CalendarViewModel.CalendarLayout.Agenda -> AgendaView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, onEventClick = {
                     viewModel.setLastViewedDate(dateViewing)
                     backStack.add(Route.Event(it))
-                }, onDateViewingChanged = { dateViewing = it })
+                }, onDateViewingChanged = { viewModel.setSelectedDate(it) })
                 CalendarViewModel.CalendarLayout.Month -> MonthView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, onEventClick = {
                     viewModel.setLastViewedDate(dateViewing)
                     backStack.add(Route.Event(it))
                 }, onDayClick = {
-                    dateViewing = it
-                }, onDateViewingChanged = { dateViewing = it })
+                    viewModel.setSelectedDate(it)
+                }, onDateViewingChanged = { viewModel.setSelectedDate(it) })
                 else -> {
                     CalendarPagerView(
                         context,
@@ -219,7 +217,7 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                             viewModel.setLastViewedDate(dateViewing)
                             backStack.add(Route.Event(it))
                         },
-                        onDateViewingChanged = { dateViewing = it }
+                        onDateViewingChanged = { viewModel.setSelectedDate(it) }
                     )
                 }
             }
