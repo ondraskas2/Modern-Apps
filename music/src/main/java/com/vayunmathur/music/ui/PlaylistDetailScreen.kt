@@ -25,7 +25,7 @@ import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.music.util.AlbumArt
-import com.vayunmathur.music.util.PlaybackManager
+import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import com.vayunmathur.music.data.Music
@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, playlistId: Long) {
+fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel, playlistId: Long) {
     val playlist by viewModel.getState<Playlist>(playlistId)
     val allMusic by viewModel.data<Music>().collectAsState()
     var musicInPlaylist by remember { mutableStateOf(emptyList<Music>()) }
@@ -46,9 +46,8 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
     }
 
     val context = LocalContext.current
-    val playbackManager = remember { PlaybackManager.getInstance(context) }
-    val currentMediaItem by playbackManager.currentMediaItem.collectAsState()
-    val currentSource by playbackManager.currentSource.collectAsState()
+    val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
+    val currentSource by musicViewModel.currentSource.collectAsState()
 
     Scaffold(
         topBar = {
@@ -57,7 +56,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
                 navigationIcon = { IconNavigation(backStack) }
             )
         },
-        bottomBar = { PlayingBottomBar(playbackManager, backStack) },
+        bottomBar = { PlayingBottomBar(musicViewModel, backStack) },
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
@@ -101,10 +100,8 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
                                 },
                                 confirmButton = {
                                     TextButton(onClick = {
-                                        scope.launch {
-                                            viewModel.upsert(playlist.copy(name = newName))
-                                            showRenameDialog = false
-                                        }
+                                        musicViewModel.renamePlaylist(playlist, newName)
+                                        showRenameDialog = false
                                     }) {
                                         Text(stringResource(R.string.dialog_rename))
                                     }
@@ -132,7 +129,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
                 ) {
                     Button(
                         onClick = {
-                            playbackManager.playSong(musicInPlaylist, 0, sourceId = "playlist_$playlistId", sourceName = playlist.name)
+                            musicViewModel.playSong(musicInPlaylist, 0, sourceId = "playlist_$playlistId", sourceName = playlist.name)
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
@@ -146,7 +143,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
 
                     Button(
                         onClick = {
-                            playbackManager.playShuffled(musicInPlaylist, sourceId = "playlist_$playlistId", sourceName = playlist.name)
+                            musicViewModel.playShuffled(musicInPlaylist, sourceId = "playlist_$playlistId", sourceName = playlist.name)
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White),
@@ -175,7 +172,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseView
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (isPlaying) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                         .clickable {
-                            playbackManager.playSong(musicInPlaylist, idx, sourceId = "playlist_$playlistId", sourceName = playlist.name)
+                            musicViewModel.playSong(musicInPlaylist, idx, sourceId = "playlist_$playlistId", sourceName = playlist.name)
                         },
                     trailingContent = {
                         IconButton({

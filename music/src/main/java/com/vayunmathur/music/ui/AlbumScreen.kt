@@ -21,16 +21,15 @@ import com.vayunmathur.library.util.BottomBarItem
 import com.vayunmathur.library.util.BottomNavBar
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.music.util.AlbumArt
-import com.vayunmathur.music.util.PlaybackManager
+import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.util.SyncWorker
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import com.vayunmathur.music.data.Album
 
 @Composable
-fun AlbumScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
+fun AlbumScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val context = LocalContext.current
-    val playbackManager = remember { PlaybackManager.getInstance(context) }
 
     LaunchedEffect(Unit) {
         SyncWorker.runOnce(context)
@@ -53,9 +52,9 @@ fun AlbumScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
             }, leadingContent = { music ->
                 AlbumArt(music.uri.toUri(), Modifier.size(40.dp))
             }, searchEnabled = true, bottomBar = {
-                PlayingBottomBar(playbackManager, backStack)
+                PlayingBottomBar(musicViewModel, backStack)
             }, fab = {
-                ShufflePlayFab(viewModel, playbackManager)
+                ShufflePlayFab(viewModel, musicViewModel)
             }, sortOrder = Comparator.comparing { it.name })
         }
     }

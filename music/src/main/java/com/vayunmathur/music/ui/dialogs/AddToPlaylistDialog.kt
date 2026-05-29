@@ -11,7 +11,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -19,15 +18,13 @@ import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.music.R
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.music.Route
-import com.vayunmathur.music.data.Music
 import com.vayunmathur.music.data.Playlist
-import kotlinx.coroutines.launch
+import com.vayunmathur.music.util.MusicViewModel
 
 @Composable
-fun AddToPlaylistDialog(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicId: Long) {
+fun AddToPlaylistDialog(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel, musicId: Long) {
     val playlists by viewModel.data<Playlist>().collectAsState(initial = emptyList())
     var selectedPlaylistId by remember { mutableStateOf<Long?>(null) }
-    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = { backStack.pop() },
@@ -52,8 +49,7 @@ fun AddToPlaylistDialog(backStack: NavBackStack<Route>, viewModel: DatabaseViewM
             TextButton(
                 enabled = selectedPlaylistId != null,
                 onClick = {
-                    scope.launch {
-                        viewModel.match<Playlist, Music>(selectedPlaylistId!!, musicId)
+                    musicViewModel.addMusicToPlaylist(selectedPlaylistId!!, musicId) {
                         backStack.pop()
                     }
                 }

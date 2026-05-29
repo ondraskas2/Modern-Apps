@@ -30,14 +30,14 @@ import androidx.core.net.toUri
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.music.util.AlbumArt
-import com.vayunmathur.music.util.PlaybackManager
+import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.util.AddToPlaylistButton
 import com.vayunmathur.music.R
 import com.vayunmathur.music.util.formatDuration
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, albumId: Long) {
+fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel, albumId: Long) {
     val album by viewModel.getState<Album>(albumId)
     val allMusic by viewModel.data<Music>().collectAsState()
     val musicInAlbum = remember(allMusic, albumId) {
@@ -53,9 +53,8 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
     }
 
     val context = LocalContext.current
-    val playbackManager = remember { PlaybackManager.getInstance(context) }
-    val currentMediaItem by playbackManager.currentMediaItem.collectAsState()
-    val currentSource by playbackManager.currentSource.collectAsState()
+    val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
+    val currentSource by musicViewModel.currentSource.collectAsState()
 
     Scaffold(
         topBar = {
@@ -64,7 +63,7 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
                 navigationIcon = { IconNavigation(backStack) }
             )
         },
-        bottomBar = { PlayingBottomBar(playbackManager, backStack) },
+        bottomBar = { PlayingBottomBar(musicViewModel, backStack) },
     ) { paddingValues ->
         LazyColumn(
             modifier = Modifier
@@ -103,7 +102,7 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
                 ) {
                     Button(
                         onClick = {
-                            playbackManager.playSong(musicInAlbum, 0, sourceId = "album_$albumId", sourceName = album.name)
+                            musicViewModel.playSong(musicInAlbum, 0, sourceId = "album_$albumId", sourceName = album.name)
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
@@ -117,7 +116,7 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
 
                     Button(
                         onClick = {
-                            playbackManager.playShuffled(musicInAlbum, sourceId = "album_$albumId", sourceName = album.name)
+                            musicViewModel.playShuffled(musicInAlbum, sourceId = "album_$albumId", sourceName = album.name)
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White),
@@ -164,7 +163,7 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewMod
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (isPlaying) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                         .clickable {
-                            playbackManager.playSong(musicInAlbum, idx, sourceId = "album_$albumId", sourceName = album.name)
+                            musicViewModel.playSong(musicInAlbum, idx, sourceId = "album_$albumId", sourceName = album.name)
                         },
                     trailingContent = {
                         Row(verticalAlignment = Alignment.CenterVertically) {

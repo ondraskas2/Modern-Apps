@@ -45,7 +45,7 @@ import com.vayunmathur.library.util.BottomBarItem
 import com.vayunmathur.library.util.BottomNavBar
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.music.util.AlbumArt
-import com.vayunmathur.music.util.PlaybackManager
+import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.util.SyncWorker
 import com.vayunmathur.music.util.AddToPlaylistButton
 import com.vayunmathur.music.R
@@ -55,11 +55,10 @@ import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 @Composable
-fun HomeScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
+fun HomeScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val context = LocalContext.current
-    val playbackManager = remember { PlaybackManager.getInstance(context) }
-    val currentMediaItem by playbackManager.currentMediaItem.collectAsState()
-    val currentSource by playbackManager.currentSource.collectAsState()
+    val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
+    val currentSource by musicViewModel.currentSource.collectAsState()
 
     LaunchedEffect(Unit) {
         SyncWorker.runOnce(context)
@@ -87,7 +86,7 @@ fun HomeScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
             }, { toPlay ->
                 val allSongs = viewModel.getAll<Music>()
                 val toPlayIndex = allSongs.indexOfFirst { it.id == toPlay }
-                playbackManager.playSong(allSongs, toPlayIndex, sourceId = "all_songs", sourceName = "All Songs")
+                musicViewModel.playSong(allSongs, toPlayIndex, sourceId = "all_songs", sourceName = "All Songs")
                 Route.Song
             }, leadingContent = { music ->
                 val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
@@ -110,21 +109,21 @@ music ->
                 if (isPlaying) Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.secondaryContainer)
                 else Modifier
             }, searchEnabled = true, bottomBar = {
-                PlayingBottomBar(playbackManager, backStack)
+                PlayingBottomBar(musicViewModel, backStack)
             }, fab = {
-                ShufflePlayFab(viewModel, playbackManager)
+                ShufflePlayFab(viewModel, musicViewModel)
             }, sortOrder = Comparator.comparing { it.title })
         }
     }
 }
 
 @Composable
-fun ShufflePlayFab(viewModel: DatabaseViewModel, playbackManager: PlaybackManager) {
+fun ShufflePlayFab(viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val allSongs by viewModel.data<Music>().collectAsState()
 
     if(allSongs.isNotEmpty()) {
         FloatingActionButton({
-            playbackManager.playShuffled(allSongs, sourceId = "all_songs", sourceName = "All Songs")
+            musicViewModel.playShuffled(allSongs, sourceId = "all_songs", sourceName = "All Songs")
         }) {
             Icon(painterResource(R.drawable.ic_shuffle), null)
         }
@@ -134,13 +133,13 @@ fun ShufflePlayFab(viewModel: DatabaseViewModel, playbackManager: PlaybackManage
 
 @Composable
 fun PlayingBottomBar(
-    playbackManager: PlaybackManager,
+    musicViewModel: MusicViewModel,
     backStack: NavBackStack<Route>
 ) {
-    val currentItem by playbackManager.currentMediaItem.collectAsState()
-    val isPlaying by playbackManager.isPlaying.collectAsState()
-    val progress by playbackManager.currentPosition.collectAsState()
-    val duration by playbackManager.duration.collectAsState()
+    val currentItem by musicViewModel.currentMediaItem.collectAsState()
+    val isPlaying by musicViewModel.isPlaying.collectAsState()
+    val progress by musicViewModel.currentPosition.collectAsState()
+    val duration by musicViewModel.duration.collectAsState()
 
     val progressFactor = if (duration > 0) progress.toFloat() / duration.toFloat() else 0f
 
@@ -184,14 +183,14 @@ fun PlayingBottomBar(
                     },
                     trailingContent = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { playbackManager.togglePlayPause() }) {
+                            IconButton(onClick = { musicViewModel.togglePlayPause() }) {
                                 if(isPlaying) {
                                     IconPause()
                                 } else {
                                     IconPlay()
                                 }
                             }
-                            IconButton(onClick = { playbackManager.skipNext() }) {
+                            IconButton(onClick = { musicViewModel.skipNext() }) {
                                 Icon(painterResource(R.drawable.ic_skip_next), contentDescription = null)
                             }
                         }

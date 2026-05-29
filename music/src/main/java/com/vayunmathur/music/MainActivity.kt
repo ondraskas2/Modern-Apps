@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
@@ -37,17 +38,22 @@ import com.vayunmathur.music.ui.PlaylistScreen
 import com.vayunmathur.music.ui.SongScreen
 import com.vayunmathur.music.ui.dialogs.AddToPlaylistDialog
 import kotlinx.serialization.Serializable
+import com.vayunmathur.music.util.MusicViewModel
+import com.vayunmathur.music.util.MusicViewModelFactory
 import com.vayunmathur.music.util.PlaybackManager
 
 class MainActivity : ComponentActivity() {
     var controller: MediaController? = null
+    private lateinit var viewModel: DatabaseViewModel
+    private val musicViewModel: MusicViewModel by viewModels {
+        MusicViewModelFactory(application, viewModel, PlaybackManager.getInstance(this))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val db = buildDatabase<MusicDatabase>(listOf(MIGRATION_1_2, MIGRATION_2_3))
-        val viewModel = DatabaseViewModel(db,Music::class to db.musicDao(), Album::class to db.albumDao(), Artist::class to db.artistDao(), Playlist::class to db.playlistDao(), matchingDao = db.matchingDao())
-        val pm = PlaybackManager.getInstance(this)
+        viewModel = DatabaseViewModel(db,Music::class to db.musicDao(), Album::class to db.albumDao(), Artist::class to db.artistDao(), Playlist::class to db.playlistDao(), matchingDao = db.matchingDao())
         setContent {
             DynamicTheme {
                 if(Build.VERSION.SDK_INT >= 33) {
@@ -55,14 +61,14 @@ class MainActivity : ComponentActivity() {
                         arrayOf(Manifest.permission.READ_MEDIA_AUDIO),
                         getString(R.string.grant_audio_permissions)
                     ) {
-                        Navigation(viewModel)
+                        Navigation(viewModel, musicViewModel)
                     }
                 } else {
                     PermissionsChecker(
                         arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
                         getString(R.string.grant_storage_permissions)
                     ) {
-                        Navigation(viewModel)
+                        Navigation(viewModel, musicViewModel)
                     }
                 }
             }
@@ -97,35 +103,35 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(viewModel: DatabaseViewModel) {
+fun Navigation(viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val backStack = rememberNavBackStack<Route>(Route.Home)
     MainNavigation(backStack) {
         entry<Route.Home> {
-            HomeScreen(backStack, viewModel)
+            HomeScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.Song> {
-            SongScreen(backStack)
+            SongScreen(backStack, musicViewModel)
         }
         entry<Route.Albums> {
-            AlbumScreen(backStack, viewModel)
+            AlbumScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.Artists> {
-            ArtistScreen(backStack, viewModel)
+            ArtistScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.Playlists> {
-            PlaylistScreen(backStack, viewModel)
+            PlaylistScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.AlbumDetail> {
-            AlbumDetailScreen(backStack, viewModel, it.albumId)
+            AlbumDetailScreen(backStack, viewModel, musicViewModel, it.albumId)
         }
         entry<Route.ArtistDetail> {
-            ArtistDetailScreen(backStack, viewModel, it.artistId)
+            ArtistDetailScreen(backStack, viewModel, musicViewModel, it.artistId)
         }
         entry<Route.PlaylistDetail> {
-            PlaylistDetailScreen(backStack, viewModel, it.playlistId)
+            PlaylistDetailScreen(backStack, viewModel, musicViewModel, it.playlistId)
         }
         entry<Route.AddToPlaylistDialog>(metadata = DialogPage()) {
-            AddToPlaylistDialog(backStack, viewModel, it.musicId)
+            AddToPlaylistDialog(backStack, viewModel, musicViewModel, it.musicId)
         }
     }
 }

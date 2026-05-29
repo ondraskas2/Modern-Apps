@@ -26,7 +26,7 @@ import com.vayunmathur.library.util.BottomNavBar
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.music.util.AlbumArt
-import com.vayunmathur.music.util.PlaybackManager
+import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.util.SyncWorker
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
@@ -35,11 +35,9 @@ import com.vayunmathur.music.data.Playlist
 import kotlinx.coroutines.launch
 
 @Composable
-fun PlaylistScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
+fun PlaylistScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val playbackManager = remember { PlaybackManager.getInstance(context) }
-    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         SyncWorker.runOnce(context)
@@ -64,14 +62,12 @@ fun PlaylistScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel)
                 val musicUris = allMusic.filter { it.id in songIds }.map { it.uri.toUri() }
                 AlbumArt(musicUris, Modifier.size(40.dp))
             }, searchEnabled = true, bottomBar = {
-                PlayingBottomBar(playbackManager, backStack)
+                PlayingBottomBar(musicViewModel, backStack)
             }, fab = {
-                ShufflePlayFab(viewModel, playbackManager)
+                ShufflePlayFab(viewModel, musicViewModel)
             }, sortOrder = Comparator.comparing { it.name }, otherActions = {
                 IconButton(onClick = {
-                    scope.launch {
-                        viewModel.upsert(Playlist(name = resources.getString(R.string.new_playlist)))
-                    }
+                    musicViewModel.createPlaylist(resources.getString(R.string.new_playlist))
                 }) {
                     IconAdd()
                 }
