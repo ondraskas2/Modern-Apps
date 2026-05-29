@@ -21,7 +21,7 @@ fun AddToGroupDialog(
     onDismiss: () -> Unit
 ) {
     val groups by viewModel.groups.collectAsState()
-    val allMatches by viewModel.allMatches.collectAsState()
+    val memberships by viewModel.contactGroupMemberships.collectAsState()
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -34,8 +34,8 @@ fun AddToGroupDialog(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)
                 ) {
                     items(groups, key = { it.id }) { group ->
-                        val groupMatches = allMatches.filter { it.rightID == group.id && it.type == ContactViewModel.GROUP_MATCH_TYPE }
-                        val contactsInGroupCount = contactIds.count { id -> groupMatches.any { it.leftID == id } }
+                        val groupMembers = memberships.filter { it.groupId == group.id }
+                        val contactsInGroupCount = contactIds.count { id -> groupMembers.any { it.contactId == id } }
                         
                         val state = when {
                             contactsInGroupCount == 0 -> ToggleableState.Off

@@ -31,7 +31,6 @@ import com.vayunmathur.contacts.data.Organization
 import com.vayunmathur.contacts.data.PhoneNumber
 import com.vayunmathur.contacts.data.Photo
 import com.vayunmathur.library.util.DataStoreUtils
-import com.vayunmathur.library.util.ManyManyMatching
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +49,8 @@ import kotlinx.datetime.LocalDate
 import kotlin.io.encoding.Base64
 
 data class ContactAccount(val name: String, val type: String)
+
+data class ContactGroupMembership(val contactId: Long, val groupId: Long)
 
 class ContactViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -105,17 +106,13 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         return list.sortedBy { it.name }
     }
 
-    val allMatches: StateFlow<List<ManyManyMatching>> = contacts.map { contactList ->
+    val contactGroupMemberships: StateFlow<List<ContactGroupMembership>> = contacts.map { contactList ->
         contactList.flatMap { contact ->
             contact.details.groups.map { membership ->
-                ManyManyMatching(leftID = contact.id, rightID = membership.groupId, type = GROUP_MATCH_TYPE)
+                ContactGroupMembership(contactId = contact.id, groupId = membership.groupId)
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    companion object {
-        const val GROUP_MATCH_TYPE = 101 // arbitrary type for contact-group matching
-    }
 
     private val _accounts = MutableStateFlow<List<ContactAccount>>(emptyList())
     val accounts: StateFlow<List<ContactAccount>> = _accounts.asStateFlow()
@@ -341,15 +338,15 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun getGroupsForContact(contactId: Long): Flow<List<ContactGroup>> {
-        return combine(groups, allMatches) { groups, matches ->
-            val groupIds = matches.filter { it.leftID == contactId && it.type == GROUP_MATCH_TYPE }.map { it.rightID }
+        return combine(groups, contactGroupMemberships) { groups, memberships ->
+            val groupIds = memberships.filter { it.contactId == contactId }.map { it.groupId }
             groups.filter { it.id in groupIds }
         }
     }
 
     fun getContactsForGroup(groupId: Long): Flow<List<Contact>> {
-        return combine(contacts, allMatches) { contacts, matches ->
-            val contactIds = matches.filter { it.rightID == groupId && it.type == GROUP_MATCH_TYPE }.map { it.leftID }
+        return combine(contacts, contactGroupMemberships) { contacts, memberships ->
+            val contactIds = memberships.filter { it.groupId == groupId }.map { it.contactId }
             contacts.filter { it.id in contactIds }
         }
     }
