@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,21 +37,20 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.pdf.EditablePdfDocument
-import androidx.pdf.PdfPasswordException
-import androidx.pdf.SandboxedPdfLoader
+import androidx.compose.runtime.collectAsState
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.pdf.ui.CapturePdfScreen
 import com.vayunmathur.pdf.ui.PdfViewerScreen
-import kotlinx.coroutines.delay
+import com.vayunmathur.pdf.util.PdfViewModel
 
 class MainActivity : ComponentActivity() {
+    private val pdfViewModel: PdfViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         val intentData: Uri? = intent.data
-        val pdfLoader = SandboxedPdfLoader(application)
 
         if (!isAdvancedPdfSupported()) {
             setContent {
@@ -69,26 +69,20 @@ class MainActivity : ComponentActivity() {
             val startedWithIntent = remember { intentData != null }
             var data by rememberSaveable { mutableStateOf(intentData) }
             var password: String? by rememberSaveable { mutableStateOf(null) }
-            var pdfDocument by remember { mutableStateOf<EditablePdfDocument?>(null) }
-            var showPasswordDialog by remember { mutableStateOf(false) }
-            var passwordError by remember { mutableStateOf<String?>(null) }
             var isCapturing by rememberSaveable { mutableStateOf(false) }
+
+            val pdfDocument by pdfViewModel.pdfDocument.collectAsState()
+            val passwordRequired by pdfViewModel.passwordRequired.collectAsState()
+            val passwordError by pdfViewModel.passwordError.collectAsState()
 
             val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let { data = it }
             }
 
             LaunchedEffect(data, password) {
-                if (data != null) {
-                    delay(1000)
-                    try {
-                        pdfDocument = pdfLoader.openDocument(data!!, password) as EditablePdfDocument
-                    } catch (_: PdfPasswordException) {
-                        if (password != null) {
-                            passwordError = getString(R.string.incorrect_password)
-                        }
-                        showPasswordDialog = true
-                    }
+                val uri = data
+                if (uri != null) {
+                    pdfViewModel.loadDocument(uri, password)
                 }
             }
 
@@ -104,6 +98,7 @@ class MainActivity : ComponentActivity() {
                         )
                     } else if (isCapturing) {
                         CapturePdfScreen(
+                            viewModel = pdfViewModel,
                             onBack = { isCapturing = false },
                             onPdfCreated = { uri ->
                                 data = uri
@@ -116,8 +111,8 @@ class MainActivity : ComponentActivity() {
                                 finish()
                             } else {
                                 data = null
-                                pdfDocument = null
                                 password = null
+                                pdfViewModel.clearDocument()
                             }
                         }
 
@@ -125,6 +120,7 @@ class MainActivity : ComponentActivity() {
                             PdfViewerScreen(
                                 pdfDocument = it,
                                 pdfName = data?.lastPathSegment ?: "pdf",
+                                viewModel = pdfViewModel,
                                 onBack = onBack
                             )
                         } ?: run {
@@ -133,13 +129,10 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (showPasswordDialog) {
+                    if (passwordRequired) {
                         PasswordDialog(
                             errorMessage = passwordError,
-                            onPasswordEntered = {
-                                password = it
-                                showPasswordDialog = false
-                            }
+                            onPasswordEntered = { password = it }
                         )
                     }
                 }

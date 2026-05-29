@@ -1,7 +1,6 @@
 package com.vayunmathur.pdf.ui
 
 import android.content.Intent
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,12 +60,18 @@ import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.pdf.R
 import com.vayunmathur.pdf.util.PdfStateStore
+import com.vayunmathur.pdf.util.PdfViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: () -> Unit) {
+fun PdfViewerScreen(
+    pdfDocument: EditablePdfDocument,
+    pdfName: String,
+    viewModel: PdfViewModel,
+    onBack: () -> Unit,
+) {
     val pdfState = remember { PdfViewerState() }
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -78,17 +83,17 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
         ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri ->
         uri?.let {
-            coroutineScope.launch {
-                try {
-                    context.contentResolver.openFileDescriptor(it, "w")?.use { pfd ->
-                        pdfDocument.createWriteHandle().writeTo(pfd)
-                        Toast.makeText(context, pdfSavedMessage, Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Log.e("PdfViewerScreen", "Error saving PDF", e)
-                    Toast.makeText(context, pdfSaveErrorMessage, Toast.LENGTH_SHORT).show()
-                }
-            }
+            viewModel.saveDocumentChanges(pdfDocument, it)
+        }
+    }
+
+    LaunchedEffect(pdfDocument) {
+        viewModel.pdfWriteResults.collect { result ->
+            // Only toast for writes targeting URIs other than the in-place autosave
+            // (the autosave writes to pdfDocument.uri and should be silent).
+            if (result.targetUri == pdfDocument.uri) return@collect
+            val msg = if (result.success) pdfSavedMessage else pdfSaveErrorMessage
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -246,12 +251,7 @@ fun PdfViewerScreen(pdfDocument: EditablePdfDocument, pdfName: String, onBack: (
                 if (changesMade) {
                     FloatingActionButton({
                         changesMade = false
-                        coroutineScope.launch {
-                            context.contentResolver.openFileDescriptor(pdfDocument.uri, "wt")
-                                ?.use { pfd ->
-                                    pdfDocument.createWriteHandle().writeTo(pfd)
-                                }
-                        }
+                        viewModel.saveDocumentChanges(pdfDocument, pdfDocument.uri)
                     }) { IconSave() }
                 }
             }
