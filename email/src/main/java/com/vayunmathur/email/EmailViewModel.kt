@@ -34,7 +34,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
     val selectedAccount = _selectedAccountEmail.flatMapLatest { email ->
         if (email == null) flowOf(null)
         else accounts.map { list -> list.find { it.email == email } }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val folders = _selectedAccountEmail.flatMapLatest { email ->
         if (email == null) flowOf(emptyList())
