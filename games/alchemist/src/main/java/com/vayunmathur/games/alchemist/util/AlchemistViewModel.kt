@@ -73,13 +73,14 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
     val newUnlocksEvent: SharedFlow<List<AlchemyItem>> = _newUnlocksEvent.asSharedFlow()
 
     init {
-        // Load JSON synchronously so other consumers (e.g. AlchemistAchievementsManager
-        // which reads Alchemist.items directly) can rely on the singleton being ready
-        // by the time the VM exists. The JSON is small and parsing is fast.
-        Alchemist.init(application)
-        _allItems.value = Alchemist.items
-        _recipes.value = Alchemist.recipes
+        // Load JSON + derive recipes on Dispatchers.IO to keep first frame
+        // responsive. Other consumers (e.g. AlchemistAchievementsManager) read
+        // Alchemist.items directly; the singleton's defaults (empty lists) and
+        // the `Alchemist.items.isNotEmpty()` guards keep them safe during boot.
         viewModelScope.launch(Dispatchers.IO) {
+            Alchemist.init(application)
+            _allItems.value = Alchemist.items
+            _recipes.value = Alchemist.recipes
             seedInitialItemsIfEmpty()
         }
     }
