@@ -62,6 +62,7 @@ import com.vayunmathur.maps.data.AmenityDatabase
 import com.vayunmathur.maps.data.SpecificFeature
 import com.vayunmathur.maps.data.parse
 import com.vayunmathur.maps.ensurePmtilesReady
+import com.vayunmathur.maps.util.MapsZonesViewModel
 import com.vayunmathur.maps.util.OfflineRouter
 import com.vayunmathur.maps.util.RouteService
 import com.vayunmathur.maps.util.SelectedFeatureViewModel
@@ -96,19 +97,13 @@ import com.vayunmathur.maps.R as MapsR
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel, db: AmenityDatabase) {
+fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel, zonesViewModel: MapsZonesViewModel, db: AmenityDatabase) {
     val selectedFeature by viewModel.selectedFeature.collectAsState()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val zoneManager = remember { ZoneDownloadManager(context) }
 
     // --- ZONE DOWNLOAD STATE ---
     val camera = rememberCameraState(CameraPosition(target = Position(-118.243683,34.052235), zoom = 5.0))
-    val downloadedZones by zoneManager.getDownloadedZonesFlow().collectAsState(emptyList())
-
-    LaunchedEffect(downloadedZones) {
-        downloadedZones.forEach { OfflineRouter.ensureZoneLoaded(it) }
-    }
 
     val activeZone = remember(camera.position) {
         calculateZoneId(
@@ -138,7 +133,7 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
         if (activeZone == null) return@remember ""
 
         val localFile = File(context.getExternalFilesDir(null), "zone_$activeZone.pmtiles")
-        if (zoneManager.getZoneStatus(activeZone) == ZoneDownloadManager.ZoneStatus.FINISHED) {
+        if (zonesViewModel.getZoneStatus(activeZone) == ZoneDownloadManager.ZoneStatus.FINISHED) {
             "pmtiles://file://${localFile.absolutePath}"
         } else {
             ""
@@ -167,7 +162,7 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
     // Zone Prompting Logic
     LaunchedEffect(activeZone) {
         if (activeZone != null && activeZone != dismissedZone) {
-            val status = zoneManager.getZoneStatus(activeZone)
+            val status = zonesViewModel.getZoneStatus(activeZone)
 
             // Only prompt if the user hasn't started the download yet
             if (status == ZoneDownloadManager.ZoneStatus.NOT_STARTED) {
@@ -220,7 +215,7 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
     // --- RENDER ---
     BottomSheetScaffold({
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 48.dp, top = 8.dp)) {
-            BottomSheetContent(selectedFeature, { viewModel.set(it) }, route, selectedRouteType, { selectedRouteType = it }, inactiveNavigation)
+            BottomSheetContent(viewModel, selectedFeature, { viewModel.set(it) }, route, selectedRouteType, { selectedRouteType = it }, inactiveNavigation)
         }
     }, Modifier, scaffoldState, 170.dp) { paddingValues ->
         Scaffold(Modifier.padding(top = paddingValues.calculateTopPadding()), topBar = {
@@ -347,7 +342,7 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
                             dismissedZone = activeZone
                         }, {
                             Button({
-                                zoneManager.startDownload(activeZone)
+                                zonesViewModel.startDownload(activeZone)
                                 showDownloadDialog = false
                                 // We don't need to set dismissedZone here because getZoneStatus
                                 // will now return DOWNLOADING, preventing the effect from re-triggering

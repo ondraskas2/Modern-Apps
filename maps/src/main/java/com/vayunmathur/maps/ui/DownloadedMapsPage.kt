@@ -44,16 +44,16 @@ import coil.request.ImageRequest
 import coil.ImageLoader
 import com.vayunmathur.maps.Route
 import com.vayunmathur.maps.R
+import com.vayunmathur.maps.util.MapsZonesViewModel
 import com.vayunmathur.maps.util.ZoneDownloadManager
 import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DownloadedMapsPage(backStack: NavBackStack<Route>) {
+fun DownloadedMapsPage(backStack: NavBackStack<Route>, zonesViewModel: MapsZonesViewModel) {
     val context = LocalContext.current
-    val zoneManager = remember { ZoneDownloadManager(context) }
-    val downloadedMaps by zoneManager.getDownloadedZonesFlow().collectAsState(initial = emptyList())
-    val downloadingZones by zoneManager.getDownloadingZonesFlow().collectAsState(initial = emptyMap())
+    val downloadedMaps by zonesViewModel.downloadedZones.collectAsState()
+    val downloadingZones by zonesViewModel.downloadingZones.collectAsState()
 
     var showDownloadDialogForZone by remember { mutableStateOf<Int?>(null) }
     var showDeleteDialogForZone by remember { mutableStateOf<Int?>(null) }
@@ -150,7 +150,7 @@ fun DownloadedMapsPage(backStack: NavBackStack<Route>) {
             onDismissRequest = { showDownloadDialogForZone = null },
             confirmButton = {
                 Button({
-                    zoneManager.startDownload(zoneId)
+                    zonesViewModel.startDownload(zoneId)
                     showDownloadDialogForZone = null
                 }) {
                     Text(stringResource(R.string.download))
@@ -171,7 +171,7 @@ fun DownloadedMapsPage(backStack: NavBackStack<Route>) {
             onDismissRequest = { showDeleteDialogForZone = null },
             confirmButton = {
                 Button({
-                    zoneManager.deleteZone(zoneId)
+                    zonesViewModel.deleteZone(zoneId)
                     showDeleteDialogForZone = null
                 }) {
                     Text(stringResource(R.string.delete))

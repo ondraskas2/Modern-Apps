@@ -18,7 +18,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,11 +36,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.vayunmathur.library.util.firstLetterUppercase
-import com.vayunmathur.maps.util.FullPlaceInfo
 import com.vayunmathur.maps.R
-import com.vayunmathur.maps.util.Reviews
 import com.vayunmathur.maps.data.SpecificFeature
 import com.vayunmathur.maps.data.timeFormat
+import com.vayunmathur.maps.util.SelectedFeatureViewModel
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format
 import kotlinx.datetime.toLocalDateTime
@@ -54,11 +53,8 @@ fun goto(context: Context, uri: String) {
 }
 
 @Composable
-fun RestaurantBottomSheet(inactiveNavigation: SpecificFeature.Route?, feature: SpecificFeature.Restaurant, requestDirections: () -> Unit) {
-    var reviews by remember { mutableStateOf<FullPlaceInfo?>(null) }
-    LaunchedEffect(Unit) {
-        reviews = Reviews.getRatingForOsmLocation(feature.name, feature.position.latitude, feature.position.longitude)
-    }
+fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigation: SpecificFeature.Route?, feature: SpecificFeature.Restaurant, requestDirections: () -> Unit) {
+    val reviews by viewModel.currentReviews.collectAsState()
     val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -133,11 +129,8 @@ fun RestaurantBottomSheet(inactiveNavigation: SpecificFeature.Route?, feature: S
 }
 
 @Composable
-fun RestaurantBottomSheet(inactiveNavigation: SpecificFeature.Route?, feature: SpecificFeature.GenericPlace, requestDirections: () -> Unit) {
-    var reviews by remember { mutableStateOf<FullPlaceInfo?>(null) }
-    LaunchedEffect(Unit) {
-        reviews = Reviews.getRatingForOsmLocation(feature.name, feature.position.latitude, feature.position.longitude)
-    }
+fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigation: SpecificFeature.Route?, feature: SpecificFeature.GenericPlace, requestDirections: () -> Unit) {
+    val reviews by viewModel.currentReviews.collectAsState()
     val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

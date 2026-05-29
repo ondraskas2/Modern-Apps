@@ -23,6 +23,15 @@ class SelectedFeatureViewModel(application: Application): AndroidViewModel(appli
 
     val locationManager = FrameworkLocationManager(application)
 
+    // Small cache of reviews keyed by (name, lat, lon) to avoid refetching the
+    // same place when the user toggles back and forth. Bounded to cap memory.
+    private data class ReviewKey(val name: String, val lat: Double, val lon: Double)
+    private val reviewsCache = object : LinkedHashMap<ReviewKey, FullPlaceInfo?>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<ReviewKey, FullPlaceInfo?>
+        ): Boolean = size > 32
+    }
+
     init {
         locationManager.startUpdates { position, bearing ->
             _userPosition.value = position
@@ -37,6 +46,35 @@ class SelectedFeatureViewModel(application: Application): AndroidViewModel(appli
     fun setInactiveNavigation(route: SpecificFeature.Route?) {
         _inactiveNavigation.value = route
     }
+
+    /**
+     * Reviews for the currently selected restaurant or generic place. Emits null
+     * for other feature types or while the network call is in flight. Cancels
+     * the in-flight fetch when the selection changes.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val currentReviews: StateFlow<FullPlaceInfo?> = selectedFeature
+        .flatMapLatest { feature ->
+            val (name, pos) = when (feature) {
+                is SpecificFeature.Restaurant -> feature.name to feature.position
+                is SpecificFeature.GenericPlace -> feature.name to feature.position
+                else -> return@flatMapLatest flowOf(null)
+            }
+            val key = ReviewKey(name, pos.latitude, pos.longitude)
+            val cached: FullPlaceInfo? = synchronized(reviewsCache) { reviewsCache[key] }
+            if (cached != null) return@flatMapLatest flowOf(cached)
+            flow {
+                emit(null)
+                val info = Reviews.getRatingForOsmLocation(name, pos.latitude, pos.longitude)
+                synchronized(reviewsCache) { reviewsCache[key] = info }
+                emit(info)
+            }.flowOn(Dispatchers.IO)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
 
     // Move heavy computation to a background StateFlow
     @OptIn(ExperimentalCoroutinesApi::class)

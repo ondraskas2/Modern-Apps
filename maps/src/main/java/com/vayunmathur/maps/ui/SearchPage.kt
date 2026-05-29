@@ -17,11 +17,8 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,13 +30,10 @@ import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.util.round
 import com.vayunmathur.maps.Route
+import com.vayunmathur.maps.data.SpecificFeature
+import com.vayunmathur.maps.util.MapsSearchViewModel
 import com.vayunmathur.maps.util.SelectedFeatureViewModel
 import com.vayunmathur.maps.data.AmenityDatabase
-import com.vayunmathur.maps.data.AmenityEntity
-import com.vayunmathur.maps.data.OpeningHours
-import com.vayunmathur.maps.data.SpecificFeature
-import kotlinx.coroutines.launch
-import org.maplibre.spatialk.geojson.Position
 
 /**
  * A Search Page that filters amenities based on a text query and a geographic bounding box.
@@ -50,6 +44,7 @@ import org.maplibre.spatialk.geojson.Position
 fun SearchPage(
     backStack: NavBackStack<Route>,
     viewModel: SelectedFeatureViewModel,
+    searchViewModel: MapsSearchViewModel,
     db: AmenityDatabase,
     idx: Int?,
     east: Double,
@@ -57,9 +52,8 @@ fun SearchPage(
     north: Double,
     south: Double
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf(emptyList<AmenityEntity>()) }
-    val scope = rememberCoroutineScope()
+    val searchQuery by searchViewModel.query.collectAsState()
+    val results by searchViewModel.results.collectAsState()
 
     Scaffold(
         topBar = {
@@ -68,23 +62,7 @@ fun SearchPage(
                     TextField(
                         value = searchQuery,
                         onValueChange = { query ->
-                            searchQuery = query
-                            scope.launch {
-                                // Trigger search if query length is sufficient
-                                results = if (query.length >= 2) {
-                                    // Using the bounding box provided (North, South, East, West)
-                                    // and the FTS4 wildcard search pattern
-                                    db.amenityDao().getInBBox(
-                                        query = "*$query*",
-                                        latMin = south,
-                                        latMax = north,
-                                        lonMin = west,
-                                        lonMax = east
-                                    )
-                                } else {
-                                    emptyList()
-                                }
-                            }
+                            searchViewModel.setQuery(query, db, west, east, south, north)
                         },
                         placeholder = { Text(stringResource(R.string.search_nearby)) },
                         modifier = Modifier.fillMaxWidth(),
@@ -126,22 +104,15 @@ fun SearchPage(
                                 Text(stringResource(R.string.coordinates, amenity.lat.round(4), amenity.lon.round(4)))
                             },
                             modifier = Modifier.clickable {
-                                scope.launch {
-                                    val tags = db.tagDao().getTags(amenity.id).associate { it.key to it.value }
-                                    val feature = SpecificFeature.Restaurant(tags["name"] ?: "", tags["phone"], tags["website"], tags["website:menu"], tags["opening_hours"]?.let { OpeningHours.from(it) },
-                                        Position(amenity.lon, amenity.lat)
-                                    )
-                                    // Dispatch the selected result back to the registry
-                                    if(idx != null) {
-                                        val f =
-                                            viewModel.selectedFeature.value as SpecificFeature.Route
+                                searchViewModel.resolveAmenity(amenity, db) { feature ->
+                                    if (idx != null) {
+                                        val f = viewModel.selectedFeature.value as SpecificFeature.Route
                                         viewModel.set(f.copy(waypoints = f.waypoints.mapIndexed { idx2, it ->
                                             if (idx2 == idx) feature else it
                                         }))
                                     } else {
                                         viewModel.set(feature)
                                     }
-                                    // Pop the backstack to return to the previous screen (the map)
                                     backStack.pop()
                                 }
                             }

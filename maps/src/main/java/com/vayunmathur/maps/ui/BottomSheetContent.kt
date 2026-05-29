@@ -21,9 +21,10 @@ import com.vayunmathur.library.util.round
 import com.vayunmathur.maps.R
 import com.vayunmathur.maps.data.SpecificFeature
 import com.vayunmathur.maps.util.RouteService
+import com.vayunmathur.maps.util.SelectedFeatureViewModel
 
 @Composable
-fun BottomSheetContent(selectedFeature: SpecificFeature?, setSelectedFeature: (SpecificFeature?) -> Unit, route: Map<RouteService.TravelMode, RouteService.RouteType?>?, selectedRouteType: RouteService.TravelMode, setSelectedRouteType: (RouteService.TravelMode) -> Unit, inactiveNavigation: SpecificFeature.Route?) {
+fun BottomSheetContent(viewModel: SelectedFeatureViewModel, selectedFeature: SpecificFeature?, setSelectedFeature: (SpecificFeature?) -> Unit, route: Map<RouteService.TravelMode, RouteService.RouteType?>?, selectedRouteType: RouteService.TravelMode, setSelectedRouteType: (RouteService.TravelMode) -> Unit, inactiveNavigation: SpecificFeature.Route?) {
     when (selectedFeature) {
         is SpecificFeature.Admin0Label -> {
             Column {
@@ -38,7 +39,7 @@ fun BottomSheetContent(selectedFeature: SpecificFeature?, setSelectedFeature: (S
             }
         }
         is SpecificFeature.Restaurant -> {
-            RestaurantBottomSheet(inactiveNavigation, selectedFeature) {
+            RestaurantBottomSheet(viewModel, inactiveNavigation, selectedFeature) {
                 if(inactiveNavigation == null) {
                     setSelectedFeature(SpecificFeature.Route(listOf(null, selectedFeature)))
                 } else {
@@ -47,7 +48,7 @@ fun BottomSheetContent(selectedFeature: SpecificFeature?, setSelectedFeature: (S
             }
         }
         is SpecificFeature.GenericPlace -> {
-            RestaurantBottomSheet(inactiveNavigation, selectedFeature) {
+            RestaurantBottomSheet(viewModel, inactiveNavigation, selectedFeature) {
                 if (inactiveNavigation == null) {
                     setSelectedFeature(SpecificFeature.Route(listOf(null, selectedFeature)))
                 } else {

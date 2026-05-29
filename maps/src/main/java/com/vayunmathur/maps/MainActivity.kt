@@ -21,6 +21,8 @@ import com.vayunmathur.maps.data.buildAmenityDatabase
 import com.vayunmathur.maps.ui.DownloadedMapsPage
 import com.vayunmathur.maps.ui.MapPage
 import com.vayunmathur.maps.ui.SearchPage
+import com.vayunmathur.maps.util.MapsSearchViewModel
+import com.vayunmathur.maps.util.MapsZonesViewModel
 import com.vayunmathur.maps.util.SelectedFeatureViewModel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -87,17 +89,22 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(db: AmenityDatabase, viewModel: SelectedFeatureViewModel = viewModel()) {
+fun Navigation(
+    db: AmenityDatabase,
+    viewModel: SelectedFeatureViewModel = viewModel(),
+    searchViewModel: MapsSearchViewModel = viewModel(),
+    zonesViewModel: MapsZonesViewModel = viewModel(),
+) {
     val backStack = rememberNavBackStack<Route>(Route.MapPage)
     MainNavigation(backStack) {
         entry<Route.MapPage> {
-            MapPage(backStack, viewModel, db)
+            MapPage(backStack, viewModel, zonesViewModel, db)
         }
         entry<Route.DownloadedMapsPage> {
-            DownloadedMapsPage(backStack)
+            DownloadedMapsPage(backStack, zonesViewModel)
         }
         entry<Route.SearchPage> {
-            SearchPage(backStack, viewModel, db, it.idx, it.east, it.west, it.north, it.south)
+            SearchPage(backStack, viewModel, searchViewModel, db, it.idx, it.east, it.west, it.north, it.south)
         }
     }
 }
