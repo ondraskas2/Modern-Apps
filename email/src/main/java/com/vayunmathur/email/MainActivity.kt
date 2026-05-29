@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -318,93 +320,103 @@ fun EmailApp(viewModel: EmailViewModel, onAddAccount: () -> Unit) {
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet {
-                Text("Unified Inbox", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                NavigationDrawerItem(
-                    label = { Text("All Accounts") },
-                    selected = selectedAccountEmail == null,
-                    onClick = {
-                        viewModel.selectAccount("")
-                        backStack.reset(Route.MessageList)
-                        scope.launch { drawerState.close() }
-                    },
-                    icon = { IconInbox() },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                )
+                Column(Modifier.fillMaxHeight()) {
+                    // Scrollable section: header, accounts, folders, outbox.
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text("Unified Inbox", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                        NavigationDrawerItem(
+                            label = { Text("All Accounts") },
+                            selected = selectedAccountEmail == null,
+                            onClick = {
+                                viewModel.selectAccount("")
+                                backStack.reset(Route.MessageList)
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { IconInbox() },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
 
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
-                Text("Accounts", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                accounts.forEach { account ->
-                    NavigationDrawerItem(
-                        label = { Text(account.email) },
-                        selected = account.email == selectedAccountEmail,
-                        onClick = { 
-                            viewModel.selectAccount(account.email)
-                            backStack.reset(Route.MessageList)
-                            scope.launch { drawerState.close() }
-                        },
-                        icon = {
-                            Surface(
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                color = Color(account.getColor()),
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    IconMail(modifier = Modifier.size(16.dp), tint = Color.White)
-                                }
+                        Text("Accounts", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                        accounts.forEach { account ->
+                            NavigationDrawerItem(
+                                label = { Text(account.email) },
+                                selected = account.email == selectedAccountEmail,
+                                onClick = {
+                                    viewModel.selectAccount(account.email)
+                                    backStack.reset(Route.MessageList)
+                                    scope.launch { drawerState.close() }
+                                },
+                                icon = {
+                                    Surface(
+                                        shape = androidx.compose.foundation.shape.CircleShape,
+                                        color = Color(account.getColor()),
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            IconMail(modifier = Modifier.size(16.dp), tint = Color.White)
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                            )
+                        }
+                        NavigationDrawerItem(
+                            label = { Text("Add Account") },
+                            selected = false,
+                            onClick = {
+                                onAddAccount()
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { IconAdd() },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+
+                        if (selectedAccountEmail != null) {
+                            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                            Text("Folders", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+                            FolderList(folders, selectedFolderName ?: "INBOX") { folderName ->
+                                viewModel.selectFolder(folderName)
+                                backStack.reset(Route.MessageList)
+                                scope.launch { drawerState.close() }
                             }
+                        }
+
+                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        NavigationDrawerItem(
+                            label = {
+                                Text(
+                                    if (outbox.isEmpty()) "Outbox"
+                                    else "Outbox (${outbox.size})"
+                                )
+                            },
+                            selected = false,
+                            onClick = {
+                                backStack.add(Route.Outbox)
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { IconSend() },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+                    }
+
+                    // Pinned footer: logout stays visible no matter how long the list above is.
+                    HorizontalDivider()
+                    NavigationDrawerItem(
+                        label = { Text("Logout Current Account") },
+                        selected = false,
+                        onClick = {
+                            viewModel.logout(context)
+                            scope.launch { drawerState.close() }
                         },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                     )
                 }
-                NavigationDrawerItem(
-                    label = { Text("Add Account") },
-                    selected = false,
-                    onClick = { 
-                        onAddAccount()
-                        scope.launch { drawerState.close() }
-                    },
-                    icon = { IconAdd() },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                )
-
-                if (selectedAccountEmail != null) {
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text("Folders", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                    FolderList(folders, selectedFolderName ?: "INBOX") { folderName ->
-                        viewModel.selectFolder(folderName)
-                        backStack.reset(Route.MessageList)
-                        scope.launch { drawerState.close() }
-                    }
-                }
-
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                NavigationDrawerItem(
-                    label = {
-                        Text(
-                            if (outbox.isEmpty()) "Outbox"
-                            else "Outbox (${outbox.size})"
-                        )
-                    },
-                    selected = false,
-                    onClick = {
-                        backStack.add(Route.Outbox)
-                        scope.launch { drawerState.close() }
-                    },
-                    icon = { IconSend() },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                )
-
-                Spacer(Modifier.weight(1f))
-                NavigationDrawerItem(
-                    label = { Text("Logout Current Account") },
-                    selected = false,
-                    onClick = { 
-                        viewModel.logout(context)
-                        scope.launch { drawerState.close() }
-                    },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                )
             }
         }
     ) {
