@@ -80,10 +80,14 @@ fun MusicTabsScreen(
             }
         }
     ) { padding ->
+        // Inner pages each have their own Scaffold (ListPage owns a TopAppBar
+        // and consumes the top system inset). Only the BOTTOM space taken by
+        // this Scaffold's bottomBar needs to be forwarded — passing the full
+        // PaddingValues here was adding the status-bar inset twice and pushing
+        // the TopAppBar down.
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.padding(padding),
-            // Each page renders its own ListPage Scaffold (with TopAppBar + FAB).
+            modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
         ) { page ->
             when (page) {
                 0 -> HomeTabContent(backStack, viewModel, musicViewModel)
