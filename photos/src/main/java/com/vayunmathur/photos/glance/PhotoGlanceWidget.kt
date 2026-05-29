@@ -23,8 +23,8 @@ import androidx.glance.layout.Box
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.fillMaxSize
 import com.vayunmathur.library.widgets.DynamicThemeGlance
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.buildDatabase
+import com.vayunmathur.library.util.getAll
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoDatabase
 import kotlinx.coroutines.Dispatchers
@@ -34,8 +34,7 @@ class PhotoGlanceWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
 
         val db = context.buildDatabase<PhotoDatabase>()
-        val viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
-        val photos = viewModel.getAll<Photo>()
+        val photos = db.photoDao().getAll<Photo>()
 
         provideContent {
             var photo by remember(photos) { mutableStateOf(photos.filter{it.videoData == null}.randomOrNull()) }

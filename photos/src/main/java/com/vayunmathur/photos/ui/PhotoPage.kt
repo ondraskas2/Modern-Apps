@@ -64,9 +64,9 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconShare
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.photos.R
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.util.GalleryViewModel
 import com.vayunmathur.photos.util.PhotoMapViewModel
 import kotlin.math.absoluteValue
 import kotlin.time.Instant
@@ -79,8 +79,8 @@ import kotlinx.datetime.toLocalDateTime
 data class ZoomState(val scale: Float = 1f, val offset: Offset = Offset.Zero)
 
 @Composable
-fun PhotoPage(viewModel: DatabaseViewModel, photoMapViewModel: PhotoMapViewModel, id: Long, overridePhotosList: List<Photo>?) {
-    val photosAll by viewModel.data<Photo>().collectAsState(initial = emptyList())
+fun PhotoPage(galleryViewModel: GalleryViewModel, photoMapViewModel: PhotoMapViewModel, id: Long, overridePhotosList: List<Photo>?) {
+    val photosAll by galleryViewModel.photos.collectAsState()
     val photos = overridePhotosList ?: photosAll
     val context = LocalContext.current
     val photosSorted = remember(photos) { photos.sortedByDescending { it.date } }

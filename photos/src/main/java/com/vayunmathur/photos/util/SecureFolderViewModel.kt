@@ -10,15 +10,21 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.room.migration.Migration
 import com.vayunmathur.library.biometric.unlockDatabaseWithBiometrics
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.data.VaultDatabase
 import com.vayunmathur.photos.data.VaultPhoto
+import com.vayunmathur.photos.data.VaultPhotoDao
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,22 +33,28 @@ import kotlinx.coroutines.withContext
  * ViewModel for the Secure Folder (encrypted vault) feature.
  *
  * Owns:
- *  - vault biometric unlock + lazy DatabaseViewModel creation
+ *  - vault biometric unlock + lazy [VaultPhotoDao] creation
+ *  - the observable list of [VaultPhoto]s (DAO Flow, switched on unlock)
  *  - decrypted-thumbnail bitmap cache (LRU, bounded)
  *  - encrypt/move and decrypt/restore operations off the main thread
  *
  * Bitmaps are recycled in [onCleared] to release native memory promptly.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class SecureFolderViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _vaultViewModel = MutableStateFlow<DatabaseViewModel?>(null)
-    val vaultViewModel: StateFlow<DatabaseViewModel?> = _vaultViewModel.asStateFlow()
+    private val _vaultPhotoDao = MutableStateFlow<VaultPhotoDao?>(null)
+    val vaultPhotoDao: StateFlow<VaultPhotoDao?> = _vaultPhotoDao.asStateFlow()
 
     private val _vaultPassword = MutableStateFlow<String?>(null)
     val vaultPassword: StateFlow<String?> = _vaultPassword.asStateFlow()
 
     private val _selectedIds = MutableStateFlow<Set<Long>>(emptySet())
     val selectedIds: StateFlow<Set<Long>> = _selectedIds.asStateFlow()
+
+    val photos: StateFlow<List<VaultPhoto>> = _vaultPhotoDao
+        .flatMapLatest { dao -> dao?.getAllFlow() ?: flowOf(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val sfm: SecureFolderManager by lazy { SecureFolderManager(application) }
 
@@ -62,27 +74,28 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
     private val _thumbnails = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
     val thumbnails: StateFlow<Map<String, Bitmap>> = _thumbnails.asStateFlow()
 
-    fun setVault(viewModel: DatabaseViewModel, password: String) {
-        _vaultViewModel.value = viewModel
+    fun setVault(dao: VaultPhotoDao, password: String) {
+        _vaultPhotoDao.value = dao
         _vaultPassword.value = password
     }
 
     fun unlock(
         activity: FragmentActivity,
-        onSuccess: (DatabaseViewModel, String) -> Unit = { _, _ -> },
+        onSuccess: (VaultPhotoDao, String) -> Unit = { _, _ -> },
         onFailure: () -> Unit = {},
     ) {
-        if (_vaultViewModel.value != null) {
-            onSuccess(_vaultViewModel.value!!, _vaultPassword.value!!)
+        val existingDao = _vaultPhotoDao.value
+        if (existingDao != null) {
+            onSuccess(existingDao, _vaultPassword.value!!)
             return
         }
         unlockDatabaseWithBiometrics(
             activity,
             onSuccess = { password ->
                 val db = activity.buildDatabase<VaultDatabase>(emptyList<Migration>(), password, "vault-db")
-                val vvm = DatabaseViewModel(db, VaultPhoto::class to db.vaultPhotoDao())
-                setVault(vvm, password)
-                onSuccess(vvm, password)
+                val dao = db.vaultPhotoDao()
+                setVault(dao, password)
+                onSuccess(dao, password)
             },
             onFailure = onFailure,
         )
@@ -139,14 +152,16 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
      * matching VaultPhoto rows. Errors per photo are swallowed (mirrors
      * the existing UI behaviour).
      */
-    fun restorePhotos(photos: List<VaultPhoto>, vault: DatabaseViewModel, password: String) {
+    fun restorePhotos(photos: List<VaultPhoto>) {
         if (photos.isEmpty()) return
+        val vaultDao = _vaultPhotoDao.value ?: return
+        val password = _vaultPassword.value ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 photos.forEach { photo ->
                     val restored = sfm.decryptAndRestore(photo, password)
                     if (restored != null) {
-                        vault.delete(photo)
+                        vaultDao.delete(photo)
                     }
                 }
                 clearSelection()
@@ -163,12 +178,12 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
      */
     fun moveToSecure(
         photos: List<Photo>,
-        sourceViewModel: DatabaseViewModel,
-        vault: DatabaseViewModel,
-        password: String,
+        sourcePhotoDao: PhotoDao,
         onSuccess: (List<android.net.Uri>) -> Unit,
     ) {
         if (photos.isEmpty()) return
+        val vaultDao = _vaultPhotoDao.value ?: return
+        val password = _vaultPassword.value ?: return
         viewModelScope.launch {
             val urisToDelete = withContext(Dispatchers.IO) {
                 val collected = mutableListOf<android.net.Uri>()
@@ -179,7 +194,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
                             photo.name,
                             password,
                         )
-                        vault.upsert(
+                        vaultDao.upsert(
                             VaultPhoto(
                                 name = photo.name,
                                 path = path,
@@ -192,7 +207,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
                             )
                         )
                         collected.add(android.net.Uri.parse(photo.uri))
-                        sourceViewModel.delete(photo)
+                        sourcePhotoDao.delete(photo)
                     } catch (e: Exception) {
                         Log.e(TAG, "encryptAndMove failed for ${photo.uri}", e)
                     }

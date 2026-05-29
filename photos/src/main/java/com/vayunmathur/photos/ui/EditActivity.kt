@@ -14,20 +14,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.vayunmathur.library.ui.DynamicTheme
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.DialogPage
 import com.vayunmathur.library.util.MainNavigation
 import com.vayunmathur.library.util.buildDatabase
+import com.vayunmathur.library.util.getAll
 import com.vayunmathur.library.util.rememberNavBackStack
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.data.PhotoDatabase
 import com.vayunmathur.photos.util.PhotoEditViewModel
 import com.vayunmathur.photos.util.PhotoEditViewModelFactory
 
 class EditActivity : ComponentActivity() {
-    private lateinit var viewModel: DatabaseViewModel
+    private lateinit var photoDao: PhotoDao
     private val photoEditViewModel: PhotoEditViewModel by viewModels {
-        PhotoEditViewModelFactory(application, viewModel)
+        PhotoEditViewModelFactory(application)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,7 +36,7 @@ class EditActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val db = buildDatabase<PhotoDatabase>()
-        viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
+        photoDao = db.photoDao()
 
         setContent {
             DynamicTheme {
@@ -46,7 +47,7 @@ class EditActivity : ComponentActivity() {
                     if (photoId == -1L && (intent.action == Intent.ACTION_EDIT || intent.action == Intent.ACTION_VIEW)) {
                         intent.data?.let { uri ->
                             val uriString = uri.toString()
-                            val existing = viewModel.getAll<Photo>("uri = '$uriString'")
+                            val existing = photoDao.getAll<Photo>("uri = '$uriString'")
                             if (existing.isNotEmpty()) {
                                 photoId = existing.first().id
                             } else {
@@ -60,7 +61,7 @@ class EditActivity : ComponentActivity() {
                 }
 
                 if (photoId != -1L || photoUri != null) {
-                    EditNavigation(viewModel, photoEditViewModel, photoId, photoUri)
+                    EditNavigation(photoDao, photoEditViewModel, photoId, photoUri)
                 }
             }
         }
@@ -69,7 +70,7 @@ class EditActivity : ComponentActivity() {
 
 @Composable
 fun EditNavigation(
-    viewModel: DatabaseViewModel,
+    photoDao: PhotoDao,
     photoEditViewModel: PhotoEditViewModel,
     photoId: Long,
     photoUri: String?,
@@ -77,7 +78,7 @@ fun EditNavigation(
     val backStack = rememberNavBackStack<EditRoute>(EditRoute.EditPhoto(photoId, photoUri))
     MainNavigation(backStack) {
         entry<EditRoute.EditPhoto> {
-            EditPhotoPage(backStack, viewModel, photoEditViewModel, it.id, it.uri)
+            EditPhotoPage(backStack, photoDao, photoEditViewModel, it.id, it.uri)
         }
 
         entry<EditRoute.DrawingSettings>(DialogPage()) {

@@ -43,7 +43,6 @@ import androidx.fragment.app.FragmentActivity
 import androidx.compose.ui.platform.LocalContext
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconDelete
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.LocalColumnCount
 import com.vayunmathur.photos.NavigationBar
@@ -65,11 +64,10 @@ import com.vayunmathur.library.R as LibraryR
 @Composable
 fun GalleryPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
     galleryViewModel: GalleryViewModel,
     secureFolderViewModel: SecureFolderViewModel,
 ) {
-    val allPhotos by viewModel.data<Photo>().collectAsState()
+    val allPhotos by galleryViewModel.photos.collectAsState()
     val photos by remember { derivedStateOf { allPhotos.filter { !it.isTrashed } } }
     val context = LocalContext.current
     var columnCount by LocalColumnCount.current
@@ -102,12 +100,10 @@ fun GalleryPage(
         val selectedPhotos = photos.filter { it.id in selectedIds }
         secureFolderViewModel.unlock(
             activity,
-            onSuccess = { vvm, password ->
+            onSuccess = { _, _ ->
                 secureFolderViewModel.moveToSecure(
                     photos = selectedPhotos,
-                    sourceViewModel = viewModel,
-                    vault = vvm,
-                    password = password,
+                    sourcePhotoDao = galleryViewModel.photoDao,
                 ) { urisToDelete ->
                     val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, urisToDelete)
                     moveLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())

@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.library.util.DataStoreUtils
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoDao
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +28,7 @@ import kotlinx.coroutines.withContext
  * ViewModel for the photos gallery screen.
  *
  * Owns:
+ *  - the observable list of [Photo]s (backed by the DAO Flow)
  *  - OCR search query and asynchronously fetched search results
  *  - multi-select state (set of photo ids)
  *  - OCR feature-enabled flag (DataStore) and OCR progress counters (Flow)
@@ -37,11 +37,13 @@ import kotlinx.coroutines.withContext
 @OptIn(FlowPreview::class)
 class GalleryViewModel(
     application: Application,
-    private val databaseViewModel: DatabaseViewModel,
+    val photoDao: PhotoDao,
 ) : AndroidViewModel(application) {
 
-    private val photoDao: PhotoDao get() = databaseViewModel.getDao<Photo>() as PhotoDao
     private val dataStore: DataStoreUtils = DataStoreUtils.getInstance(application)
+
+    val photos: StateFlow<List<Photo>> = photoDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -114,6 +116,12 @@ class GalleryViewModel(
         }
     }
 
+    fun deletePhoto(photo: Photo) {
+        viewModelScope.launch(Dispatchers.IO) {
+            photoDao.delete(photo)
+        }
+    }
+
     fun runSync() {
         SyncWorker.runOnce(getApplication())
     }
@@ -129,13 +137,13 @@ class GalleryViewModel(
 
 class GalleryViewModelFactory(
     private val application: Application,
-    private val databaseViewModel: DatabaseViewModel,
+    private val photoDao: PhotoDao,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(GalleryViewModel::class.java)) {
             "Unexpected ViewModel class: $modelClass"
         }
-        return GalleryViewModel(application, databaseViewModel) as T
+        return GalleryViewModel(application, photoDao) as T
     }
 }

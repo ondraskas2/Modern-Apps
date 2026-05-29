@@ -9,6 +9,12 @@ import com.vayunmathur.library.util.TrueDao
 
 @Dao
 interface PhotoDao: TrueDao<Photo> {
+    @Query("SELECT * FROM Photo")
+    fun getAllFlow(): kotlinx.coroutines.flow.Flow<List<Photo>>
+
+    @Query("SELECT * FROM Photo WHERE id = :id")
+    fun getByIdFlow(id: Long): kotlinx.coroutines.flow.Flow<Photo?>
+
     @Query("DELETE FROM Photo WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>)
 

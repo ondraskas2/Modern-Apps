@@ -47,7 +47,6 @@ import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconUnarchive
 import com.vayunmathur.library.ui.BackupButtons
 import java.io.File
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.LocalColumnCount
 import com.vayunmathur.photos.NavigationBar
@@ -61,11 +60,10 @@ import kotlin.math.roundToInt
 @Composable
 fun SecureFolderPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
     password: String,
     secureFolderViewModel: SecureFolderViewModel,
 ) {
-    val photos by viewModel.data<VaultPhoto>().collectAsState()
+    val photos by secureFolderViewModel.photos.collectAsState()
     val context = LocalContext.current
     var columnCount by LocalColumnCount.current
     val selectedIds by secureFolderViewModel.selectedIds.collectAsState()
@@ -92,7 +90,7 @@ fun SecureFolderPage(
                     if (isSelectionMode) {
                         IconButton(onClick = {
                             val selectedPhotos = photos.filter { it.id in selectedIds }
-                            secureFolderViewModel.restorePhotos(selectedPhotos, viewModel, password)
+                            secureFolderViewModel.restorePhotos(selectedPhotos)
                         }) {
                             IconUnarchive()
                         }

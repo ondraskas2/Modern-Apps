@@ -15,7 +15,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.photos.data.Drawing
 import com.vayunmathur.photos.data.DrawingTool
 import com.vayunmathur.photos.data.Photo
@@ -44,7 +43,6 @@ import kotlin.math.roundToInt
  */
 class PhotoEditViewModel(
     application: Application,
-    @Suppress("unused") private val databaseViewModel: DatabaseViewModel,
 ) : AndroidViewModel(application) {
 
     private val _originalBitmap = MutableStateFlow<Bitmap?>(null)
@@ -309,13 +307,12 @@ class PhotoEditViewModel(
 
 class PhotoEditViewModelFactory(
     private val application: Application,
-    private val databaseViewModel: DatabaseViewModel,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(PhotoEditViewModel::class.java)) {
             "Unexpected ViewModel class: $modelClass"
         }
-        return PhotoEditViewModel(application, databaseViewModel) as T
+        return PhotoEditViewModel(application) as T
     }
 }

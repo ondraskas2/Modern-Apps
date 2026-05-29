@@ -86,10 +86,10 @@ import com.vayunmathur.library.ui.IconRotateRight
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconUndo
 import com.vayunmathur.library.ui.IconVisible
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.R
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.util.PhotoEditViewModel
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -119,13 +119,13 @@ fun Drawing.computeBoundingBox(width: Float, height: Float): Rect {
 @Composable
 fun EditPhotoPage(
     backStack: NavBackStack<EditRoute>,
-    viewModel: DatabaseViewModel,
+    photoDao: PhotoDao,
     photoEditViewModel: PhotoEditViewModel,
     id: Long,
     initialUri: String? = null
 ) {
     val context = LocalActivity.current!!
-    val photoFromDb by viewModel.getNullable<Photo>(id)
+    val photoFromDb by photoDao.getByIdFlow(id).collectAsState(initial = null)
     val photo = remember(photoFromDb, initialUri) {
         photoFromDb ?: initialUri?.let { uri ->
             Photo(

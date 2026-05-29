@@ -31,13 +31,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.fragment.app.FragmentActivity
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.PermissionsChecker
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.MainNavigation
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.library.util.rememberNavBackStack
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.data.PhotoDatabase
 import com.vayunmathur.photos.ui.GalleryPage
 import com.vayunmathur.photos.ui.MapPage
@@ -59,10 +59,10 @@ val LocalColumnCount = staticCompositionLocalOf<MutableFloatState> {
 }
 
 class MainActivity : FragmentActivity() {
-    private lateinit var viewModel: DatabaseViewModel
+    private lateinit var photoDao: PhotoDao
 
     private val galleryViewModel: GalleryViewModel by viewModels {
-        GalleryViewModelFactory(application, viewModel)
+        GalleryViewModelFactory(application, photoDao)
     }
     private val photoMapViewModel: PhotoMapViewModel by viewModels {
         PhotoMapViewModelFactory(application)
@@ -75,7 +75,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val db = buildDatabase<PhotoDatabase>()
-        viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
+        photoDao = db.photoDao()
         ImageLoader.init(this)
         setContent {
             DynamicTheme {
@@ -89,7 +89,7 @@ class MainActivity : FragmentActivity() {
                                 Manifest.permission.ACCESS_MEDIA_LOCATION
                             ), getString(R.string.grant_image_video_permissions)
                         ) {
-                            Navigation(viewModel, galleryViewModel, photoMapViewModel, secureFolderViewModel)
+                            Navigation(galleryViewModel, photoMapViewModel, secureFolderViewModel)
                         }
                     } else {
                         PermissionsChecker(
@@ -97,7 +97,7 @@ class MainActivity : FragmentActivity() {
                                 Manifest.permission.READ_EXTERNAL_STORAGE
                             ), getString(R.string.grant_storage_permission)
                         ) {
-                            Navigation(viewModel, galleryViewModel, photoMapViewModel, secureFolderViewModel)
+                            Navigation(galleryViewModel, photoMapViewModel, secureFolderViewModel)
                         }
                     }
                 }
@@ -126,34 +126,33 @@ sealed interface Route: NavKey {
 
 @Composable
 fun Navigation(
-    viewModel: DatabaseViewModel,
     galleryViewModel: GalleryViewModel,
     photoMapViewModel: PhotoMapViewModel,
     secureFolderViewModel: SecureFolderViewModel,
 ) {
     val backStack = rememberNavBackStack<Route>(Route.Gallery)
-    val vaultViewModel by secureFolderViewModel.vaultViewModel.collectAsState()
+    val vaultPhotoDao by secureFolderViewModel.vaultPhotoDao.collectAsState()
     val vaultPassword by secureFolderViewModel.vaultPassword.collectAsState()
 
     MainNavigation(backStack) {
         entry<Route.Gallery> {
-            GalleryPage(backStack, viewModel, galleryViewModel, secureFolderViewModel)
+            GalleryPage(backStack, galleryViewModel, secureFolderViewModel)
         }
 
         entry<Route.Map> {
-            MapPage(backStack, viewModel, photoMapViewModel)
+            MapPage(backStack, galleryViewModel, photoMapViewModel)
         }
 
         entry<Route.PhotoPage> {
-            PhotoPage(viewModel, photoMapViewModel, it.id, it.overridePhotosList)
+            PhotoPage(galleryViewModel, photoMapViewModel, it.id, it.overridePhotosList)
         }
 
         entry<Route.Trash> {
-            TrashPage(backStack, viewModel)
+            TrashPage(backStack, galleryViewModel)
         }
 
         entry<Route.SecureFolder> {
-            SecureFolderEntry(backStack, secureFolderViewModel, vaultViewModel, vaultPassword)
+            SecureFolderEntry(backStack, secureFolderViewModel, vaultPhotoDao != null, vaultPassword)
         }
     }
 }
@@ -162,11 +161,11 @@ fun Navigation(
 private fun SecureFolderEntry(
     backStack: NavBackStack<Route>,
     secureFolderViewModel: SecureFolderViewModel,
-    vaultViewModel: DatabaseViewModel?,
+    isUnlocked: Boolean,
     vaultPassword: String?,
 ) {
     val activity = LocalContext.current as FragmentActivity
-    if (vaultViewModel == null) {
+    if (!isUnlocked) {
         LaunchedEffect(Unit) {
             secureFolderViewModel.unlock(
                 activity,
@@ -178,7 +177,7 @@ private fun SecureFolderEntry(
             CircularProgressIndicator()
         }
     } else {
-        SecureFolderPage(backStack, vaultViewModel, vaultPassword!!, secureFolderViewModel)
+        SecureFolderPage(backStack, vaultPassword!!, secureFolderViewModel)
     }
 }
 

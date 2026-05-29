@@ -35,11 +35,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.NavigationBar
 import com.vayunmathur.photos.Route
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.util.GalleryViewModel
 import com.vayunmathur.photos.util.ImageLoader
 import com.vayunmathur.photos.util.PhotoMapViewModel
 import kotlinx.coroutines.delay
@@ -60,10 +60,10 @@ data class MapCluster(
 @Composable
 fun MapPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
+    galleryViewModel: GalleryViewModel,
     photoMapViewModel: PhotoMapViewModel,
 ) {
-    val photos by viewModel.data<Photo>().collectAsState()
+    val photos by galleryViewModel.photos.collectAsState()
 
     // Prepare raw GPS positions
     val positions = remember(photos) {

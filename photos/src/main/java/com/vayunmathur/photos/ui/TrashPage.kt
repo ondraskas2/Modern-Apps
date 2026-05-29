@@ -44,12 +44,12 @@ import androidx.core.net.toUri
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconUnarchive
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.LocalColumnCount
 import com.vayunmathur.photos.NavigationBar
 import com.vayunmathur.photos.Route
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.util.GalleryViewModel
 import com.vayunmathur.photos.util.ImageLoader
 import com.vayunmathur.photos.util.SyncWorker
 import kotlinx.datetime.LocalDate
@@ -61,8 +61,8 @@ import kotlin.time.Instant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrashPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
-    val allPhotos by viewModel.data<Photo>().collectAsState()
+fun TrashPage(backStack: NavBackStack<Route>, galleryViewModel: GalleryViewModel) {
+    val allPhotos by galleryViewModel.photos.collectAsState()
     val trashedPhotos by remember { derivedStateOf { allPhotos.filter { it.isTrashed } } }
     val context = LocalContext.current
     val resources = LocalResources.current
