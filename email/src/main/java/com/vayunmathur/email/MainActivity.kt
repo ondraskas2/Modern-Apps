@@ -61,6 +61,10 @@ class MainActivity : ComponentActivity() {
         // Wake the outbox sender on every cold start: if the process was killed
         // between scheduled retries, this is what gets it going again.
         com.vayunmathur.email.data.OutboxSendWorker.runNow(this)
+        // Kick the IMAP IDLE service so we get push notifications even when the
+        // app is in the background. The service is a no-op if there are no
+        // accounts yet (it'll just stopSelf).
+        com.vayunmathur.email.data.ImapIdleService.start(this)
         // Android 13+: request POST_NOTIFICATIONS so new-mail alerts can be shown.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -177,6 +181,8 @@ class MainActivity : ComponentActivity() {
                         
                         EmailSyncWorker.schedulePeriodicSync(this@MainActivity)
                         EmailSyncWorker.runOneOffSync(this@MainActivity)
+                        // (Re)start IDLE now that we have at least one account.
+                        com.vayunmathur.email.data.ImapIdleService.start(this@MainActivity)
                     } else {
                         val errorText = httpResponse.bodyAsText()
                         android.util.Log.e("OAuthError", "Failed to exchange code: $errorText")

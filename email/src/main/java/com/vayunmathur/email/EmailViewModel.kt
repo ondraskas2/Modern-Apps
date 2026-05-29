@@ -148,6 +148,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining.isEmpty()) {
                 _selectedAccountEmail.value = null
                 EmailSyncWorker.cancelSync(context)
+                com.vayunmathur.email.data.ImapIdleService.stop(context)
             } else {
                 _selectedAccountEmail.value = remaining.first().email
             }
