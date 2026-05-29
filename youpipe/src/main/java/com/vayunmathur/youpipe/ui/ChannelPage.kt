@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,10 +39,8 @@ import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.vayunmathur.library.ui.invisibleClickable
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.HistoryVideo
 import com.vayunmathur.youpipe.data.Subscription
 import com.vayunmathur.youpipe.util.YouPipeViewModel
 import kotlinx.serialization.Serializable
@@ -61,18 +60,17 @@ data class VideoInfo(val name: String, val videoID: Long, val duration: Long, va
 @Composable
 fun ChannelPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
-    ypvm: YouPipeViewModel,
+    youPipeViewModel: YouPipeViewModel,
     channelID: String,
 ) {
-    val channelState by ypvm.channelState.collectAsState()
+    val channelState by youPipeViewModel.channelState.collectAsState()
     val videos = channelState.videos
     val channelInfo = channelState.info
 
-    val subscriptions by viewModel.data<Subscription>().collectAsState()
+    val subscriptions by youPipeViewModel.subscriptions.collectAsState()
 
     LaunchedEffect(channelID) {
-        ypvm.loadChannel(channelID)
+        youPipeViewModel.loadChannel(channelID)
     }
 
     Scaffold { paddingValues ->
@@ -82,13 +80,13 @@ fun ChannelPage(
                 val existingSubscription = subscriptions.firstOrNull { it.channelID == info.channelID }
                 if(existingSubscription == null) {
                     Button({
-                        viewModel.upsertAsync(Subscription(name = info.name, channelID = info.channelID, avatarURL = info.avatar))
+                        youPipeViewModel.upsertSubscription(Subscription(name = info.name, channelID = info.channelID, avatarURL = info.avatar))
                     }, Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
                         Text(stringResource(R.string.action_subscribe))
                     }
                 } else {
                     OutlinedButton({
-                        viewModel.delete(existingSubscription)
+                        youPipeViewModel.deleteSubscription(existingSubscription)
                     }, Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
                         Text(stringResource(R.string.action_unsubscribe))
                     }
@@ -98,7 +96,7 @@ fun ChannelPage(
             }
             LazyColumn {
                 items(videos, {it.videoID}) {
-                    VideoItem(backStack, viewModel, it, false)
+                    VideoItem(backStack, youPipeViewModel, it, false)
                 }
             }
         }
@@ -108,7 +106,7 @@ fun ChannelPage(
 @Composable
 fun VideoItem(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
+    youPipeViewModel: YouPipeViewModel,
     videoInfo: VideoInfo,
     showAuthor: Boolean,
     modifier: Modifier = Modifier,
@@ -116,7 +114,8 @@ fun VideoItem(
     backupOnClick: Boolean = true,
 ) {
     val context = LocalContext.current
-    val historyItem by viewModel.getNullable<HistoryVideo>(videoInfo.videoID)
+    val historyFlow = remember(videoInfo.videoID) { youPipeViewModel.historyById(videoInfo.videoID) }
+    val historyItem by historyFlow.collectAsState(initial = null)
     val timeWatched = historyItem?.progress ?: 0
     val percentWatched = timeWatched.toDouble() / videoInfo.duration.toDouble()
     

@@ -27,26 +27,22 @@ import coil.request.ImageRequest
 import com.vayunmathur.library.ui.IconAdd
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.util.BottomNavBar
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.Subscription
-import com.vayunmathur.youpipe.data.SubscriptionCategory
 import com.vayunmathur.youpipe.util.YouPipeViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubscriptionsPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
-    ypvm: YouPipeViewModel,
+    youPipeViewModel: YouPipeViewModel,
 ) {
-    val subscriptions by viewModel.data<Subscription>().collectAsState()
-    val subscriptionCategoryPairs by viewModel.data<SubscriptionCategory>().collectAsState()
+    val subscriptions by youPipeViewModel.subscriptions.collectAsState()
+    val subscriptionCategoryPairs by youPipeViewModel.subscriptionCategories.collectAsState()
     val categories = subscriptionCategoryPairs.map { it.category }.distinct()
-    val fetchProgress by ypvm.fetchProgress.collectAsState()
+    val fetchProgress by youPipeViewModel.fetchProgress.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
 
     Scaffold(topBar = {

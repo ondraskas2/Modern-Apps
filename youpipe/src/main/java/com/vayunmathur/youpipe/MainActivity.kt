@@ -22,18 +22,11 @@ import androidx.core.util.Consumer
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.BottomBarItem
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.DialogPage
 import com.vayunmathur.library.util.MainNavigation
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.library.util.rememberNavBackStack
-import com.vayunmathur.youpipe.data.HistoryVideo
-import com.vayunmathur.youpipe.data.Subscription
-import com.vayunmathur.youpipe.data.SubscriptionCategory
 import com.vayunmathur.youpipe.data.SubscriptionDatabase
-import com.vayunmathur.youpipe.data.MIGRATION_1_2
-import com.vayunmathur.youpipe.data.SubscriptionVideo
-import com.vayunmathur.youpipe.data.DownloadedVideo
 import com.vayunmathur.youpipe.ui.ChannelPage
 import com.vayunmathur.youpipe.ui.DownloadedVideosPage
 import com.vayunmathur.youpipe.ui.HistoryPage
@@ -46,8 +39,6 @@ import com.vayunmathur.youpipe.ui.SubscriptionVideosPage
 import com.vayunmathur.youpipe.ui.SubscriptionsPage
 import com.vayunmathur.youpipe.ui.VideoPage
 import com.vayunmathur.youpipe.ui.dialogs.CreateSubscriptionCategory
-import com.vayunmathur.youpipe.util.setupHourlyTask
-import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import com.vayunmathur.youpipe.util.videoURLtoID
 
@@ -79,28 +70,27 @@ fun rememberIsInPipMode(): Boolean {
 
 
 class MainActivity : ComponentActivity() {
-    private lateinit var viewModel: DatabaseViewModel
     private val youPipeViewModel: YouPipeViewModel by viewModels {
-        YouPipeViewModelFactory(application, viewModel)
+        val db = buildDatabase<SubscriptionDatabase>()
+        YouPipeViewModelFactory(
+            application,
+            db.subscriptionDao(),
+            db.subscriptionCategoryDao(),
+            db.subscriptionVideoDao(),
+            db.historyVideoDao(),
+            db.downloadedVideoDao(),
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val db = buildDatabase<SubscriptionDatabase>()
-        viewModel = DatabaseViewModel(db,
-            Subscription::class to db.subscriptionDao(),
-            SubscriptionVideo::class to db.subscriptionVideoDao(),
-            HistoryVideo::class to db.historyVideoDao(),
-            SubscriptionCategory::class to db.subscriptionCategoryDao(),
-            DownloadedVideo::class to db.downloadedVideoDao()
-        )
         // Touch the VM so its init { setupHourlyTask(...) } runs at startup
         // (replaces the previous LaunchedEffect(Unit) in setContent).
         youPipeViewModel
         setContent {
             DynamicTheme {
-                Navigation(getRoute(intent.data), viewModel, youPipeViewModel)
+                Navigation(getRoute(intent.data), youPipeViewModel)
             }
         }
     }
@@ -167,35 +157,35 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(initialRoute: Route, viewModel: DatabaseViewModel, ypvm: YouPipeViewModel) {
+fun Navigation(initialRoute: Route, ypvm: YouPipeViewModel) {
     val backStack = rememberNavBackStack(initialRoute)
     MainNavigation(backStack) {
         entry<Route.SearchPage> {
-            SearchPage(backStack, viewModel, ypvm)
+            SearchPage(backStack, ypvm)
         }
         entry<Route.VideoPage> {
-            VideoPage(backStack, viewModel, ypvm, it.videoID)
+            VideoPage(backStack, ypvm, it.videoID)
         }
         entry<Route.ChannelPage> {
-            ChannelPage(backStack, viewModel, ypvm, it.channelID)
+            ChannelPage(backStack, ypvm, it.channelID)
         }
         entry<Route.SubscriptionsPage> {
-            SubscriptionsPage(backStack, viewModel, ypvm)
+            SubscriptionsPage(backStack, ypvm)
         }
         entry<Route.SubscriptionVideosPage> {
-            SubscriptionVideosPage(backStack, viewModel, ypvm, it.category)
+            SubscriptionVideosPage(backStack, ypvm, it.category)
         }
         entry<Route.CreateSubscriptionCategory>(metadata = DialogPage()) {
-            CreateSubscriptionCategory(backStack, viewModel, it.id)
+            CreateSubscriptionCategory(backStack, ypvm, it.id)
         }
         entry<Route.History> {
-            HistoryPage(backStack, viewModel)
+            HistoryPage(backStack, ypvm)
         }
         entry<Route.Downloads> {
-            DownloadedVideosPage(backStack, viewModel)
+            DownloadedVideosPage(backStack, ypvm)
         }
         entry<Route.Settings> {
-            SettingsPage(backStack, viewModel, ypvm)
+            SettingsPage(backStack, ypvm)
         }
     }
 }

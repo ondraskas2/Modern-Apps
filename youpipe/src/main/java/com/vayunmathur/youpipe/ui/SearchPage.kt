@@ -29,7 +29,6 @@ import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.vayunmathur.library.util.BottomNavBar
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
@@ -38,19 +37,18 @@ import com.vayunmathur.youpipe.util.YouPipeViewModel
 @Composable
 fun SearchPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
-    ypvm: YouPipeViewModel,
+    youPipeViewModel: YouPipeViewModel,
 ) {
-    val searchQuery by ypvm.searchQuery.collectAsState()
-    val suggestions by ypvm.suggestions.collectAsState()
-    val searchResults by ypvm.searchResults.collectAsState()
+    val searchQuery by youPipeViewModel.searchQuery.collectAsState()
+    val suggestions by youPipeViewModel.suggestions.collectAsState()
+    val searchResults by youPipeViewModel.searchResults.collectAsState()
 
     fun submit() {
-        val watchID = ypvm.resolveWatchUrl()
+        val watchID = youPipeViewModel.resolveWatchUrl()
         if (watchID != null) {
             backStack.add(Route.VideoPage(watchID))
         } else {
-            ypvm.performSearch()
+            youPipeViewModel.performSearch()
         }
     }
 
@@ -58,7 +56,7 @@ fun SearchPage(
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp)) {
             TextField(
                 value = searchQuery,
-                onValueChange = { ypvm.setSearchQuery(it) },
+                onValueChange = { youPipeViewModel.setSearchQuery(it) },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.label_search)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -76,7 +74,7 @@ fun SearchPage(
                         }
                     }) { item ->
                         if (item is VideoInfo)
-                            VideoItem(backStack, viewModel, item, true)
+                            VideoItem(backStack, youPipeViewModel, item, true)
                         else if (item is ChannelInfo)
                             ChannelItem(backStack, item)
                     }
@@ -87,7 +85,7 @@ fun SearchPage(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    ypvm.setSearchQuery(suggestion)
+                                    youPipeViewModel.setSearchQuery(suggestion)
                                     submit()
                                 }
                                 .padding(12.dp)

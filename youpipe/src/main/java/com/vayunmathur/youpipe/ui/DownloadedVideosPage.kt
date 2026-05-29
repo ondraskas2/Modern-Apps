@@ -33,12 +33,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.BottomNavBar
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
-import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.DownloadedVideo
 import com.vayunmathur.youpipe.util.DownloadManager
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,8 +44,8 @@ import androidx.compose.ui.draw.clip
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun DownloadedVideosPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
-    val downloadedVideos by viewModel.data<DownloadedVideo>().collectAsState()
+fun DownloadedVideosPage(backStack: NavBackStack<Route>, youPipeViewModel: YouPipeViewModel) {
+    val downloadedVideos by youPipeViewModel.downloadedVideos.collectAsState()
     val activeDownloads by DownloadManager.activeDownloads.collectAsState()
     val downloads = downloadedVideos.sortedByDescending { it.timestamp }
 
@@ -67,7 +65,7 @@ fun DownloadedVideosPage(backStack: NavBackStack<Route>, viewModel: DatabaseView
                     if (isSelectionMode) {
                         IconButton(onClick = {
                             selectedIds.forEach { id ->
-                                downloadedVideos.find { it.id == id }?.let { viewModel.delete(it) }
+                                downloadedVideos.find { it.id == id }?.let { youPipeViewModel.deleteDownloadedVideo(it) }
                             }
                             selectedActiveIds.forEach { id ->
                                 DownloadManager.cancelDownload(context, id)
@@ -155,7 +153,7 @@ fun DownloadedVideosPage(backStack: NavBackStack<Route>, viewModel: DatabaseView
                     }
                     VideoItem(
                         backStack = backStack,
-                        viewModel = viewModel,
+                        youPipeViewModel = youPipeViewModel,
                         videoInfo = downloadItem.videoItem,
                         showAuthor = true,
                         modifier = Modifier.weight(1f).combinedClickable(

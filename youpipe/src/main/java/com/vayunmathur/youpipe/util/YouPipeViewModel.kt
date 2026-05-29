@@ -11,10 +11,16 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.core.text.HtmlCompat
 import com.vayunmathur.library.util.DataStoreUtils
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.data.DownloadedVideo
+import com.vayunmathur.youpipe.data.DownloadedVideoDao
 import com.vayunmathur.youpipe.data.HistoryVideo
+import com.vayunmathur.youpipe.data.HistoryVideoDao
 import com.vayunmathur.youpipe.data.Subscription
+import com.vayunmathur.youpipe.data.SubscriptionCategory
+import com.vayunmathur.youpipe.data.SubscriptionCategoryDao
+import com.vayunmathur.youpipe.data.SubscriptionDao
+import com.vayunmathur.youpipe.data.SubscriptionVideo
+import com.vayunmathur.youpipe.data.SubscriptionVideoDao
 import com.vayunmathur.youpipe.ui.AudioStream
 import com.vayunmathur.youpipe.ui.ChannelInfo
 import com.vayunmathur.youpipe.ui.Comment
@@ -26,6 +32,7 @@ import com.vayunmathur.youpipe.ui.VideoStream
 import com.vayunmathur.youpipe.ui.fromHTML
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -61,16 +68,62 @@ import kotlin.time.toKotlinInstant
  *  - YouTube/NewPipe/Youpipe import/export pipelines and their progress state.
  *  - WorkManager subscription-fetch progress mirror.
  *  - One-time hourly subscription-fetch task setup.
- *
- * Composables retain UI-only state (PagerState, fullscreen booleans, dialog
- * visibility, MediaController/PlayerSurface, FocusRequester, etc.). The
- * shared [DatabaseViewModel] is injected so per-screen data CRUD continues to
- * flow through Room.
+ *  - All Room CRUD through directly-injected DAOs.
  */
 class YouPipeViewModel(
     application: Application,
-    private val databaseViewModel: DatabaseViewModel,
+    private val subscriptionDao: SubscriptionDao,
+    private val subscriptionCategoryDao: SubscriptionCategoryDao,
+    private val subscriptionVideoDao: SubscriptionVideoDao,
+    private val historyVideoDao: HistoryVideoDao,
+    private val downloadedVideoDao: DownloadedVideoDao,
 ) : AndroidViewModel(application) {
+
+    // ===================== Data StateFlows =====================
+
+    val subscriptions: StateFlow<List<Subscription>> = subscriptionDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val subscriptionCategories: StateFlow<List<SubscriptionCategory>> = subscriptionCategoryDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val subscriptionVideos: StateFlow<List<SubscriptionVideo>> = subscriptionVideoDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val historyVideos: StateFlow<List<HistoryVideo>> = historyVideoDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val downloadedVideos: StateFlow<List<DownloadedVideo>> = downloadedVideoDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ===================== By-id flows =====================
+
+    fun historyById(id: Long): Flow<HistoryVideo?> = historyVideoDao.getByIdFlow(id)
+    fun downloadedById(id: Long): Flow<DownloadedVideo?> = downloadedVideoDao.getByIdFlow(id)
+
+    // ===================== Mutations =====================
+
+    fun upsertSubscription(item: Subscription) {
+        viewModelScope.launch(Dispatchers.IO) { subscriptionDao.upsert(item) }
+    }
+
+    fun deleteSubscription(item: Subscription) {
+        viewModelScope.launch(Dispatchers.IO) { subscriptionDao.delete(item) }
+    }
+
+    fun upsertHistoryVideo(item: HistoryVideo) {
+        viewModelScope.launch(Dispatchers.IO) { historyVideoDao.upsert(item) }
+    }
+
+    fun deleteDownloadedVideo(item: DownloadedVideo) {
+        viewModelScope.launch(Dispatchers.IO) { downloadedVideoDao.delete(item) }
+    }
+
+    suspend fun replaceCategory(originalCategoryName: String?, categoryName: String, ids: List<Long>) {
+        withContext(Dispatchers.IO) {
+            subscriptionCategoryDao.replaceCategory(originalCategoryName, categoryName, ids)
+        }
+    }
 
     // ===================== Search =====================
 
@@ -392,7 +445,7 @@ class YouPipeViewModel(
             infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
                 ?.progress?.getFloat("progress", -1f) ?: -1f
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), -1f)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), -1f)
 
     // ===================== Settings: imports/exports =====================
 
@@ -405,7 +458,7 @@ class YouPipeViewModel(
     private val _sponsorBlockEnabled: StateFlow<Boolean> = DataStoreUtils
         .getInstance(application)
         .booleanFlow("sponsorblock_enabled")
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     val sponsorBlockEnabled: StateFlow<Boolean> = _sponsorBlockEnabled
 
     fun setSponsorBlockEnabled(enabled: Boolean) {
@@ -523,8 +576,8 @@ class YouPipeViewModel(
                     entry = zipInputStream.nextEntry
                 }
 
-                if (subs.isNotEmpty()) databaseViewModel.upsertAll(subs)
-                if (history.isNotEmpty()) databaseViewModel.upsertAll(history)
+                if (subs.isNotEmpty()) subscriptionDao.upsertAll(subs)
+                if (history.isNotEmpty()) historyVideoDao.upsertAll(history)
             } catch (e: Exception) {
                 Log.e(TAG, "Error importing YouTube Takeout", e)
             }
@@ -537,7 +590,7 @@ class YouPipeViewModel(
         val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val subs = databaseViewModel.getAll<Subscription>()
+                val subs = subscriptionDao.getAll()
                 val json = Json.encodeToString(subs)
                 ctx.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
             } catch (e: Exception) {
@@ -553,7 +606,8 @@ class YouPipeViewModel(
             try {
                 val json = ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText()
                 val subs = Json.decodeFromString<List<Subscription>>(json)
-                databaseViewModel.replaceAll(subs)
+                subscriptionDao.clearAll()
+                subscriptionDao.upsertAll(subs)
             } catch (e: Exception) {
                 Log.e(TAG, "Error restoring subscriptions", e)
             }
@@ -585,7 +639,8 @@ class YouPipeViewModel(
                         }
                         _importProgress.value = (index + 1).toFloat() / total
                     }
-                    databaseViewModel.replaceAll(subs)
+                    subscriptionDao.clearAll()
+                    subscriptionDao.upsertAll(subs)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error importing NewPipe subscriptions", e)
@@ -606,16 +661,27 @@ class YouPipeViewModel(
     }
 }
 
-/** Factory for constructing [YouPipeViewModel] with the shared [DatabaseViewModel]. */
+/** Factory for constructing [YouPipeViewModel] with the DAOs. */
 class YouPipeViewModelFactory(
     private val application: Application,
-    private val databaseViewModel: DatabaseViewModel,
+    private val subscriptionDao: SubscriptionDao,
+    private val subscriptionCategoryDao: SubscriptionCategoryDao,
+    private val subscriptionVideoDao: SubscriptionVideoDao,
+    private val historyVideoDao: HistoryVideoDao,
+    private val downloadedVideoDao: DownloadedVideoDao,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(YouPipeViewModel::class.java)) {
             "Unexpected ViewModel class: $modelClass"
         }
-        return YouPipeViewModel(application, databaseViewModel) as T
+        return YouPipeViewModel(
+            application,
+            subscriptionDao,
+            subscriptionCategoryDao,
+            subscriptionVideoDao,
+            historyVideoDao,
+            downloadedVideoDao,
+        ) as T
     }
 }

@@ -15,25 +15,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.BottomNavBar
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.Subscription
-import com.vayunmathur.youpipe.data.SubscriptionCategory
-import com.vayunmathur.youpipe.data.SubscriptionVideo
 import com.vayunmathur.youpipe.util.YouPipeViewModel
 
 @Composable
 fun SubscriptionVideosPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
-    ypvm: YouPipeViewModel,
+    youPipeViewModel: YouPipeViewModel,
     category: String?,
 ) {
-    val videos by viewModel.data<SubscriptionVideo>().collectAsState()
-    val subscriptions by viewModel.data<Subscription>().collectAsState()
-    val pairs by viewModel.data<SubscriptionCategory>().collectAsState()
-    val fetchProgress by ypvm.fetchProgress.collectAsState()
+    val videos by youPipeViewModel.subscriptionVideos.collectAsState()
+    val subscriptions by youPipeViewModel.subscriptions.collectAsState()
+    val pairs by youPipeViewModel.subscriptionCategories.collectAsState()
+    val fetchProgress by youPipeViewModel.fetchProgress.collectAsState()
 
     val subsInCategory = pairs.filter { it.category == category }.map { pair ->
         subscriptions.first { it.id == pair.subscriptionID }
@@ -55,7 +50,7 @@ fun SubscriptionVideosPage(
             items(videosInSubs.map {
                 VideoInfo(it.name, it.id, it.duration, it.views, it.uploadDate, it.thumbnailURL, it.author)
             }.sortedByDescending { it.uploadDate }) {
-                VideoItem(backStack, viewModel, it, true)
+                VideoItem(backStack, youPipeViewModel, it, true)
             }
         }
     }

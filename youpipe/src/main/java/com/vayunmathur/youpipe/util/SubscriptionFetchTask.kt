@@ -5,9 +5,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.youpipe.data.Subscription
 import com.vayunmathur.youpipe.data.SubscriptionDatabase
 import com.vayunmathur.youpipe.data.SubscriptionVideo
 import kotlin.time.Duration.Companion.minutes
@@ -23,14 +21,10 @@ class SubscriptionFetchTask(context: Context, params: WorkerParameters) :
         Log.d("SubscriptionFetchTask", "Starting...")
         return try {
             val db = applicationContext.buildDatabase<SubscriptionDatabase>()
-            val viewModel =
-                    DatabaseViewModel(
-                            db,
-                            Subscription::class to db.subscriptionDao(),
-                            SubscriptionVideo::class to db.subscriptionVideoDao()
-                    )
+            val subscriptionDao = db.subscriptionDao()
+            val subscriptionVideoDao = db.subscriptionVideoDao()
 
-            val subscriptions = viewModel.getAll<Subscription>()
+            val subscriptions = subscriptionDao.getAll()
             Log.d("SubscriptionFetchTask", "Fetched ${subscriptions.size} subscriptions")
 
             subscriptions.forEachIndexed { index, sub ->
@@ -55,7 +49,7 @@ class SubscriptionFetchTask(context: Context, params: WorkerParameters) :
                                 )
                             }
 
-                    viewModel.upsertAll(videosFromSub)
+                    subscriptionVideoDao.upsertAll(videosFromSub)
                 } catch (e: Exception) {
                     Log.e("SubscriptionFetchTask", "Failed to fetch videos for ${sub.name}", e)
                     if (e is java.nio.channels.UnresolvedAddressException ||

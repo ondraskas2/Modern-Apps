@@ -31,20 +31,16 @@ import androidx.compose.ui.res.stringResource
 import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.Subscription
-import com.vayunmathur.youpipe.data.SubscriptionCategory
-import com.vayunmathur.youpipe.data.SubscriptionCategoryDao
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CreateSubscriptionCategory(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, id: String?) {
-    val categoriesDao = viewModel.getDao<SubscriptionCategory>() as SubscriptionCategoryDao
-    val subscriptions by viewModel.data<Subscription>().collectAsState()
-    val categories by viewModel.data<SubscriptionCategory>().collectAsState()
+fun CreateSubscriptionCategory(backStack: NavBackStack<Route>, youPipeViewModel: YouPipeViewModel, id: String?) {
+    val subscriptions by youPipeViewModel.subscriptions.collectAsState()
+    val categories by youPipeViewModel.subscriptionCategories.collectAsState()
     val categoryNames = categories.map { it.category }
     var categoryName by remember { mutableStateOf(id?:"") }
     val subscriptionsAlreadyInCategory = categories.filter { it.category == categoryName }.map { it.subscriptionID }.map { id -> subscriptions.first { it.id == id } }
@@ -88,7 +84,7 @@ fun CreateSubscriptionCategory(backStack: NavBackStack<Route>, viewModel: Databa
                 Button(
                     {
                         coroutineScope.launch {
-                            categoriesDao.replaceCategory(
+                            youPipeViewModel.replaceCategory(
                                 id,
                                 categoryName,
                                 selectedSubscriptions.map { it.id })

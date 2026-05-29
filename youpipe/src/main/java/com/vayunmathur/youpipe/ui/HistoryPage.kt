@@ -15,15 +15,14 @@ import androidx.compose.ui.res.stringResource
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.library.util.BottomNavBar
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.data.HistoryVideo
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
-    val historyVideos by viewModel.data<HistoryVideo>().collectAsState()
+fun HistoryPage(backStack: NavBackStack<Route>, youPipeViewModel: YouPipeViewModel) {
+    val historyVideos by youPipeViewModel.historyVideos.collectAsState()
     val history = historyVideos.sortedByDescending { it.timestamp }
 
     Scaffold(topBar = {
@@ -31,7 +30,7 @@ fun HistoryPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
     }, bottomBar = { BottomNavBar(backStack, MAIN_BOTTOM_BAR_ITEMS, Route.History) }) {paddingValues ->
         LazyColumn(Modifier.padding(paddingValues)) {
             items(history, key = { it.id }) {historyItem ->
-                VideoItem(backStack, viewModel, historyItem.videoItem, true)
+                VideoItem(backStack, youPipeViewModel, historyItem.videoItem, true)
             }
         }
     }

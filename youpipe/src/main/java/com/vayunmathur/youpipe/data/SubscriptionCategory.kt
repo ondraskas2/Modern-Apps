@@ -9,6 +9,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.vayunmathur.library.util.DatabaseItem
 import com.vayunmathur.library.util.TrueDao
+import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -24,6 +25,12 @@ data class SubscriptionCategory(
 
 @Dao
 interface SubscriptionCategoryDao: TrueDao<SubscriptionCategory> {
+    @Query("SELECT * FROM SubscriptionCategory")
+    fun getAllFlow(): Flow<List<SubscriptionCategory>>
+
+    @Query("SELECT * FROM SubscriptionCategory WHERE id = :id")
+    fun getByIdFlow(id: Long): Flow<SubscriptionCategory?>
+
     @Query("DELETE FROM SubscriptionCategory WHERE category = :categoryName")
     suspend fun deleteCategory(categoryName: String)
 

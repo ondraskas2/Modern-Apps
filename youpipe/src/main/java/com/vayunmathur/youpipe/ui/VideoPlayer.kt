@@ -74,7 +74,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.google.common.util.concurrent.MoreExecutors
 import com.vayunmathur.library.ui.IconClose
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.data.HistoryVideo
 import com.vayunmathur.youpipe.findActivity
@@ -91,7 +90,6 @@ import androidx.compose.ui.geometry.Size
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayer(
-    viewModel: DatabaseViewModel,
     ypvm: YouPipeViewModel,
     videoInfo: VideoInfo,
     videoStreams: List<VideoStream>,
@@ -195,14 +193,15 @@ fun VideoPlayer(
                 }
 
                 if (player.isPlaying) {
-                    viewModel.upsertAsync(HistoryVideo.fromVideoData(videoInfo.copy(duration = duration), currentPosition))
+                    ypvm.upsertHistoryVideo(HistoryVideo.fromVideoData(videoInfo.copy(duration = duration), currentPosition))
                 }
             }
             delay(300)
         }
     }
 
-    val historyVideo by viewModel.getNullable<HistoryVideo>(videoInfo.videoID)
+    val historyFlow = remember(videoInfo.videoID) { ypvm.historyById(videoInfo.videoID) }
+    val historyVideo by historyFlow.collectAsState(initial = null)
     val timeWatched = historyVideo?.progress ?: 0
 
     // 3. Updated LaunchedEffect to pass audio URI through Metadata Extras

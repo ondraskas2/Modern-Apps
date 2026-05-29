@@ -62,7 +62,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.round
 import com.vayunmathur.youpipe.data.DownloadedVideo
 import com.vayunmathur.youpipe.util.DownloadManager
@@ -104,11 +103,11 @@ fun LockScreenOrientation(orientation: Int) {
 @Composable
 fun VideoPage(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
     ypvm: YouPipeViewModel,
     videoID: Long,
 ) {
-    val downloadedVideo by viewModel.getNullable<DownloadedVideo>(videoID)
+    val downloadedFlow = remember(videoID) { ypvm.downloadedById(videoID) }
+    val downloadedVideo by downloadedFlow.collectAsState(initial = null)
     val videoState by ypvm.videoState.collectAsState()
 
     LaunchedEffect(videoID) {
@@ -171,10 +170,10 @@ fun VideoPage(
         val modifier = if(isFullscreen) Modifier.padding(top = paddingValues.calculateTopPadding(), bottom = paddingValues.calculateBottomPadding()) else Modifier.padding(paddingValues)
         Column(modifier) {
             videoData?.let { videoData ->
-                VideoPlayer(viewModel, ypvm, VideoInfo(videoData.title, videoID, videoData.duration, videoData.views, videoData.uploadDate, videoData.thumbnailURL, videoData.author), videoStreams, audioStreams, segments, isFullscreen) {
+                VideoPlayer(ypvm, VideoInfo(videoData.title, videoID, videoData.duration, videoData.views, videoData.uploadDate, videoData.thumbnailURL, videoData.author), videoStreams, audioStreams, segments, isFullscreen) {
                     isFullscreen = it
                 }
-                VideoDetails(backStack, viewModel, videoData, videoID, videoStreams, audioStreams)
+                VideoDetails(backStack, ypvm, videoData, videoID, videoStreams, audioStreams)
 
                 if(!isFullscreen) {
                     val pagerState = rememberPagerState(pageCount = { 3 })
@@ -217,7 +216,7 @@ fun VideoPage(
                         ) { page ->
                             when (page) {
                                 0 -> CommentsSection(comments)
-                                1 -> RelatedVideosSection(backStack, viewModel, relatedVideos)
+                                1 -> RelatedVideosSection(backStack, ypvm, relatedVideos)
                                 2 -> DescriptionSection(videoData.description)
                             }
                         }
@@ -232,14 +231,15 @@ fun VideoPage(
 @Composable
 fun VideoDetails(
     backStack: NavBackStack<Route>,
-    viewModel: DatabaseViewModel,
+    ypvm: YouPipeViewModel,
     videoData: VideoData,
     videoID: Long,
     videoStreams: List<VideoStream>,
     audioStreams: List<AudioStream>
 ) {
     val context = LocalContext.current
-    val downloadedVideo by viewModel.getNullable<DownloadedVideo>(videoID)
+    val downloadedFlow = remember(videoID) { ypvm.downloadedById(videoID) }
+    val downloadedVideo by downloadedFlow.collectAsState(initial = null)
     val activeDownloads by DownloadManager.activeDownloads.collectAsState()
     val downloadProgress = activeDownloads[videoID]?.progress
 
@@ -417,7 +417,7 @@ fun VideoDetails(
                     }
                 } else {
                     IconButton(onClick = {
-                        viewModel.delete(downloadedVideo!!)
+                        ypvm.deleteDownloadedVideo(downloadedVideo!!)
                     }) {
                         Icon(
                             painterResource(com.vayunmathur.library.R.drawable.delete_24px),
@@ -441,10 +441,10 @@ fun DescriptionSection(description: String) {
 }
 
 @Composable
-fun RelatedVideosSection(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, relatedVideos: List<VideoInfo>) {
+fun RelatedVideosSection(backStack: NavBackStack<Route>, ypvm: YouPipeViewModel, relatedVideos: List<VideoInfo>) {
     LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(relatedVideos, { it.videoID }) {
-            VideoItem(backStack, viewModel, it, true)
+            VideoItem(backStack, ypvm, it, true)
         }
     }
 }
