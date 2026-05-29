@@ -143,9 +143,10 @@ fun MapPage(backStack: NavBackStack<Route>, viewModel: SelectedFeatureViewModel,
     // Inside MapPage
     var json by remember { mutableStateOf<String?>(null) }
 
-// Move heavy processing to a background thread
+    // Read the style asset on Dispatchers.IO (file open), then the hybrid
+    // patch step is light enough to stay on the same coroutine.
     LaunchedEffect(hybridUrl) {
-        val updatedStyle = withContext<String>(Dispatchers.Default) {
+        val updatedStyle = withContext<String>(Dispatchers.IO) {
             val rawStyle = context.assets.open("style.json").source().readLines().joinToString("\n")
             patchStyleForHybrid(
                 rawStyle,
