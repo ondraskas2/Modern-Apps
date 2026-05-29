@@ -36,13 +36,13 @@ class WordMakerViewModel(application: Application) : AndroidViewModel(applicatio
     private val dictionary = Dictionary()
 
     val currentLevel: StateFlow<Int> = levelDataStore.currentLevel
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 1)
 
     val foundWords: StateFlow<Set<String>> = levelDataStore.foundWords
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     val bonusWords: StateFlow<Set<String>> = levelDataStore.bonusWords
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     private val _crosswordData = MutableStateFlow<CrosswordData?>(null)
     val crosswordData: StateFlow<CrosswordData?> = _crosswordData.asStateFlow()
