@@ -414,6 +414,10 @@ fun CapturedPiecesRow(pieces: List<Piece>) {
     }
 }
 
+// File-scope so the chess board doesn't allocate 32 Color instances per recomposition.
+private val lightSquareColor = Color(0xFFBBBBBB)
+private val darkSquareColor = Color.Gray
+
 @Composable
 fun ChessBoard(
     viewModel: ChessViewModel,
@@ -438,7 +442,7 @@ fun ChessBoard(
                     val isSelected = selectedPiece?.let { it.row == i && it.col == j } ?: false
                     val isKingInCheckSquare =
                         isKingInCheck && piece?.type == PieceType.KING && piece.color == turn
-                    val color = if ((i + j) % 2 == 0) Color(0xFFBBBBBB) else Color.Gray
+                    val color = if ((i + j) % 2 == 0) lightSquareColor else darkSquareColor
 
                     Box(
                         modifier = Modifier
