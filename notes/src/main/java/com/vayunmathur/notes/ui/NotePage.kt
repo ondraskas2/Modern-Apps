@@ -1,8 +1,6 @@
 package com.vayunmathur.notes.ui
 
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +45,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconNavigation
@@ -56,15 +53,19 @@ import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.library.ui.IconVisible
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
-import com.vayunmathur.library.util.parseMarkdown
 import com.vayunmathur.library.R as LibraryR
 import com.vayunmathur.notes.Route
 import com.vayunmathur.notes.data.Note
-import java.io.File
+import com.vayunmathur.notes.util.NotesViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteID: Long) {
+fun NotePage(
+    backStack: NavBackStack<Route>,
+    viewModel: DatabaseViewModel,
+    notesViewModel: NotesViewModel,
+    noteID: Long,
+) {
     var note by viewModel.getEditable<Note>(noteID) { Note(0, "", "") }
 
     if (noteID != 0L && note.id == 0L) return
@@ -75,16 +76,9 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
     var searchIndex by remember { mutableIntStateOf(0) }
     val focusRequestor = remember { FocusRequester() }
 
-    val searchResultsCount by remember {
+    val searchResultsCount by remember(note.content, searchText) {
         derivedStateOf {
-            if (searchText.isEmpty()) 0
-            else {
-               val text = parseMarkdown(note.content, false, softWrap = false).text.lowercase()
-               var count = 0
-               var idx = text.indexOf(searchText.lowercase())
-               while(idx >= 0) { count++; idx = text.indexOf(searchText.lowercase(), idx + searchText.length) }
-               count
-            }
+            notesViewModel.searchResultsCount(note.content, searchText)
         }
     }
 
@@ -100,12 +94,19 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
 
     val context = LocalContext.current
 
+    LaunchedEffect(notesViewModel) {
+        notesViewModel.shareUris.collect { uri ->
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/markdown"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Share Note"))
+        }
+    }
+
     var contentValue by remember(noteID) {
-        mutableStateOf(
-            TextFieldValue(
-                parseMarkdown(note.content, process = false, softWrap = false)
-            )
-        )
+        mutableStateOf(TextFieldValue(notesViewModel.parseDisplay(note.content)))
     }
 
     Scaffold(topBar = {
@@ -151,14 +152,7 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
                     if (isEditing) IconVisible() else IconEdit()
                 }
                 IconButton({
-                    val fileUri = getTmpFileUri(context, note.title, note.content)
-
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/markdown"
-                        putExtra(Intent.EXTRA_STREAM, fileUri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    context.startActivity(Intent.createChooser(intent, "Share Note"))
+                    notesViewModel.requestShare(note.title, note.content)
                 }) {
                     IconShare()
                 }
@@ -219,12 +213,10 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
                 val noMarkers by remember(note.content, searchText, searchIndex, showSearchBar) {
                     derivedStateOf {
                         TextFieldValue(
-                            parseMarkdown(
+                            notesViewModel.parseDisplay(
                                 note.content,
-                                false,
-                                softWrap = false,
                                 searchQuery = if (showSearchBar) searchText else "",
-                                searchIndex = if (showSearchBar) searchIndex else -1
+                                searchIndex = if (showSearchBar) searchIndex else -1,
                             )
                         )
                     }
@@ -233,7 +225,7 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
                     if (isEditing) contentValue else noMarkers,
                     {
                         note = note.copy(content = it.text)
-                        contentValue = it.copy(annotatedString = parseMarkdown(it.text, process = false, softWrap = false))
+                        contentValue = it.copy(annotatedString = notesViewModel.parseDisplay(it.text))
                     },
                     Modifier.fillMaxSize(),
                     readOnly = !isEditing,
@@ -252,18 +244,4 @@ fun NotePage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, noteI
             }
         }
     }
-}
-
-fun getTmpFileUri(context: Context, fileName: String, content: String): Uri {
-    val cachePath = File(context.cacheDir, "shared_notes")
-    cachePath.mkdirs() // Create folder if it doesn't exist
-
-    val file = File(cachePath, "$fileName.md")
-    file.writeText(content) // Write your DB string to the file
-
-    return FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file
-    )
 }

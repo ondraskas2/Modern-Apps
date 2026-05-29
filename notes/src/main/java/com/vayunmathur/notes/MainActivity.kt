@@ -1,12 +1,11 @@
 package com.vayunmathur.notes
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -25,25 +24,30 @@ import com.vayunmathur.notes.data.Note
 import com.vayunmathur.notes.data.NoteDatabase
 import com.vayunmathur.notes.ui.NotePage
 import com.vayunmathur.notes.ui.NotesListPage
+import com.vayunmathur.notes.util.NotesViewModel
+import com.vayunmathur.notes.util.NotesViewModelFactory
 import kotlinx.serialization.Serializable
 
 class MainActivity : ComponentActivity() {
     private lateinit var viewModel: DatabaseViewModel
+    private val notesViewModel: NotesViewModel by viewModels {
+        NotesViewModelFactory(application, viewModel)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val db = buildDatabase<NoteDatabase>(dbName = "notes-db")
         viewModel = DatabaseViewModel(db, Note::class to db.noteDao())
-        
+
         handleIntent(intent)
 
         setContent {
             DynamicTheme {
                 Box(Modifier.fillMaxSize().onFileDrop { uris ->
-                    importFiles(uris)
+                    notesViewModel.importFiles(uris)
                 }) {
-                    Navigation(viewModel)
+                    Navigation(viewModel, notesViewModel)
                 }
             }
         }
@@ -58,20 +62,7 @@ class MainActivity : ComponentActivity() {
         intent?.let {
             val uris = IntentHelper.getUrisFromIntent(it)
             if (uris.isNotEmpty()) {
-                importFiles(uris)
-            }
-        }
-    }
-
-    private fun importFiles(uris: List<Uri>) {
-        uris.forEach { uri ->
-            try {
-                contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }?.let { content ->
-                    val fileName = IntentHelper.getFileName(this, uri) ?: "Imported Note"
-                    viewModel.upsertAsync(Note(0, fileName, content))
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Error importing file: $uri", e)
+                notesViewModel.importFiles(uris)
             }
         }
     }
@@ -86,14 +77,14 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(viewModel: DatabaseViewModel) {
+fun Navigation(viewModel: DatabaseViewModel, notesViewModel: NotesViewModel) {
     val backStack = rememberNavBackStack<Route>(Route.NotesList)
     MainNavigation(backStack) {
         entry<Route.NotesList>(metadata = ListPage()) {
             NotesListPage(backStack, viewModel)
         }
         entry<Route.Note>(metadata = ListDetailPage()) {
-            NotePage(backStack, viewModel, it.id)
+            NotePage(backStack, viewModel, notesViewModel, it.id)
         }
     }
 }
