@@ -9,9 +9,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +38,8 @@ import com.vayunmathur.youpipe.ui.ChannelPage
 import com.vayunmathur.youpipe.ui.DownloadedVideosPage
 import com.vayunmathur.youpipe.ui.HistoryPage
 import com.vayunmathur.youpipe.util.PlaybackService
+import com.vayunmathur.youpipe.util.YouPipeViewModel
+import com.vayunmathur.youpipe.util.YouPipeViewModelFactory
 import com.vayunmathur.youpipe.ui.SearchPage
 import com.vayunmathur.youpipe.ui.SettingsPage
 import com.vayunmathur.youpipe.ui.SubscriptionVideosPage
@@ -77,23 +79,28 @@ fun rememberIsInPipMode(): Boolean {
 
 
 class MainActivity : ComponentActivity() {
+    private lateinit var viewModel: DatabaseViewModel
+    private val youPipeViewModel: YouPipeViewModel by viewModels {
+        YouPipeViewModelFactory(application, viewModel)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val db = buildDatabase<SubscriptionDatabase>(migrations = listOf(MIGRATION_1_2))
-        val viewModel = DatabaseViewModel(db,
+        viewModel = DatabaseViewModel(db,
             Subscription::class to db.subscriptionDao(),
             SubscriptionVideo::class to db.subscriptionVideoDao(),
             HistoryVideo::class to db.historyVideoDao(),
             SubscriptionCategory::class to db.subscriptionCategoryDao(),
             DownloadedVideo::class to db.downloadedVideoDao()
         )
+        // Touch the VM so its init { setupHourlyTask(...) } runs at startup
+        // (replaces the previous LaunchedEffect(Unit) in setContent).
+        youPipeViewModel
         setContent {
             DynamicTheme {
-                LaunchedEffect(Unit) {
-                    setupHourlyTask(this@MainActivity)
-                }
-                Navigation(getRoute(intent.data), viewModel)
+                Navigation(getRoute(intent.data), viewModel, youPipeViewModel)
             }
         }
     }
@@ -160,23 +167,23 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(initialRoute: Route, viewModel: DatabaseViewModel) {
+fun Navigation(initialRoute: Route, viewModel: DatabaseViewModel, ypvm: YouPipeViewModel) {
     val backStack = rememberNavBackStack(initialRoute)
     MainNavigation(backStack) {
         entry<Route.SearchPage> {
-            SearchPage(backStack, viewModel)
+            SearchPage(backStack, viewModel, ypvm)
         }
         entry<Route.VideoPage> {
-            VideoPage(backStack, viewModel, it.videoID)
+            VideoPage(backStack, viewModel, ypvm, it.videoID)
         }
         entry<Route.ChannelPage> {
-            ChannelPage(backStack, viewModel, it.channelID)
+            ChannelPage(backStack, viewModel, ypvm, it.channelID)
         }
         entry<Route.SubscriptionsPage> {
-            SubscriptionsPage(backStack, viewModel)
+            SubscriptionsPage(backStack, viewModel, ypvm)
         }
         entry<Route.SubscriptionVideosPage> {
-            SubscriptionVideosPage(backStack, viewModel, it.category)
+            SubscriptionVideosPage(backStack, viewModel, ypvm, it.category)
         }
         entry<Route.CreateSubscriptionCategory>(metadata = DialogPage()) {
             CreateSubscriptionCategory(backStack, viewModel, it.id)
@@ -188,7 +195,7 @@ fun Navigation(initialRoute: Route, viewModel: DatabaseViewModel) {
             DownloadedVideosPage(backStack, viewModel)
         }
         entry<Route.Settings> {
-            SettingsPage(backStack, viewModel)
+            SettingsPage(backStack, viewModel, ypvm)
         }
     }
 }

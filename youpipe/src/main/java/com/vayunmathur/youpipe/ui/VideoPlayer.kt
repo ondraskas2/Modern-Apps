@@ -73,15 +73,13 @@ import androidx.media3.ui.compose.material3.buttons.PlayPauseButton
 import coil.compose.AsyncImage
 import com.google.common.util.concurrent.MoreExecutors
 import com.vayunmathur.library.ui.IconClose
-import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.data.HistoryVideo
 import com.vayunmathur.youpipe.findActivity
 import com.vayunmathur.youpipe.rememberIsInPipMode
 import com.vayunmathur.youpipe.util.PlaybackService
-import com.vayunmathur.youpipe.util.SponsorSegment
-import com.vayunmathur.youpipe.util.getSponsorSegments
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
@@ -93,6 +91,7 @@ import androidx.compose.ui.geometry.Size
 @Composable
 fun VideoPlayer(
     viewModel: DatabaseViewModel,
+    ypvm: YouPipeViewModel,
     videoInfo: VideoInfo,
     videoStreams: List<VideoStream>,
     audioStreams: List<AudioStream>,
@@ -101,13 +100,9 @@ fun VideoPlayer(
     onFullscreenChange: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
-    val ds = remember { DataStoreUtils.getInstance(context) }
-    val sponsorBlockEnabled by ds.booleanFlow("sponsorblock_enabled").collectAsState(initial = false)
-    var sponsorSegments by remember { mutableStateOf<List<SponsorSegment>>(emptyList()) }
-
-    LaunchedEffect(videoInfo.videoID) {
-        sponsorSegments = getSponsorSegments(videoInfo.videoID)
-    }
+    val sponsorBlockEnabled by ypvm.sponsorBlockEnabled.collectAsState()
+    val videoState by ypvm.videoState.collectAsState()
+    val sponsorSegments = videoState.sponsorSegments
 
     var languages by remember { mutableStateOf(audioStreams.map { it.language }.distinct().sorted()) }
     var language by remember { mutableStateOf(if("en" in languages) "en" else languages.first()) }

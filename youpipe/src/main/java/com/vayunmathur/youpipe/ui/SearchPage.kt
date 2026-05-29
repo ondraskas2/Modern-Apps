@@ -17,18 +17,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
-import androidx.core.text.HtmlCompat
 import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import com.vayunmathur.library.util.BottomNavBar
@@ -36,70 +32,24 @@ import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.util.channelURLtoID
-import com.vayunmathur.youpipe.util.videoURLtoID
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.schabi.newpipe.extractor.ServiceList
-import org.schabi.newpipe.extractor.channel.ChannelInfoItem
-import org.schabi.newpipe.extractor.stream.StreamInfoItem
-import kotlin.time.toKotlinInstant
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 
 @Composable
-fun SearchPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
-    // State Management
-    var searchQuery by remember { mutableStateOf("") }
-    var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
-    var searchResults by remember { mutableStateOf<List<ItemInfo>>(emptyList()) }
+fun SearchPage(
+    backStack: NavBackStack<Route>,
+    viewModel: DatabaseViewModel,
+    ypvm: YouPipeViewModel,
+) {
+    val searchQuery by ypvm.searchQuery.collectAsState()
+    val suggestions by ypvm.suggestions.collectAsState()
+    val searchResults by ypvm.searchResults.collectAsState()
 
-    val scope = rememberCoroutineScope()
-
-    fun search() {
-        if(searchQuery.contains("/watch?v=")) {
-            backStack.add(Route.VideoPage(videoURLtoID(searchQuery)))
-            return
-        }
-        scope.launch {
-            withContext(Dispatchers.IO) {
-                try {
-                    val extractor = ServiceList.YouTube.getSearchExtractor(searchQuery)
-                    extractor.fetchPage()
-                    withContext(Dispatchers.Main) {
-                        searchResults =
-                            extractor.initialPage.items.mapNotNull {
-                                when(it) {
-                                    is StreamInfoItem -> {
-                                        if(it.uploadDate == null) return@mapNotNull null
-                                        VideoInfo(
-                                            HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                                            videoURLtoID(it.url),
-                                            it.duration,
-                                            it.viewCount,
-                                            it.uploadDate!!.instant.toKotlinInstant(),
-                                            it.thumbnails.first().url,
-                                            HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                                        )
-                                    }
-                                    is ChannelInfoItem -> {
-                                        ChannelInfo(
-                                            HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                                            channelURLtoID(it.url),
-                                            it.subscriberCount,
-                                            0,
-                                            it.thumbnails.first().url,
-                                        )
-                                    }
-                                    else -> null
-                                }
-                            }
-                        suggestions = emptyList() // Hide suggestions when searching
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    // Handle search error
-                }
-            }
+    fun submit() {
+        val watchID = ypvm.resolveWatchUrl()
+        if (watchID != null) {
+            backStack.add(Route.VideoPage(watchID))
+        } else {
+            ypvm.performSearch()
         }
     }
 
@@ -107,53 +57,31 @@ fun SearchPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel) {
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp)) {
             TextField(
                 value = searchQuery,
-                onValueChange = { newValue ->
-                    searchQuery = newValue
-                    // Continuous updates for suggestions
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                if (newValue.isNotBlank()) {
-                                    suggestions = ServiceList.YouTube
-                                        .suggestionExtractor
-                                        .suggestionList(newValue)
-                                        .map { HtmlCompat.fromHtml(it, HtmlCompat.FROM_HTML_MODE_LEGACY).toString() }
-                                } else {
-                                    suggestions = emptyList()
-                                }
-                            } catch (e: Exception) {
-                                // Handle extraction error
-                            }
-                        }
-                    }
-                },
+                onValueChange = { ypvm.setSearchQuery(it) },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.label_search)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { search() }),
+                keyboardActions = KeyboardActions(onSearch = { submit() }),
                 singleLine = true
             )
 
-            // Result / Suggestion List
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 if (searchResults.isNotEmpty()) {
-                    // Show actual Search Results
                     items(searchResults) { item ->
-                        if(item is VideoInfo)
+                        if (item is VideoInfo)
                             VideoItem(backStack, viewModel, item, true)
-                        else if(item is ChannelInfo)
+                        else if (item is ChannelInfo)
                             ChannelItem(backStack, item)
                     }
                 } else {
-                    // Show Suggestions
                     items(suggestions) { suggestion ->
                         Text(
                             text = suggestion,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    searchQuery = suggestion
-                                    search()
+                                    ypvm.setSearchQuery(suggestion)
+                                    submit()
                                 }
                                 .padding(12.dp)
                         )

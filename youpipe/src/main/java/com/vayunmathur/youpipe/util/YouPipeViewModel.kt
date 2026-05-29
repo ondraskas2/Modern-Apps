@@ -1,0 +1,621 @@
+package com.vayunmathur.youpipe.util
+
+import android.app.Application
+import android.net.Uri
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.core.text.HtmlCompat
+import com.vayunmathur.library.util.DataStoreUtils
+import com.vayunmathur.library.util.DatabaseViewModel
+import com.vayunmathur.youpipe.data.DownloadedVideo
+import com.vayunmathur.youpipe.data.HistoryVideo
+import com.vayunmathur.youpipe.data.Subscription
+import com.vayunmathur.youpipe.ui.AudioStream
+import com.vayunmathur.youpipe.ui.ChannelInfo
+import com.vayunmathur.youpipe.ui.Comment
+import com.vayunmathur.youpipe.ui.ItemInfo
+import com.vayunmathur.youpipe.ui.VideoChapter
+import com.vayunmathur.youpipe.ui.VideoData
+import com.vayunmathur.youpipe.ui.VideoInfo
+import com.vayunmathur.youpipe.ui.VideoStream
+import com.vayunmathur.youpipe.ui.fromHTML
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.channel.ChannelInfoItem
+import org.schabi.newpipe.extractor.stream.Description
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
+import java.util.zip.ZipInputStream
+import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlin.time.toKotlinInstant
+
+/**
+ * Single ViewModel for the YouPipe app.
+ *
+ * Owns:
+ *  - Search query state, suggestions, and result list (via NewPipe Extractor).
+ *  - Per-video data load (streams, comments, related, segments, sponsor segments)
+ *    triggered by [loadVideo].
+ *  - Per-channel data load triggered by [loadChannel].
+ *  - YouTube/NewPipe/Youpipe import/export pipelines and their progress state.
+ *  - WorkManager subscription-fetch progress mirror.
+ *  - One-time hourly subscription-fetch task setup.
+ *
+ * Composables retain UI-only state (PagerState, fullscreen booleans, dialog
+ * visibility, MediaController/PlayerSurface, FocusRequester, etc.). The
+ * shared [DatabaseViewModel] is injected so per-screen data CRUD continues to
+ * flow through Room.
+ */
+class YouPipeViewModel(
+    application: Application,
+    private val databaseViewModel: DatabaseViewModel,
+) : AndroidViewModel(application) {
+
+    // ===================== Search =====================
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _suggestions = MutableStateFlow<List<String>>(emptyList())
+    val suggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
+
+    private val _searchResults = MutableStateFlow<List<ItemInfo>>(emptyList())
+    val searchResults: StateFlow<List<ItemInfo>> = _searchResults.asStateFlow()
+
+    private var suggestionJob: Job? = null
+    private var searchJob: Job? = null
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+        suggestionJob?.cancel()
+        suggestionJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _suggestions.value = if (query.isNotBlank()) {
+                    ServiceList.YouTube.suggestionExtractor
+                        .suggestionList(query)
+                        .map { HtmlCompat.fromHtml(it, HtmlCompat.FROM_HTML_MODE_LEGACY).toString() }
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Suggestion error", e)
+            }
+        }
+    }
+
+    /** Returns the resolved videoID if the query is a watch URL, else null. */
+    fun resolveWatchUrl(): Long? {
+        val q = _searchQuery.value
+        return if (q.contains("/watch?v=")) videoURLtoID(q) else null
+    }
+
+    fun performSearch() {
+        val q = _searchQuery.value
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ex = ServiceList.YouTube.getSearchExtractor(q)
+                ex.fetchPage()
+                val results = ex.initialPage.items.mapNotNull { item ->
+                    when (item) {
+                        is StreamInfoItem -> {
+                            val date = item.uploadDate ?: return@mapNotNull null
+                            VideoInfo(
+                                HtmlCompat.fromHtml(item.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                                videoURLtoID(item.url),
+                                item.duration,
+                                item.viewCount,
+                                date.instant.toKotlinInstant(),
+                                item.thumbnails.first().url,
+                                HtmlCompat.fromHtml(item.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                            )
+                        }
+                        is ChannelInfoItem -> ChannelInfo(
+                            HtmlCompat.fromHtml(item.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                            channelURLtoID(item.url),
+                            item.subscriberCount,
+                            0,
+                            item.thumbnails.first().url,
+                        )
+                        else -> null
+                    }
+                }
+                _searchResults.value = results
+                _suggestions.value = emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "Search error", e)
+            }
+        }
+    }
+
+    // ===================== Channel =====================
+
+    data class ChannelState(
+        val info: ChannelInfo? = null,
+        val videos: List<VideoInfo> = emptyList(),
+    )
+
+    private val _channelState = MutableStateFlow(ChannelState())
+    val channelState: StateFlow<ChannelState> = _channelState.asStateFlow()
+    private var channelJob: Job? = null
+
+    fun loadChannel(channelID: String) {
+        channelJob?.cancel()
+        _channelState.value = ChannelState()
+        channelJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val info = getChannelInfo(channelID)
+                _channelState.update { it.copy(info = info) }
+                getChannelVideos(info.channelID).forEach { video ->
+                    _channelState.update { it.copy(videos = it.videos + video) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Channel load error", e)
+            }
+        }
+    }
+
+    // ===================== Video =====================
+
+    data class VideoState(
+        val data: VideoData? = null,
+        val videoStreams: List<VideoStream> = emptyList(),
+        val audioStreams: List<AudioStream> = emptyList(),
+        val segments: List<VideoChapter> = emptyList(),
+        val comments: List<Comment> = emptyList(),
+        val relatedVideos: List<VideoInfo> = emptyList(),
+        val sponsorSegments: List<SponsorSegment> = emptyList(),
+        val error: Boolean = false,
+    )
+
+    private val _videoState = MutableStateFlow(VideoState())
+    val videoState: StateFlow<VideoState> = _videoState.asStateFlow()
+    private var videoJob: Job? = null
+    private var sponsorJob: Job? = null
+
+    fun loadVideo(videoID: Long, downloadedVideo: DownloadedVideo?) {
+        videoJob?.cancel()
+        sponsorJob?.cancel()
+        _videoState.value = VideoState()
+
+        // Sponsor segments load in parallel.
+        sponsorJob = viewModelScope.launch(Dispatchers.IO) {
+            val segs = getSponsorSegments(videoID)
+            _videoState.update { it.copy(sponsorSegments = segs) }
+        }
+
+        videoJob = viewModelScope.launch {
+            val url = videoIDtoURL(videoID)
+            val youtubeService = ServiceList.YouTube
+            try {
+                withContext(Dispatchers.IO) {
+                    val ex = youtubeService.getStreamExtractor(url)
+                    ex.fetchPage()
+
+                    val videoStreams: List<VideoStream>
+                    val audioStreams: List<AudioStream>
+                    val segments: List<VideoChapter>
+
+                    if (downloadedVideo == null) {
+                        segments = ex.streamSegments.map {
+                            VideoChapter(it.startTimeSeconds * 1000, it.title, it.previewUrl)
+                        }
+                        videoStreams = ex.videoOnlyStreams.map { stream ->
+                            val codecStr = stream.codec ?: ""
+                            val codec = when {
+                                codecStr.contains("av01", ignoreCase = true) -> "av1"
+                                codecStr.contains("vp9", ignoreCase = true) || codecStr.contains("vp09", ignoreCase = true) -> "vp9"
+                                codecStr.contains("avc", ignoreCase = true) || codecStr.contains("h264", ignoreCase = true) -> "avc"
+                                else -> codecStr
+                            }
+                            VideoStream(
+                                stream.content,
+                                stream.width,
+                                stream.height,
+                                stream.bitrate,
+                                stream.fps,
+                                "${stream.height}p",
+                                codec,
+                                stream.itagItem?.contentLength ?: 0L
+                            )
+                        }.sortedWith(
+                            compareByDescending<VideoStream> { it.height }
+                                .thenByDescending {
+                                    when (it.codec) {
+                                        "av1" -> 3
+                                        "vp9" -> 2
+                                        "avc" -> 1
+                                        else -> 0
+                                    }
+                                }
+                        )
+                        audioStreams = ex.audioStreams.map { stream ->
+                            val codecStr = stream.codec ?: ""
+                            val codec = when {
+                                codecStr.contains("opus", ignoreCase = true) -> "opus"
+                                codecStr.contains("mp4a", ignoreCase = true) || codecStr.contains("aac", ignoreCase = true) -> "aac"
+                                else -> codecStr
+                            }
+                            AudioStream(
+                                stream.content,
+                                stream.bitrate,
+                                stream.audioLocale?.language ?: "Default",
+                                codec,
+                                stream.itagItem?.contentLength ?: 0L
+                            )
+                        }.sortedWith(
+                            compareByDescending<AudioStream> { it.bitrate }
+                                .thenByDescending {
+                                    when (it.codec) {
+                                        "opus" -> 2
+                                        "aac" -> 1
+                                        else -> 0
+                                    }
+                                }
+                        )
+                    } else {
+                        videoStreams = listOf(VideoStream(downloadedVideo.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L))
+                        audioStreams = if (downloadedVideo.audioPath != null)
+                            listOf(AudioStream(downloadedVideo.audioPath, 0, "Default", "aac", 0L))
+                        else emptyList()
+                        segments = emptyList()
+                    }
+
+                    val data = VideoData(
+                        HtmlCompat.fromHtml(ex.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                        ex.viewCount,
+                        ex.length,
+                        ex.uploadDate!!.instant.toKotlinInstant(),
+                        ex.thumbnails.first().url,
+                        HtmlCompat.fromHtml(ex.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                        channelURLtoID(ex.uploaderUrl),
+                        ex.uploaderAvatars.first().url,
+                        ex.description.content.fromHTML()
+                    )
+                    val related = ex.relatedItems?.items?.filterIsInstance<StreamInfoItem>()?.map {
+                        VideoInfo(
+                            HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                            videoURLtoID(it.url),
+                            it.duration,
+                            it.viewCount,
+                            it.uploadDate!!.instant.toKotlinInstant(),
+                            it.thumbnails.first().url,
+                            HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                        )
+                    } ?: emptyList()
+
+                    _videoState.update {
+                        it.copy(
+                            data = data,
+                            videoStreams = videoStreams,
+                            audioStreams = audioStreams,
+                            segments = segments,
+                            relatedVideos = related,
+                        )
+                    }
+                }
+                withContext(Dispatchers.IO) {
+                    val cex = youtubeService.getCommentsExtractor(url)
+                    cex.fetchPage()
+                    val comments = cex.initialPage.items.map { c ->
+                        val content = if (c.commentText.type == Description.HTML) {
+                            c.commentText.content.fromHTML()
+                        } else {
+                            HtmlCompat.fromHtml(c.commentText.content, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                        }
+                        Comment(content, HtmlCompat.fromHtml(c.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), c.likeCount, 0)
+                    }
+                    _videoState.update { it.copy(comments = comments) }
+                }
+            } catch (e: Exception) {
+                if (downloadedVideo != null) {
+                    val video = downloadedVideo
+                    val data = VideoData(
+                        video.videoItem.name,
+                        video.videoItem.views,
+                        video.videoItem.duration,
+                        video.videoItem.uploadDate,
+                        video.videoItem.thumbnailURL,
+                        video.videoItem.author,
+                        "",
+                        "",
+                        ""
+                    )
+                    _videoState.update {
+                        it.copy(
+                            data = data,
+                            videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L)),
+                            audioStreams = if (video.audioPath != null)
+                                listOf(AudioStream(video.audioPath, 0, "Default", "aac", 0L))
+                            else emptyList(),
+                        )
+                    }
+                } else {
+                    _videoState.update { it.copy(error = true) }
+                    Log.e(TAG, "Video load error", e)
+                }
+            }
+        }
+    }
+
+    /**
+     * When a download completes while the user is on the video page, swap the
+     * playable streams over to the on-disk copy (mirrors the original
+     * `LaunchedEffect(downloadedVideo)` in VideoPage).
+     */
+    fun applyDownloadedStreams(downloadedVideo: DownloadedVideo) {
+        _videoState.update {
+            it.copy(
+                videoStreams = listOf(VideoStream(downloadedVideo.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L)),
+                audioStreams = if (downloadedVideo.audioPath != null)
+                    listOf(AudioStream(downloadedVideo.audioPath, 0, "Default", "aac", 0L))
+                else emptyList(),
+                segments = emptyList(),
+            )
+        }
+    }
+
+    fun clearVideoError() {
+        _videoState.update { it.copy(error = false) }
+    }
+
+    // ===================== Subscription fetch progress (WorkManager) =====================
+
+    /**
+     * Mirrors the currently-running "subscription_fetch_immediate" WorkInfo's
+     * progress as a float in [0f, 1f], or -1f if no fetch is running.
+     */
+    val fetchProgress: StateFlow<Float> = WorkManager.getInstance(application)
+        .getWorkInfosForUniqueWorkFlow("subscription_fetch_immediate")
+        .map { infos ->
+            infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+                ?.progress?.getFloat("progress", -1f) ?: -1f
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), -1f)
+
+    // ===================== Settings: imports/exports =====================
+
+    private val _isImporting = MutableStateFlow(false)
+    val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
+
+    private val _importProgress = MutableStateFlow(0f)
+    val importProgress: StateFlow<Float> = _importProgress.asStateFlow()
+
+    private val _sponsorBlockEnabled: StateFlow<Boolean> = DataStoreUtils
+        .getInstance(application)
+        .booleanFlow("sponsorblock_enabled")
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val sponsorBlockEnabled: StateFlow<Boolean> = _sponsorBlockEnabled
+
+    fun setSponsorBlockEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            DataStoreUtils.getInstance(getApplication())
+                .setBoolean("sponsorblock_enabled", enabled)
+        }
+    }
+
+    fun importYouTubeTakeout(uri: Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _isImporting.value = true
+            _importProgress.value = 0f
+            try {
+                val zipInputStream = ZipInputStream(ctx.contentResolver.openInputStream(uri))
+                var entry = zipInputStream.nextEntry
+                val subs = mutableListOf<Subscription>()
+                val history = mutableListOf<HistoryVideo>()
+
+                while (entry != null) {
+                    when {
+                        entry.name.endsWith("subscriptions/subscriptions.csv") -> {
+                            val content = zipInputStream.readBytes().decodeToString()
+                            val lines = content.lines().drop(1)
+                            val total = lines.size
+                            lines.forEachIndexed { index, line ->
+                                if (line.isNotBlank()) {
+                                    val parts = line.split(",")
+                                    if (parts.size >= 2) {
+                                        val url = parts[1]
+                                        try {
+                                            val channelInfo = getChannelInfoFromURL(url)
+                                            subs.add(channelInfo.toSubscription())
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error fetching channel info for $url", e)
+                                        }
+                                    }
+                                }
+                                _importProgress.value = (index + 1).toFloat() / total
+                            }
+                        }
+                        entry.name.endsWith("history/watch-history.json") -> {
+                            val jsonString = zipInputStream.readBytes().decodeToString()
+                            val jsonArray = Json.parseToJsonElement(jsonString).jsonArray
+                            jsonArray.forEach { element ->
+                                try {
+                                    val title = element.jsonObject["title"]?.jsonPrimitive?.content?.removePrefix("Watched ") ?: ""
+                                    val url = element.jsonObject["titleUrl"]?.jsonPrimitive?.content ?: ""
+                                    val time = element.jsonObject["time"]?.jsonPrimitive?.content?.let { Instant.parse(it) } ?: Clock.System.now()
+                                    val author = element.jsonObject["subtitles"]?.jsonArray?.firstOrNull()?.jsonObject?.get("name")?.jsonPrimitive?.content ?: ""
+
+                                    if (url.contains("watch?v=")) {
+                                        val videoID = videoURLtoID(url)
+                                        history.add(
+                                            HistoryVideo(
+                                                id = videoID,
+                                                progress = 0,
+                                                videoItem = VideoInfo(
+                                                    HtmlCompat.fromHtml(title, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                                                    videoID,
+                                                    0,
+                                                    0,
+                                                    time,
+                                                    "",
+                                                    HtmlCompat.fromHtml(author, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                                                ),
+                                                timestamp = time
+                                            )
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error parsing history item", e)
+                                }
+                            }
+                        }
+                        entry.name.endsWith("history/watch-history.html") -> {
+                            val html = zipInputStream.readBytes().decodeToString()
+                            val regex = Regex(
+                                "<div class=\"content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1\">Watched&nbsp;<a href=\"(.*?)\">(.*?)</a><br><a href=\"(.*?)\">(.*?)</a><br>(.*?)</div>",
+                                RegexOption.DOT_MATCHES_ALL
+                            )
+                            val matches = regex.findAll(html)
+                            matches.forEach { match ->
+                                try {
+                                    val url = match.groupValues[1]
+                                    val title = match.groupValues[2]
+                                    val author = match.groupValues[4]
+
+                                    if (url.contains("watch?v=")) {
+                                        val videoID = videoURLtoID(url)
+                                        history.add(
+                                            HistoryVideo(
+                                                id = videoID,
+                                                progress = 0,
+                                                videoItem = VideoInfo(
+                                                    HtmlCompat.fromHtml(title, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                                                    videoID,
+                                                    0,
+                                                    0,
+                                                    Clock.System.now(),
+                                                    "",
+                                                    HtmlCompat.fromHtml(author, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                                                ),
+                                                timestamp = Clock.System.now()
+                                            )
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error parsing HTML history item", e)
+                                }
+                            }
+                        }
+                    }
+                    entry = zipInputStream.nextEntry
+                }
+
+                if (subs.isNotEmpty()) databaseViewModel.upsertAll(subs)
+                if (history.isNotEmpty()) databaseViewModel.upsertAll(history)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error importing YouTube Takeout", e)
+            }
+            _isImporting.value = false
+            setupHourlyTask(ctx)
+        }
+    }
+
+    fun exportSubscriptions(uri: Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val subs = databaseViewModel.getAll<Subscription>()
+                val json = Json.encodeToString(subs)
+                ctx.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error exporting subscriptions", e)
+            }
+        }
+    }
+
+    fun restoreSubscriptions(uri: Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _isImporting.value = true
+            try {
+                val json = ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText()
+                val subs = Json.decodeFromString<List<Subscription>>(json)
+                databaseViewModel.replaceAll(subs)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring subscriptions", e)
+            }
+            _isImporting.value = false
+            setupHourlyTask(ctx)
+        }
+    }
+
+    fun importNewPipe(uri: Uri) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _isImporting.value = true
+            _importProgress.value = 0f
+            try {
+                val jsonString = ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText()
+                val json = Json.parseToJsonElement(jsonString).jsonObject
+                val subsArray = json["subscriptions"]?.jsonArray
+                if (subsArray != null) {
+                    val total = subsArray.size
+                    val subs = mutableListOf<Subscription>()
+                    subsArray.forEachIndexed { index, element ->
+                        try {
+                            var url = element.jsonObject["url"]?.jsonPrimitive?.content ?: ""
+                            if (!url.startsWith("http")) url = "https://$url"
+                            val channelInfo = getChannelInfoFromURL(url)
+                            subs.add(channelInfo.toSubscription())
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error importing channel", e)
+                        }
+                        _importProgress.value = (index + 1).toFloat() / total
+                    }
+                    databaseViewModel.replaceAll(subs)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error importing NewPipe subscriptions", e)
+            }
+            _isImporting.value = false
+            setupHourlyTask(ctx)
+        }
+    }
+
+    // ===================== Hourly fetch task =====================
+
+    init {
+        setupHourlyTask(application)
+    }
+
+    companion object {
+        private const val TAG = "YouPipeViewModel"
+    }
+}
+
+/** Factory for constructing [YouPipeViewModel] with the shared [DatabaseViewModel]. */
+class YouPipeViewModelFactory(
+    private val application: Application,
+    private val databaseViewModel: DatabaseViewModel,
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        require(modelClass.isAssignableFrom(YouPipeViewModel::class.java)) {
+            "Unexpected ViewModel class: $modelClass"
+        }
+        return YouPipeViewModel(application, databaseViewModel) as T
+    }
+}

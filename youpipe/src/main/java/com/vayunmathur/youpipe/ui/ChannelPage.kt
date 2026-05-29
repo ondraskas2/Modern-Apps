@@ -26,9 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,10 +42,7 @@ import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
 import com.vayunmathur.youpipe.data.HistoryVideo
 import com.vayunmathur.youpipe.data.Subscription
-import com.vayunmathur.youpipe.util.getChannelInfo
-import com.vayunmathur.youpipe.util.getChannelVideos
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 import kotlinx.serialization.Serializable
 import kotlin.time.Instant
 
@@ -64,22 +58,20 @@ data class ChannelInfo(val name: String, val channelID: String, val subscribers:
 data class VideoInfo(val name: String, val videoID: Long, val duration: Long, val views: Long, val uploadDate: Instant, val thumbnailURL: String, val author: String): ItemInfo
 
 @Composable
-fun ChannelPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, channelID: String) {
-    var videos by remember { mutableStateOf<List<VideoInfo>>(listOf()) }
-    var channelInfo by remember { mutableStateOf<ChannelInfo?>(null) }
+fun ChannelPage(
+    backStack: NavBackStack<Route>,
+    viewModel: DatabaseViewModel,
+    ypvm: YouPipeViewModel,
+    channelID: String,
+) {
+    val channelState by ypvm.channelState.collectAsState()
+    val videos = channelState.videos
+    val channelInfo = channelState.info
 
     val subscriptions by viewModel.data<Subscription>().collectAsState()
 
     LaunchedEffect(channelID) {
-        withContext(Dispatchers.IO) {
-            val info = getChannelInfo(channelID)
-            channelInfo = info
-            getChannelVideos(info.channelID).forEach { video ->
-                withContext(Dispatchers.Main) {
-                    videos = videos + video
-                }
-            }
-        }
+        ypvm.loadChannel(channelID)
     }
 
     Scaffold { paddingValues ->

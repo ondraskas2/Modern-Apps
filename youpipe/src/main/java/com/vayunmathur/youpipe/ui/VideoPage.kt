@@ -2,7 +2,6 @@ package com.vayunmathur.youpipe.ui
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,26 +67,17 @@ import com.vayunmathur.youpipe.data.DownloadedVideo
 import com.vayunmathur.youpipe.util.DownloadManager
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
-import com.vayunmathur.youpipe.util.channelURLtoID
 import com.vayunmathur.youpipe.findActivity
-import com.vayunmathur.youpipe.util.videoIDtoURL
-import com.vayunmathur.youpipe.util.videoURLtoID
-import kotlinx.coroutines.Dispatchers
+import com.vayunmathur.youpipe.util.YouPipeViewModel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.periodUntil
 import kotlinx.datetime.toLocalDateTime
-import org.schabi.newpipe.extractor.ServiceList
-import org.schabi.newpipe.extractor.StreamingService
-import org.schabi.newpipe.extractor.stream.Description
-import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
-import kotlin.time.toKotlinInstant
 
 data class VideoChapter(val time: Int, val title: String, val previewURL: String?)
 data class AudioStream(val url: String, val bitrate: Int, val language: String, val codec: String, val size: Long)
@@ -112,166 +101,32 @@ fun LockScreenOrientation(orientation: Int) {
 }
 
 @Composable
-fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, videoID: Long) {
-    val url = videoIDtoURL(videoID)
-
-    var comments by remember { mutableStateOf<List<Comment>>(emptyList()) }
-    var relatedVideos by remember { mutableStateOf<List<VideoInfo>>(emptyList()) }
-    var videoData by remember { mutableStateOf<VideoData?>(null) }
-    var videoStreams by remember { mutableStateOf<List<VideoStream>>(listOf()) }
-    var audioStreams by remember { mutableStateOf<List<AudioStream>>(listOf()) }
-    var segments by remember { mutableStateOf<List<VideoChapter>>(listOf()) }
-
-    var error by remember { mutableStateOf(false) }
-
+fun VideoPage(
+    backStack: NavBackStack<Route>,
+    viewModel: DatabaseViewModel,
+    ypvm: YouPipeViewModel,
+    videoID: Long,
+) {
     val downloadedVideo by viewModel.getNullable<DownloadedVideo>(videoID)
+    val videoState by ypvm.videoState.collectAsState()
 
-    LaunchedEffect(Unit) {
-        try {
-            val youtubeService: StreamingService = ServiceList.YouTube
-            withContext(Dispatchers.IO) {
-                val streamExtractor = youtubeService.getStreamExtractor(url)
-                streamExtractor.fetchPage()
-
-                if (downloadedVideo == null) {
-                    segments = streamExtractor.streamSegments.map {
-                        VideoChapter(
-                            it.startTimeSeconds * 1000,
-                            it.title,
-                            it.previewUrl
-                        )
-                    }
-                    videoStreams = streamExtractor.videoOnlyStreams.map { stream ->
-                        val codecStr = stream.codec ?: ""
-                        val codec = when {
-                            codecStr.contains("av01", ignoreCase = true) -> "av1"
-                            codecStr.contains("vp9", ignoreCase = true) || codecStr.contains("vp09", ignoreCase = true) -> "vp9"
-                            codecStr.contains("avc", ignoreCase = true) || codecStr.contains("h264", ignoreCase = true) -> "avc"
-                            else -> codecStr
-                        }
-                        VideoStream(
-                            stream.content,
-                            stream.width,
-                            stream.height,
-                            stream.bitrate,
-                            stream.fps,
-                            "${stream.height}p",
-                            codec,
-                            stream.itagItem?.contentLength ?: 0L
-                        )
-                    }.sortedWith(
-                        compareByDescending<VideoStream> { it.height }
-                            .thenByDescending {
-                                when (it.codec) {
-                                    "av1" -> 3
-                                    "vp9" -> 2
-                                    "avc" -> 1
-                                    else -> 0
-                                }
-                            }
-                    )
-                    audioStreams = streamExtractor.audioStreams.map { stream ->
-                        val codecStr = stream.codec ?: ""
-                        val codec = when {
-                            codecStr.contains("opus", ignoreCase = true) -> "opus"
-                            codecStr.contains("mp4a", ignoreCase = true) || codecStr.contains("aac", ignoreCase = true) -> "aac"
-                            else -> codecStr
-                        }
-                        AudioStream(
-                            stream.content,
-                            stream.bitrate,
-                            stream.audioLocale?.language ?: "Default",
-                            codec,
-                            stream.itagItem?.contentLength ?: 0L
-                        )
-                    }.sortedWith(
-                        compareByDescending<AudioStream> { it.bitrate }
-                            .thenByDescending {
-                                when (it.codec) {
-                                    "opus" -> 2
-                                    "aac" -> 1
-                                    else -> 0
-                                }
-                            }
-                    )
-                } else {
-                    val video = downloadedVideo!!
-                    videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L))
-                    audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac", 0L)) else emptyList()
-                    segments = emptyList()
-                }
-
-                videoData = VideoData(
-                    HtmlCompat.fromHtml(streamExtractor.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                    streamExtractor.viewCount,
-                    streamExtractor.length,
-                    streamExtractor.uploadDate!!.instant.toKotlinInstant(),
-                    streamExtractor.thumbnails.first().url,
-                    HtmlCompat.fromHtml(streamExtractor.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                    channelURLtoID(streamExtractor.uploaderUrl),
-                    streamExtractor.uploaderAvatars.first().url,
-                    streamExtractor.description.content.fromHTML()
-                )
-                val relatedVideosEx = streamExtractor.relatedItems ?: return@withContext
-                relatedVideos = relatedVideosEx.items.filterIsInstance<StreamInfoItem>().map {
-                    VideoInfo(
-                        HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                        videoURLtoID(it.url),
-                        it.duration,
-                        it.viewCount,
-                        it.uploadDate!!.instant.toKotlinInstant(),
-                        it.thumbnails.first().url,
-                        HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                    )
-                }
-            }
-            withContext(Dispatchers.IO) {
-                val commentsEx = youtubeService.getCommentsExtractor(url)
-                commentsEx.fetchPage()
-                comments = commentsEx.initialPage.items.map {
-                    val content = if (it.commentText.type == Description.HTML) {
-                        it.commentText.content.fromHTML()
-                    } else {
-                        HtmlCompat.fromHtml(it.commentText.content, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                    }
-                    Comment(content, HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), it.likeCount, 0)
-                }
-            }
-        } catch(e: Exception) {
-            if (downloadedVideo != null) {
-                val video = downloadedVideo!!
-                videoData = VideoData(
-                    video.videoItem.name,
-                    video.videoItem.views,
-                    video.videoItem.duration,
-                    video.videoItem.uploadDate,
-                    video.videoItem.thumbnailURL,
-                    video.videoItem.author,
-                    "",
-                    "",
-                    ""
-                )
-                videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L))
-                audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac", 0L)) else emptyList()
-            } else {
-                error = true
-                e.printStackTrace()
-            }
-        }
+    LaunchedEffect(videoID) {
+        ypvm.loadVideo(videoID, downloadedVideo)
     }
-
     LaunchedEffect(downloadedVideo) {
-        if (downloadedVideo != null) {
-            val video = downloadedVideo!!
-            videoStreams = listOf(VideoStream(video.filePath, 1920, 1080, 0, 30, "Downloaded", "avc", 0L))
-            audioStreams = if (video.audioPath != null) listOf(AudioStream(video.audioPath, 0, "Default", "aac", 0L)) else emptyList()
-            segments = emptyList()
-        }
+        downloadedVideo?.let { ypvm.applyDownloadedStreams(it) }
     }
 
-    if(error) {
+    val videoData = videoState.data
+    val videoStreams = videoState.videoStreams
+    val audioStreams = videoState.audioStreams
+    val segments = videoState.segments
+    val comments = videoState.comments
+    val relatedVideos = videoState.relatedVideos
+
+    if (videoState.error) {
         Dialog({
-            error = false
+            ypvm.clearVideoError()
             backStack.pop()
         }) {
             Card {
@@ -279,7 +134,7 @@ fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, vide
                     Text(stringResource(R.string.video_load_error))
                     Spacer(Modifier.height(8.dp))
                     Button({
-                        error = false
+                        ypvm.clearVideoError()
                         backStack.pop()
                     }) {
                         Text(stringResource(R.string.action_go_back))
@@ -315,7 +170,7 @@ fun VideoPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, vide
         val modifier = if(isFullscreen) Modifier.padding(top = paddingValues.calculateTopPadding(), bottom = paddingValues.calculateBottomPadding()) else Modifier.padding(paddingValues)
         Column(modifier) {
             videoData?.let { videoData ->
-                VideoPlayer(viewModel, VideoInfo(videoData.title, videoID, videoData.duration, videoData.views, videoData.uploadDate, videoData.thumbnailURL, videoData.author), videoStreams, audioStreams, segments, isFullscreen) {
+                VideoPlayer(viewModel, ypvm, VideoInfo(videoData.title, videoID, videoData.duration, videoData.views, videoData.uploadDate, videoData.thumbnailURL, videoData.author), videoStreams, audioStreams, segments, isFullscreen) {
                     isFullscreen = it
                 }
                 VideoDetails(backStack, viewModel, videoData, videoID, videoStreams, audioStreams)
