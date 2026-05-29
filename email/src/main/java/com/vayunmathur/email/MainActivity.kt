@@ -491,8 +491,13 @@ fun EmailApp(viewModel: EmailViewModel, onLaunchGoogleSignIn: () -> Unit) {
 @Composable
 fun FolderList(folders: List<EmailFolder>, selectedFolder: String, onSelect: (String) -> Unit) {
     val folderTree = remember(folders) { buildFolderTree(folders) }
-    
-    LazyColumn {
+
+    // NOTE: a `Column` (not `LazyColumn`) — this composable is rendered
+    // inside the drawer's outer `verticalScroll(...)` Column, and nesting a
+    // lazy list inside an unbounded vertical scroller crashes with
+    // "Vertically scrollable component was measured with an infinity maximum
+    // height constraints". Folder lists are tiny so non-lazy is fine.
+    Column {
         folderTree.forEach { root ->
             renderFolderTree(root, 0, selectedFolder, onSelect)
         }
@@ -514,27 +519,26 @@ fun buildFolderTree(folders: List<EmailFolder>): List<FolderNode> {
     return folders.filter { it.parentFullName == null }.map { buildNode(it) }
 }
 
-fun androidx.compose.foundation.lazy.LazyListScope.renderFolderTree(
-    node: FolderNode, 
-    depth: Int, 
-    selectedFolder: String, 
+@Composable
+fun renderFolderTree(
+    node: FolderNode,
+    depth: Int,
+    selectedFolder: String,
     onSelect: (String) -> Unit
 ) {
-    item {
-        NavigationDrawerItem(
-            label = { 
-                Text(
-                    text = node.folder.name,
-                    color = if (node.folder.holdsMessages) LocalContentColor.current else LocalContentColor.current.copy(alpha = 0.5f)
-                ) 
-            },
-            selected = node.folder.fullName == selectedFolder,
-            onClick = { if (node.folder.holdsMessages) onSelect(node.folder.fullName) },
-            modifier = Modifier
-                .padding(NavigationDrawerItemDefaults.ItemPadding)
-                .padding(start = (depth * 16).dp)
-        )
-    }
+    NavigationDrawerItem(
+        label = {
+            Text(
+                text = node.folder.name,
+                color = if (node.folder.holdsMessages) LocalContentColor.current else LocalContentColor.current.copy(alpha = 0.5f)
+            )
+        },
+        selected = node.folder.fullName == selectedFolder,
+        onClick = { if (node.folder.holdsMessages) onSelect(node.folder.fullName) },
+        modifier = Modifier
+            .padding(NavigationDrawerItemDefaults.ItemPadding)
+            .padding(start = (depth * 16).dp)
+    )
     node.children.forEach { child ->
         renderFolderTree(child, depth + 1, selectedFolder, onSelect)
     }
