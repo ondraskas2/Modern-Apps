@@ -69,6 +69,31 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                                 )
                                 if (messages.isNotEmpty()) dao.insertMessages(messages)
                                 if (attachments.isNotEmpty()) dao.insertAttachments(attachments)
+
+                                // Notifications: only for INBOX, only when the app
+                                // isn't already in the foreground, and only for UIDs
+                                // strictly greater than the last UID we've already
+                                // surfaced — so the first sync of an account doesn't
+                                // dump 50 notifications at once.
+                                if (folder.fullName == "INBOX" && messages.isNotEmpty()) {
+                                    val lastSeen = lastSeenPrefs(applicationContext)
+                                        .getLong(lastSeenKey(accountToUse.email, folder.fullName), -1L)
+                                    if (lastSeen < 0L) {
+                                        // First time: baseline only, no notifications.
+                                    } else if (!com.vayunmathur.email.util.AppLifecycleTracker.isAppInForeground) {
+                                        val notifiable = messages.filter { it.id > lastSeen }
+                                        com.vayunmathur.email.util.EmailNotifications.postForNewMessages(
+                                            applicationContext, accountToUse.email, notifiable,
+                                        )
+                                    }
+                                    val maxUid = messages.maxOf { it.id }
+                                    if (maxUid > lastSeen) {
+                                        lastSeenPrefs(applicationContext).edit()
+                                            .putLong(lastSeenKey(accountToUse.email, folder.fullName), maxUid)
+                                            .apply()
+                                    }
+                                }
+
                                 Log.d("EmailSync", "[${index + 1}/${messageFolders.size}] ${folder.fullName}: ${messages.size} new (skipped ${knownUids.size}).")
                             } catch (e: Exception) {
                                 Log.e("EmailSync", "   x Failed folder ${folder.fullName}", e)
@@ -163,6 +188,14 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
 
         /** How many missing-body messages to backfill per worker run. */
         private const val BACKFILL_LIMIT = 200
+
+        // ---- Notification baseline ----
+
+        private fun lastSeenPrefs(context: Context) =
+            context.getSharedPreferences("email_notif_last_seen", Context.MODE_PRIVATE)
+
+        private fun lastSeenKey(accountEmail: String, folderName: String) =
+            "$accountEmail::$folderName"
 
         fun schedulePeriodicSync(context: Context) {
             val constraints = Constraints.Builder()

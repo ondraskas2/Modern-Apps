@@ -61,6 +61,12 @@ class MainActivity : ComponentActivity() {
         // Wake the outbox sender on every cold start: if the process was killed
         // between scheduled retries, this is what gets it going again.
         com.vayunmathur.email.data.OutboxSendWorker.runNow(this)
+        // Android 13+: request POST_NOTIFICATIONS so new-mail alerts can be shown.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 7331)
+            }
+        }
         enableEdgeToEdge()
         setContent {
             val viewModel: EmailViewModel = viewModel()
@@ -71,6 +77,16 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        com.vayunmathur.email.util.AppLifecycleTracker.isAppInForeground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.vayunmathur.email.util.AppLifecycleTracker.isAppInForeground = false
     }
 
     override fun onNewIntent(intent: Intent) {
