@@ -24,8 +24,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,18 +45,24 @@ import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.isNew
 import com.vayunmathur.passwords.data.Password
 import com.vayunmathur.passwords.Route
+import com.vayunmathur.passwords.util.PasswordsViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: DatabaseViewModel) {
+fun PasswordEditPage(
+    backStack: NavBackStack<Route>,
+    id: Long,
+    viewModel: DatabaseViewModel,
+    passwordsViewModel: PasswordsViewModel,
+) {
     val pass by viewModel.getState<Password>(id) { Password() }
-    var name by remember { mutableStateOf(pass.name) }
-    var userId by remember { mutableStateOf(pass.userId) }
-    var password by remember { mutableStateOf(pass.password) }
-    var totp by remember { mutableStateOf(pass.totpSecret ?: "") }
-    // websites: maintain list and an input box for new site
-    val websitesList = remember { mutableStateListOf<String>().apply { addAll(pass.websites) } }
+    LaunchedEffect(id, pass) {
+        passwordsViewModel.initDraft(pass)
+    }
+    val draft by passwordsViewModel.draft.collectAsState()
+    val current = draft ?: pass
+
     var websiteInput by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
 
@@ -65,8 +72,11 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
 
     fun addWebsiteFromInput() {
         val candidate = websiteInput.trim()
-        if (candidate.isNotEmpty() && !websitesList.contains(candidate)) {
-            websitesList.add(candidate)
+        if (candidate.isNotEmpty()) {
+            passwordsViewModel.updateDraft { d ->
+                if (d.websites.contains(candidate)) d
+                else d.copy(websites = d.websites + candidate)
+            }
         }
         websiteInput = ""
     }
@@ -74,7 +84,7 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (pass.isNew()) "Add Password" else "Edit Password") },
+                title = { Text(if (current.isNew()) "Add Password" else "Edit Password") },
                 navigationIcon = {
                     IconNavigation(backStack)
                 }
@@ -82,26 +92,19 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
-                // basic validation
-                if (name.isBlank() || userId.isBlank()) {
+                val d = draft ?: return@FloatingActionButton
+                if (d.name.isBlank() || d.userId.isBlank()) {
                     scope.launch { snackbarHostState.showSnackbar("Name and User ID cannot be empty") }
                     return@FloatingActionButton
                 }
-
-                val newPass = pass.copy(
-                    name = name,
-                    userId = userId,
-                    password = password,
-                    totpSecret = totp.ifBlank { null },
-                    websites = websitesList.toList()
-                )
-
-                if (pass.isNew()) {
-                    viewModel.upsertAsync(newPass) { id ->
-                        backStack.setLast(Route.PasswordPage(id))
+                // Normalize empty TOTP to null before saving.
+                passwordsViewModel.updateDraft { it.copy(totpSecret = it.totpSecret?.ifBlank { null }) }
+                if (d.isNew()) {
+                    passwordsViewModel.saveDraft { newId ->
+                        backStack.setLast(Route.PasswordPage(newId))
                     }
                 } else {
-                    viewModel.upsertAsync(newPass)
+                    passwordsViewModel.saveDraft()
                     backStack.pop()
                 }
             }) {
@@ -113,16 +116,26 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
         Column(Modifier.padding(paddingValues).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Card(shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.label_name)) }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = userId, onValueChange = { userId = it }, label = { Text(stringResource(R.string.label_user_id_email)) }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = current.name,
+                        onValueChange = { v -> passwordsViewModel.updateDraft { it.copy(name = v) } },
+                        label = { Text(stringResource(R.string.label_name)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = current.userId,
+                        onValueChange = { v -> passwordsViewModel.updateDraft { it.copy(userId = v) } },
+                        label = { Text(stringResource(R.string.label_user_id_email)) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
 
             Card(shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
+                        value = current.password,
+                        onValueChange = { v -> passwordsViewModel.updateDraft { it.copy(password = v) } },
                         label = { Text(stringResource(R.string.label_password)) },
                         modifier = Modifier.fillMaxWidth(),
                         visualTransformation = if (showPassword) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
@@ -131,7 +144,13 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
                         }
                     )
 
-                    OutlinedTextField(value = totp, onValueChange = { totp = it }, label = { Text(stringResource(R.string.label_totp_secret)) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions.Default)
+                    OutlinedTextField(
+                        value = current.totpSecret ?: "",
+                        onValueChange = { v -> passwordsViewModel.updateDraft { it.copy(totpSecret = v) } },
+                        label = { Text(stringResource(R.string.label_totp_secret)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions.Default,
+                    )
                 }
             }
 
@@ -151,15 +170,19 @@ fun PasswordEditPage(backStack: NavBackStack<Route>, id: Long, viewModel: Databa
                     )
 
                     // websites preview as chips with remove X
-                    if (websitesList.isNotEmpty()) {
+                    if (current.websites.isNotEmpty()) {
                         FlowRow(
                             modifier = Modifier.padding(8.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            for ((index, w) in websitesList.withIndex()) {
+                            for ((index, w) in current.websites.withIndex()) {
                                 InputChip(true, {}, label = { Text(w)}, modifier = Modifier.padding(vertical = 4.dp),
                                     trailingIcon = {
-                                        Box(Modifier.clickable { websitesList.removeAt(index) }) {
+                                        Box(Modifier.clickable {
+                                            passwordsViewModel.updateDraft { d ->
+                                                d.copy(websites = d.websites.toMutableList().also { it.removeAt(index) })
+                                            }
+                                        }) {
                                             IconClose()
                                         }
                                     })

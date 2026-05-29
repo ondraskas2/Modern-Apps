@@ -3,10 +3,10 @@ package com.vayunmathur.passwords
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.fragment.app.FragmentActivity
 import com.vayunmathur.library.util.NavKey
-import androidx.room.migration.Migration
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.ListDetailPage
@@ -21,9 +21,16 @@ import com.vayunmathur.passwords.data.Password
 import com.vayunmathur.passwords.ui.PasswordEditPage
 import com.vayunmathur.passwords.ui.PasswordPage
 import com.vayunmathur.passwords.ui.SettingsPage
+import com.vayunmathur.passwords.util.PasswordsViewModel
+import com.vayunmathur.passwords.util.PasswordsViewModelFactory
 import kotlinx.serialization.Serializable
 
 class MainActivity : FragmentActivity() {
+    private lateinit var viewModel: DatabaseViewModel
+    private val passwordsViewModel: PasswordsViewModel by viewModels {
+        PasswordsViewModelFactory(application, viewModel)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -32,10 +39,10 @@ class MainActivity : FragmentActivity() {
             activity = this,
             onSuccess = { passphrase ->
                 val db = buildDatabase<PasswordDatabase>(encryptionPassword = passphrase)
-                val viewModel = DatabaseViewModel(db,Password::class to db.passwordDao())
+                viewModel = DatabaseViewModel(db, Password::class to db.passwordDao())
                 setContent {
                     DynamicTheme {
-                        Navigation(viewModel, passphrase)
+                        Navigation(viewModel, passwordsViewModel, passphrase)
                     }
                 }
             },
@@ -63,20 +70,24 @@ sealed interface Route: NavKey {
 
 
 @Composable
-fun Navigation(viewModel: DatabaseViewModel, passphrase: String) {
+fun Navigation(
+    viewModel: DatabaseViewModel,
+    passwordsViewModel: PasswordsViewModel,
+    passphrase: String,
+) {
     val backStack = rememberNavBackStack<Route>(Route.Menu)
     MainNavigation(backStack) {
         entry<Route.Menu>(metadata = ListPage()) {
-            MenuPage(backStack, viewModel, passphrase)
+            MenuPage(backStack, viewModel, passwordsViewModel, passphrase)
         }
         entry<Route.PasswordPage>(metadata = ListDetailPage()) {
-            PasswordPage(backStack, it.id, viewModel)
+            PasswordPage(backStack, it.id, viewModel, passwordsViewModel)
         }
         entry<Route.PasswordEditPage>(metadata = ListDetailPage()) {
-            PasswordEditPage(backStack, it.id, viewModel)
+            PasswordEditPage(backStack, it.id, viewModel, passwordsViewModel)
         }
         entry<Route.Settings>(metadata = ListDetailPage()) {
-            SettingsPage(backStack, viewModel)
+            SettingsPage(backStack, passwordsViewModel)
         }
     }
 }

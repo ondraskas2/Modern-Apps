@@ -1,9 +1,6 @@
 package com.vayunmathur.passwords.ui
 
-import android.content.ContentResolver
-import android.content.Intent
 import android.net.Uri
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,34 +18,26 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.passwords.R
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.ui.IconNavigation
-import com.vayunmathur.library.util.DatabaseViewModel
-import com.vayunmathur.passwords.data.Password
-import kotlinx.coroutines.Dispatchers
+import com.vayunmathur.passwords.util.PasswordsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsPage(backStack: com.vayunmathur.library.util.NavBackStack<com.vayunmathur.passwords.Route>, viewModel: DatabaseViewModel) {
-    val context = LocalContext.current
-    var importing by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
+fun SettingsPage(
+    backStack: com.vayunmathur.library.util.NavBackStack<com.vayunmathur.passwords.Route>,
+    passwordsViewModel: PasswordsViewModel,
+) {
+    val importing by passwordsViewModel.importing.collectAsState()
+    val message by passwordsViewModel.importMessage.collectAsState()
 
-    // Side effect to handle selected URI: we observe the last picked Uri via a remembered state holder
-    var pickedUri by remember { mutableStateOf<Uri?>(null) }
-
-    // Recreate a launcher that sets pickedUri so we can process in LaunchedEffect
     val pickLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        pickedUri = uri
+        if (uri != null) passwordsViewModel.importCsv(uri)
     }
 
     Scaffold(Modifier, {
@@ -66,7 +55,6 @@ fun SettingsPage(backStack: com.vayunmathur.library.util.NavBackStack<com.vayunm
             Spacer(Modifier.height(16.dp))
 
             Button(onClick = {
-                // Open document types for CSV/plain text
                 pickLauncher.launch(arrayOf("text/csv", "text/plain", "application/octet-stream", "text/comma-separated-values"))
             }, enabled = !importing) {
                 Text(stringResource(R.string.import_bitwarden_csv))
@@ -85,107 +73,5 @@ fun SettingsPage(backStack: com.vayunmathur.library.util.NavBackStack<com.vayunm
                 Text(it)
             }
         }
-    }
-
-    // Observe pickedUri and process
-    LaunchedEffect(pickedUri) {
-        val uri = pickedUri ?: return@LaunchedEffect
-        importing = true
-        message = null
-        try {
-            // take persistable permission if available
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: Exception) {}
-
-            val cr = context.contentResolver
-            val result = importBitwardenCsvFromUri(cr, uri, viewModel)
-            message = "Imported ${result.inserted} rows, skipped ${result.skipped} rows"
-        } catch (e: Exception) {
-            message = "Import failed: ${e.message}"
-        } finally {
-            importing = false
-            pickedUri = null
-        }
-    }
-}
-
-private data class ImportResult(val inserted: Int, val skipped: Int)
-
-private suspend fun importBitwardenCsvFromUri(contentResolver: ContentResolver, uri: Uri, viewModel: DatabaseViewModel): ImportResult {
-    return kotlinx.coroutines.withContext(Dispatchers.IO) {
-        val inputStream = try {
-            contentResolver.openInputStream(uri)
-        } catch (e: Exception) {
-            Log.e("SettingsPage", "Error opening input stream for URI: $uri", e)
-            null
-        } ?: throw Exception("Unable to open selected file")
-        
-        val rows = try {
-            val reader = inputStream.bufferedReader()
-            val list = mutableListOf<List<String>>()
-            var line = reader.readLine()
-            while (line != null) {
-                val row = mutableListOf<String>()
-                var current = StringBuilder()
-                var inQuotes = false
-                var i = 0
-                while (i < line.length) {
-                    val c = line[i]
-                    if (c == '\"') {
-                        if (inQuotes && i + 1 < line.length && line[i+1] == '\"') {
-                            current.append('\"')
-                            i++
-                        } else inQuotes = !inQuotes
-                    } else if (c == ',' && !inQuotes) {
-                        row.add(current.toString())
-                        current = StringBuilder()
-                    } else current.append(c)
-                    i++
-                }
-                row.add(current.toString())
-                list.add(row)
-                line = reader.readLine()
-            }
-            list
-        } catch (e: Exception) {
-            Log.e("SettingsPage", "Error reading CSV from input stream", e)
-            emptyList<List<String>>()
-        }
-        if (rows.isEmpty()) return@withContext ImportResult(0, 0)
-
-        // First row is header - map column indices
-        val header = rows.first().map { it.trim().lowercase() }
-        val nameIdx = header.indexOf("name")
-        val loginUsernameIdx = header.indexOf("login_username").let { if (it >= 0) it else header.indexOf("username") }
-        val loginPasswordIdx = header.indexOf("login_password").let { if (it >= 0) it else header.indexOf("password") }
-        val loginUriIdx = header.indexOf("login_uri").let { if (it >= 0) it else header.indexOf("uri") }
-        val loginTotpIdx = header.indexOf("login_totp").let { if (it >= 0) it else header.indexOf("totp") }
-        // val notesIdx = header.indexOf("notes")
-
-        var inserted = 0
-        var skipped = 0
-
-        // Process each data row
-        val dataRows = rows.drop(1)
-        for (row in dataRows) {
-            try {
-                val name = if (nameIdx >= 0 && nameIdx < row.size) row[nameIdx] else ""
-                val username = if (loginUsernameIdx >= 0 && loginUsernameIdx < row.size) row[loginUsernameIdx] else ""
-                val password = if (loginPasswordIdx >= 0 && loginPasswordIdx < row.size) row[loginPasswordIdx] else ""
-                val uriField = if (loginUriIdx >= 0 && loginUriIdx < row.size) row[loginUriIdx] else ""
-                val totp = if (loginTotpIdx >= 0 && loginTotpIdx < row.size) row[loginTotpIdx] else null
-
-                val websites = uriField.split(';', '\n', '\r').mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-
-                val pass = Password(name = name, userId = username, password = password, totpSecret = totp, websites = websites)
-                viewModel.upsertAsync(pass)
-                inserted++
-            } catch (_: Exception) {
-                skipped++
-            }
-        }
-
-        ImportResult(inserted, skipped)
     }
 }

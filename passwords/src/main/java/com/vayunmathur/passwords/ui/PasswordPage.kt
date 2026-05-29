@@ -1,8 +1,5 @@
 package com.vayunmathur.passwords.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,12 +30,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,18 +52,28 @@ import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.passwords.data.Password
 import com.vayunmathur.passwords.R
 import com.vayunmathur.passwords.Route
+import com.vayunmathur.passwords.util.PasswordsViewModel
 import com.vayunmathur.passwords.util.TOTP
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PasswordPage(backStack: NavBackStack<Route>, id: Long, viewModel: DatabaseViewModel) {
+fun PasswordPage(
+    backStack: NavBackStack<Route>,
+    id: Long,
+    viewModel: DatabaseViewModel,
+    passwordsViewModel: PasswordsViewModel,
+) {
     val password by viewModel.getState<Password>(id)
     val context = LocalContext.current
     var showPassword by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val now by passwordsViewModel.tickerFlow.collectAsState()
+
+    LaunchedEffect(Unit) {
+        passwordsViewModel.copyEvents.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -147,8 +152,7 @@ fun PasswordPage(backStack: NavBackStack<Route>, id: Long, viewModel: DatabaseVi
                         }
 
                         IconButton(onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("password", password.password))
+                            passwordsViewModel.copyToClipboard("password", password.password)
                         }) {
                             Icon(painterResource(R.drawable.content_copy_24px), contentDescription = "Copy")
                         }
@@ -162,35 +166,18 @@ fun PasswordPage(backStack: NavBackStack<Route>, id: Long, viewModel: DatabaseVi
                     Text(stringResource(R.string.section_totp), style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
 
-                    if (password.totpSecret.isNullOrBlank()) {
+                    val secret = password.totpSecret
+                    if (secret.isNullOrBlank()) {
                         Text(stringResource(R.string.totp_not_configured))
                     } else {
-                        var currentCode by remember { mutableStateOf("") }
-                        var progress by remember { mutableFloatStateOf(1f) }
-                        var secondsRemaining by remember { mutableIntStateOf(30) }
-
-                        LaunchedEffect(Unit) {
-                            while (true) {
-                                val nowMs = System.currentTimeMillis()
-                                val nowSeconds = nowMs / 1000
-
-                                // 1. Calculate the current 30s bucket (Time Step)
-                                val timeStep = nowSeconds / 30
-
-                                // 2. Generate code based on this bucket
-                                currentCode = TOTP.generate(password.totpSecret!!, timeStep*30)
-
-                                // 3. Calculate remaining time in this specific bucket
-                                val millisIntoStep = nowMs % 30000
-                                val millisRemaining = 30000 - millisIntoStep
-
-                                secondsRemaining = (millisRemaining / 1000).toInt()
-                                progress = millisRemaining / 30000f
-
-                                // Tick frequently for a smooth progress bar
-                                delay(50)
-                            }
+                        val timeStep = now / 1000 / 30
+                        val currentCode = remember(secret, timeStep) {
+                            TOTP.generate(secret, timeStep * 30)
                         }
+                        val millisIntoStep = now % 30000
+                        val millisRemaining = 30000 - millisIntoStep
+                        val secondsRemaining = (millisRemaining / 1000).toInt()
+                        val progress = millisRemaining / 30000f
 
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                             Column {
@@ -203,9 +190,7 @@ fun PasswordPage(backStack: NavBackStack<Route>, id: Long, viewModel: DatabaseVi
                             Box(contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator({ progress }, Modifier.size(56.dp))
                                 IconButton({
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("totp", currentCode))
-                                    scope.launch { snackbarHostState.showSnackbar("TOTP copied") }
+                                    passwordsViewModel.copyToClipboard("totp", currentCode, "TOTP copied")
                                 }) {
                                     Icon(painterResource(R.drawable.content_copy_24px), contentDescription = "Copy TOTP")
                                 }
