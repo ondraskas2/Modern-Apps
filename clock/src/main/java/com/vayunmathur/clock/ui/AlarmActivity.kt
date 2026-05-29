@@ -40,7 +40,6 @@ import com.vayunmathur.clock.data.ClockDatabase
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.IconPause
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getNullable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlin.time.Clock
@@ -67,7 +66,7 @@ class AlarmActivity : ComponentActivity() {
         setContent {
             val alarm by androidx.compose.runtime.produceState<com.vayunmathur.clock.data.Alarm?>(initialValue = null) {
                 value = withContext(Dispatchers.IO) {
-                    db.alarmDao().getNullable(alarmId)
+                    db.alarmDao().get(alarmId)
                 }
             }
 

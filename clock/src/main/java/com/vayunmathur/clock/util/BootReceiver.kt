@@ -3,10 +3,8 @@ package com.vayunmathur.clock.util
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.vayunmathur.clock.data.Alarm
 import com.vayunmathur.clock.data.ClockDatabase
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,7 +16,7 @@ class BootReceiver : BroadcastReceiver() {
             val scheduler = AlarmScheduler.get()
             
             CoroutineScope(Dispatchers.IO).launch {
-                val alarms = db.alarmDao().getAll<Alarm>()
+                val alarms = db.alarmDao().getAll()
                 alarms.forEach { alarm ->
                     if (alarm.enabled) {
                         scheduler.schedule(context, alarm)

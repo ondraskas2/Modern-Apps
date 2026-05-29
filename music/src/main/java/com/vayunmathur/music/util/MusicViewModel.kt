@@ -70,7 +70,7 @@ class MusicViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // Single subscription to the matchings table; everything that needs a
-    // typed lookup derives from this (mirrors DatabaseViewModel.matchesStateFlow).
+    // typed lookup derives from this.
     private val matchings: StateFlow<List<ManyManyMatching>> = matchingDao.flow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

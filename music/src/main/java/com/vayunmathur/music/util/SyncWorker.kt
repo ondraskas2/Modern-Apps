@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
-import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -15,9 +14,6 @@ import androidx.work.ListenableWorker.Result as WorkResult
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.ManyManyMatching
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
-import com.vayunmathur.music.data.Album
-import com.vayunmathur.music.data.Artist
 import com.vayunmathur.music.data.Music
 import com.vayunmathur.music.data.MusicDatabase
 import com.vayunmathur.music.data.TYPE_ALBUM_ARTIST
@@ -112,13 +108,13 @@ suspend fun syncMusic(context: Context, database: MusicDatabase, uris: List<Uri>
         val triggeredIds = uris.mapNotNull { runCatching { ContentUris.parseId(it) }.getOrNull() }.toSet()
         triggeredIds - allMediaStoreIds
     } else {
-        val localIds = musicDao.getAll<Music>().map { it.id }.toSet()
+        val localIds = musicDao.getAll().map { it.id }.toSet()
         localIds - allMediaStoreIds
     }
 
     if (toDelete.isNotEmpty()) {
         toDelete.chunked(900).forEach { chunk ->
-            musicDao.observeNothing(SimpleSQLiteQuery("DELETE FROM Music WHERE id IN (${chunk.joinToString(",")})"))
+            musicDao.deleteByIds(chunk)
         }
     }
 
@@ -197,7 +193,7 @@ suspend fun syncMusic(context: Context, database: MusicDatabase, uris: List<Uri>
 
     if (uris == null && lastGeneration == 0L) {
         // Full refresh: wipe + reinsert.
-        musicDao.observeNothing(SimpleSQLiteQuery("DELETE FROM Music"))
+        musicDao.deleteAll()
         musicDao.upsertAll(musicList)
     } else {
         musicDao.upsertAll(musicList)
@@ -207,15 +203,15 @@ suspend fun syncMusic(context: Context, database: MusicDatabase, uris: List<Uri>
     val albums = getAlbums(context)
     val artists = getArtists(context)
 
-    albumDao.observeNothing(SimpleSQLiteQuery("DELETE FROM Album"))
+    albumDao.deleteAll()
     albumDao.upsertAll(albums)
-    artistDao.observeNothing(SimpleSQLiteQuery("DELETE FROM Artist"))
+    artistDao.deleteAll()
     artistDao.upsertAll(artists)
 
     // 5. Rebuild relationship matchings
-    val allMusic = musicDao.getAll<Music>()
-    val allAlbums = albumDao.getAll<Album>()
-    val allArtists = artistDao.getAll<Artist>()
+    val allMusic = musicDao.getAll()
+    val allAlbums = albumDao.getAll()
+    val allArtists = artistDao.getAll()
 
     Log.d("MusicSyncWorker", "Rebuilding matchings: Music=${allMusic.size}, Albums=${allAlbums.size}, Artists=${allArtists.size}")
 

@@ -25,7 +25,8 @@ data class User(
     val lastLocationChangeTime: Instant = Clock.System.now(),
     val encryptionKey: String? = null,
 
-    @PrimaryKey(autoGenerate = true) override val id: Long = 0
+    @PrimaryKey(autoGenerate = true) override val id: Long = 0,
+    val lastWaypointId: Long? = null
 ): DatabaseItem {
     companion object {
         val EMPTY = User(" ", null, "Unnamed Location", true, RequestStatus.MUTUAL_CONNECTION, Clock.System.now(), null)

@@ -3,8 +3,6 @@ package com.vayunmathur.notes.intents
 import com.vayunmathur.library.intents.notes.NoteData
 import com.vayunmathur.library.util.AssistantIntent
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
-import com.vayunmathur.notes.data.Note
 import com.vayunmathur.notes.data.NoteDatabase
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.serializer
@@ -14,6 +12,6 @@ class GetIntent: AssistantIntent<Unit, List<NoteData>>(serializer<Unit>(), seria
 
     override suspend fun performCalculation(input: Unit): List<NoteData> {
         val db = buildDatabase<NoteDatabase>()
-        return db.noteDao().getAll<Note>().map { NoteData(it.title, it.content) }
+        return db.noteDao().getAll().map { NoteData(it.title, it.content) }
     }
 }

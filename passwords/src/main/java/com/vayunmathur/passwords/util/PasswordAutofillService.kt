@@ -16,7 +16,6 @@ import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
 import androidx.core.net.toUri
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
 import com.vayunmathur.passwords.data.PasswordDatabase
 import kotlinx.coroutines.runBlocking
 import android.util.Log
@@ -54,7 +53,7 @@ class PasswordAutofillService : AutofillService() {
         runBlocking {
             try {
                 // 3. Fetch and Filter Passwords
-                val allPasswords = passwordDao.getAll<Password>()
+                val allPasswords = passwordDao.getAll()
 
                 val matches = allPasswords.filter { pass ->
                     pass.websites.any { site -> matchesContext(site, targetPackage, targetWebDomain) }
@@ -108,7 +107,7 @@ class PasswordAutofillService : AutofillService() {
 
         if (!username.isNullOrBlank() && !password.isNullOrBlank()) {
             runBlocking {
-                val existing = passwordDao.getAll<Password>().firstOrNull { it.userId == username }
+                val existing = passwordDao.getAll().firstOrNull { it.userId == username }
                 if (existing != null) {
                     passwordDao.upsert(existing.copy(password = password))
                 } else {

@@ -45,7 +45,6 @@ import com.vayunmathur.findfamily.Migration_2_3
 import com.vayunmathur.findfamily.R
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
 import com.vayunmathur.findfamily.util.startRepeatedTask
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +94,8 @@ class LocationTrackingService : Service(), SensorEventListener {
     private var isMoving = false
     private var lastMovementTime = 0L
     private var lastKnownLocation: Location? = null
+    private var heartbeatJob: Job? = null
+    private var trackingInitialized = false
 
     private val networkListener = LocationListener { location ->
         lastKnownLocation = location
@@ -112,9 +113,9 @@ class LocationTrackingService : Service(), SensorEventListener {
         val location = lastKnownLocation ?: return
         if (Networking.userid == 0L) return
         
-        val currentUsers = userDao.getAll<User>()
-        val currentWaypoints = waypointDao.getAll<Waypoint>()
-        val currentLinks = temporaryLinkDao.getAll<TemporaryLink>()
+        val currentUsers = userDao.getAll()
+        val currentWaypoints = waypointDao.getAll()
+        val currentLinks = temporaryLinkDao.getAll()
         val userIDs = currentUsers.map { it.id }
         val now = Clock.System.now()
 
@@ -165,23 +166,44 @@ class LocationTrackingService : Service(), SensorEventListener {
 
                     if (lastLoc.battery <= 15f && (lastSavedLoc?.battery ?: 100f) > 15f) {
                         if (user.id != Networking.userid) {
-                            createNotificationWithCategory(user.name, getString(R.string.notification_low_battery, user.name), "BATTERY_LOW")
+                            createNotificationWithCategory(user.name, getString(R.string.notification_low_battery, user.name), "BATTERY_LOW", user.id)
                         }
                     }
 
                     val inWaypoint = currentWaypoints.find { havershine(it.coord, lastLoc.coord) < it.range }
-                    val newLocationName = inWaypoint?.name ?: fetchAddress(lastLoc.coord.lat, lastLoc.coord.lon)?.let {
-                        it.featureName ?: it.thoroughfare
-                    } ?: "Unknown Location"
+                    val prevId = user.lastWaypointId
+                    val stillInsidePrev = prevId?.let { pid ->
+                        currentWaypoints.find { it.id == pid }?.let {
+                            havershine(it.coord, lastLoc.coord) < it.range * 1.2
+                        }
+                    } ?: false
+                    val currentId: Long? = inWaypoint?.id ?: if (stillInsidePrev) prevId else null
 
-                    if (newLocationName != user.locationName) {
-                        userDao.upsert(user.copy(locationName = newLocationName, lastLocationChangeTime = lastLoc.timestamp))
-                        if (user.id != Networking.userid) {
-                            if (inWaypoint != null) {
-                                createNotificationWithCategory(user.name, getString(R.string.notification_entered_waypoint, user.name, inWaypoint.name), "ENTRY_EXIT")
-                            } else if (currentWaypoints.any { it.name == user.locationName }) {
-                                createNotificationWithCategory(user.name, getString(R.string.notification_exited_waypoint, user.name, user.locationName), "ENTRY_EXIT")
-                            }
+                    // Display name: prefer waypoint name (either entered or sticky-via-hysteresis), then geocoded address.
+                    val displayName = inWaypoint?.name
+                        ?: currentWaypoints.find { it.id == currentId }?.name
+                        ?: fetchAddress(lastLoc.coord.lat, lastLoc.coord.lon)?.let {
+                            it.featureName ?: it.thoroughfare
+                        }
+                        ?: "Unknown Location"
+
+                    if (currentId != prevId || displayName != user.locationName) {
+                        userDao.upsert(user.copy(
+                            locationName = displayName,
+                            lastWaypointId = currentId,
+                            lastLocationChangeTime = lastLoc.timestamp
+                        ))
+                    }
+
+                    if (currentId != prevId && user.id != Networking.userid) {
+                        if (currentId != null) {
+                            val enteredName = inWaypoint?.name
+                                ?: currentWaypoints.find { it.id == currentId }?.name
+                                ?: displayName
+                            createNotificationWithCategory(user.name, getString(R.string.notification_entered_waypoint, user.name, enteredName), "ENTRY_EXIT", user.id)
+                        } else if (prevId != null) {
+                            val exitedName = currentWaypoints.find { it.id == prevId }?.name ?: user.locationName
+                            createNotificationWithCategory(user.name, getString(R.string.notification_exited_waypoint, user.name, exitedName), "ENTRY_EXIT", user.id)
                         }
                     }
                 }
@@ -237,31 +259,37 @@ class LocationTrackingService : Service(), SensorEventListener {
 
     private fun startTracking() {
         serviceScope.launch {
-            val db = buildDatabase<FFDatabase>()
-            userDao = db.userDao()
-            waypointDao = db.waypointDao()
-            locationValueDao = db.locationValueDao()
-            temporaryLinkDao = db.temporaryLinkDao()
-            Networking.init(userDao, DataStoreUtils.getInstance(this@LocationTrackingService))
-            
-            launch {
+            if (!trackingInitialized) {
+                val db = buildDatabase<FFDatabase>()
+                userDao = db.userDao()
+                waypointDao = db.waypointDao()
+                locationValueDao = db.locationValueDao()
+                temporaryLinkDao = db.temporaryLinkDao()
+                Networking.init(userDao, DataStoreUtils.getInstance(this@LocationTrackingService))
+
+                withContext(Dispatchers.Main) {
+                    registerSensors()
+                    // If we don't have any recent location (e.g. fresh start or recovery
+                    // from a crash), force isMoving = true so setupLocationUpdates()
+                    // immediately starts requesting GPS instead of waiting for the
+                    // significant-motion sensor to trigger.
+                    if (lastKnownLocation == null) {
+                        isMoving = true
+                        lastMovementTime = System.currentTimeMillis()
+                    }
+                    setupLocationUpdates()
+                }
+                trackingInitialized = true
+            }
+
+            // Cancel any prior heartbeat coroutine so onStartCommand re-entries
+            // (e.g. from ServiceRestartWorker) don't stack multiple heartbeat loops.
+            heartbeatJob?.cancel()
+            heartbeatJob = launch {
                 while (isActive) {
                     syncHeartbeat()
                     delay(30.seconds)
                 }
-            }
-
-            withContext(Dispatchers.Main) {
-                registerSensors()
-                // If we don't have any recent location (e.g. fresh start or recovery
-                // from a crash), force isMoving = true so setupLocationUpdates()
-                // immediately starts requesting GPS instead of waiting for the
-                // significant-motion sensor to trigger.
-                if (lastKnownLocation == null) {
-                    isMoving = true
-                    lastMovementTime = System.currentTimeMillis()
-                }
-                setupLocationUpdates()
             }
         }
     }
@@ -367,7 +395,7 @@ class LocationTrackingService : Service(), SensorEventListener {
             .build()
     }
 
-    private fun createNotificationWithCategory(title: String, message: String, category: String) {
+    private fun createNotificationWithCategory(title: String, message: String, category: String, userId: Long) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
         val channelId = when (category) {
@@ -383,8 +411,8 @@ class LocationTrackingService : Service(), SensorEventListener {
             .setAutoCancel(true)
             .build()
 
-        // Generate a unique ID so notifications don't overwrite each other
-        val notificationId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+        // Stable per-(user, category) ID so repeat notifications replace rather than stack.
+        val notificationId = "$userId::$category".hashCode()
         manager.notify(notificationId, notification)
     }
 

@@ -41,7 +41,6 @@ import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
-import com.vayunmathur.library.util.isNew
 import com.vayunmathur.passwords.data.Password
 import com.vayunmathur.passwords.Route
 import com.vayunmathur.passwords.util.PasswordsViewModel
@@ -82,7 +81,7 @@ fun PasswordEditPage(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (current.isNew()) "Add Password" else "Edit Password") },
+                title = { Text(if (current.id == 0L) "Add Password" else "Edit Password") },
                 navigationIcon = {
                     IconNavigation(backStack)
                 }
@@ -97,7 +96,7 @@ fun PasswordEditPage(
                 }
                 // Normalize empty TOTP to null before saving.
                 viewModel.updateDraft { it.copy(totpSecret = it.totpSecret?.ifBlank { null }) }
-                if (d.isNew()) {
+                if (d.id == 0L) {
                     viewModel.saveDraft { newId ->
                         backStack.setLast(Route.PasswordPage(newId))
                     }

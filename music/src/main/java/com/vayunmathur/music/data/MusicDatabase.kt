@@ -4,43 +4,67 @@ import androidx.room.Database
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.Upsert
 import com.vayunmathur.library.util.DefaultConverters
 import com.vayunmathur.library.util.ManyManyMatching
 import com.vayunmathur.library.util.MatchingDao
-import com.vayunmathur.library.util.TrueDao
 import androidx.room.migration.Migration
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface MusicDao : TrueDao<Music> {
+interface MusicDao {
     @Query("SELECT * FROM Music")
     fun getAllFlow(): Flow<List<Music>>
     @Query("SELECT * FROM Music WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<Music?>
+    @Query("SELECT * FROM Music")
+    suspend fun getAll(): List<Music>
+    @Upsert
+    suspend fun upsertAll(items: List<Music>)
+    @Query("DELETE FROM Music")
+    suspend fun deleteAll()
+    @Query("DELETE FROM Music WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
 }
 
 @Dao
-interface AlbumDao : TrueDao<Album> {
+interface AlbumDao {
     @Query("SELECT * FROM Album")
     fun getAllFlow(): Flow<List<Album>>
     @Query("SELECT * FROM Album WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<Album?>
+    @Query("SELECT * FROM Album")
+    suspend fun getAll(): List<Album>
+    @Upsert
+    suspend fun upsertAll(items: List<Album>)
+    @Query("DELETE FROM Album")
+    suspend fun deleteAll()
 }
 
 @Dao
-interface ArtistDao : TrueDao<Artist> {
+interface ArtistDao {
     @Query("SELECT * FROM Artist")
     fun getAllFlow(): Flow<List<Artist>>
     @Query("SELECT * FROM Artist WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<Artist?>
+    @Query("SELECT * FROM Artist")
+    suspend fun getAll(): List<Artist>
+    @Upsert
+    suspend fun upsertAll(items: List<Artist>)
+    @Query("DELETE FROM Artist")
+    suspend fun deleteAll()
 }
 
 @Dao
-interface PlaylistDao : TrueDao<Playlist> {
+interface PlaylistDao {
     @Query("SELECT * FROM Playlist")
     fun getAllFlow(): Flow<List<Playlist>>
     @Query("SELECT * FROM Playlist WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<Playlist?>
+    @Query("SELECT * FROM Playlist")
+    suspend fun getAll(): List<Playlist>
+    @Upsert
+    suspend fun upsert(value: Playlist): Long
 }
 
 @TypeConverters(DefaultConverters::class)
@@ -58,12 +82,9 @@ abstract class MusicDatabase: RoomDatabase() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Many-to-many matching type codes. These mirror the indices used by the
-// pre-refactor `DatabaseViewModel(db, Music::class to ..., Album::class to ...,
-// Artist::class to ..., Playlist::class to ...)` registration: type code is
-// `min(a,b) + 100*max(a,b)` over the indices (Music=0, Album=1, Artist=2,
-// Playlist=3). The "left" side of a row in `ManyManyMatching` is the entity
-// with the smaller index.
+// Many-to-many matching type codes. Indices are Music=0, Album=1, Artist=2,
+// Playlist=3, and a type code is `min(a,b) + 100*max(a,b)`. The "left" side
+// of a row in `ManyManyMatching` is the entity with the smaller index.
 // ─────────────────────────────────────────────────────────────────────────────
 const val TYPE_MUSIC_ALBUM: Int = 0 + 100 * 1       // 100, left=Music,  right=Album
 const val TYPE_MUSIC_ARTIST: Int = 0 + 100 * 2      // 200, left=Music,  right=Artist

@@ -17,9 +17,7 @@ import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.DialogPage
 import com.vayunmathur.library.util.MainNavigation
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
 import com.vayunmathur.library.util.rememberNavBackStack
-import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.data.PhotoDatabase
 import com.vayunmathur.photos.util.PhotoEditViewModel
@@ -47,7 +45,7 @@ class EditActivity : ComponentActivity() {
                     if (photoId == -1L && (intent.action == Intent.ACTION_EDIT || intent.action == Intent.ACTION_VIEW)) {
                         intent.data?.let { uri ->
                             val uriString = uri.toString()
-                            val existing = photoDao.getAll<Photo>("uri = '$uriString'")
+                            val existing = photoDao.getByUri(uriString)
                             if (existing.isNotEmpty()) {
                                 photoId = existing.first().id
                             } else {

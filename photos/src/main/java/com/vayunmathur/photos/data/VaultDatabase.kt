@@ -7,7 +7,6 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import com.vayunmathur.library.util.DatabaseItem
-import com.vayunmathur.library.util.TrueDao
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -25,12 +24,18 @@ data class VaultPhoto(
 ) : DatabaseItem
 
 @Dao
-interface VaultPhotoDao : TrueDao<VaultPhoto> {
+interface VaultPhotoDao {
     @Query("SELECT * FROM VaultPhoto")
     fun getAllFlow(): kotlinx.coroutines.flow.Flow<List<VaultPhoto>>
 
     @Query("SELECT * FROM VaultPhoto WHERE id = :id")
     fun getByIdFlow(id: Long): kotlinx.coroutines.flow.Flow<VaultPhoto?>
+
+    @androidx.room.Upsert
+    suspend fun upsert(value: VaultPhoto): Long
+
+    @androidx.room.Delete
+    suspend fun delete(value: VaultPhoto): Int
 }
 
 @Database(entities = [VaultPhoto::class], version = 1, exportSchema = false)

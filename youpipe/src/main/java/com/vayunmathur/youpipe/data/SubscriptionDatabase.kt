@@ -2,13 +2,14 @@ package com.vayunmathur.youpipe.data
 
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Delete
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.Upsert
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.vayunmathur.library.util.DefaultConverters
-import com.vayunmathur.library.util.TrueDao
 import kotlinx.coroutines.flow.Flow
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -33,16 +34,22 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
 }
 
 @Dao
-interface HistoryVideoDao : TrueDao<HistoryVideo> {
+interface HistoryVideoDao {
     @Query("SELECT * FROM HistoryVideo")
     fun getAllFlow(): Flow<List<HistoryVideo>>
 
     @Query("SELECT * FROM HistoryVideo WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<HistoryVideo?>
+
+    @Upsert
+    suspend fun upsert(value: HistoryVideo): Long
+
+    @Upsert
+    suspend fun upsertAll(values: List<HistoryVideo>)
 }
 
 @Dao
-interface SubscriptionDao : TrueDao<Subscription> {
+interface SubscriptionDao {
     @Query("SELECT * FROM Subscription")
     fun getAllFlow(): Flow<List<Subscription>>
 
@@ -54,15 +61,27 @@ interface SubscriptionDao : TrueDao<Subscription> {
 
     @Query("DELETE FROM Subscription")
     suspend fun clearAll()
+
+    @Upsert
+    suspend fun upsert(value: Subscription): Long
+
+    @Upsert
+    suspend fun upsertAll(values: List<Subscription>)
+
+    @Delete
+    suspend fun delete(value: Subscription): Int
 }
 
 @Dao
-interface SubscriptionVideoDao : TrueDao<SubscriptionVideo> {
+interface SubscriptionVideoDao {
     @Query("SELECT * FROM SubscriptionVideo")
     fun getAllFlow(): Flow<List<SubscriptionVideo>>
 
     @Query("SELECT * FROM SubscriptionVideo WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<SubscriptionVideo?>
+
+    @Upsert
+    suspend fun upsertAll(values: List<SubscriptionVideo>)
 }
 
 @TypeConverters(DefaultConverters::class)

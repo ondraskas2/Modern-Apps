@@ -28,8 +28,6 @@ import com.vayunmathur.findfamily.data.User
 import com.vayunmathur.findfamily.data.UserDao
 import com.vayunmathur.findfamily.data.Waypoint
 import com.vayunmathur.findfamily.data.WaypointDao
-import com.vayunmathur.library.util.get
-import com.vayunmathur.library.util.getAll
 import dev.whyoleg.cryptography.algorithms.RSA
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -77,7 +75,7 @@ class FindFamilyViewModel(
     private val ctx: Context get() = getApplication()
 
     // ------------------------------------------------------------------
-    // DB-backed exposed flows (replace DatabaseViewModel.data<T>())
+    // DB-backed exposed flows
     // ------------------------------------------------------------------
 
     val users: StateFlow<List<User>> = userDao.getAllFlow()
@@ -94,7 +92,7 @@ class FindFamilyViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     // ------------------------------------------------------------------
-    // Composable single-item accessors (replace DatabaseViewModel.getState<T>())
+    // Composable single-item accessors
     // ------------------------------------------------------------------
 
     @Composable
@@ -237,7 +235,7 @@ class FindFamilyViewModel(
         val id = _selectedWaypointId.value ?: return
         val coord = _waypointCoord.value
         viewModelScope.launch(Dispatchers.IO) {
-            val base = if (id == 0L) Waypoint.NEW_WAYPOINT else waypointDao.get<Waypoint>(id)
+            val base = if (id == 0L) Waypoint.NEW_WAYPOINT else waypointDao.get(id)
             waypointDao.upsert(base.copy(name = name, range = range, coord = coord))
             withContext(Dispatchers.Main) {
                 _selectedWaypointId.value = null
@@ -349,7 +347,7 @@ class FindFamilyViewModel(
         // the LocationTrackingService before we read Networking.userid.
         viewModelScope.launch {
             delay(1000)
-            val allUsers = withContext(Dispatchers.IO) { userDao.getAll<User>() }
+            val allUsers = withContext(Dispatchers.IO) { userDao.getAll() }
             if (allUsers.none { it.id == Networking.userid }) {
                 withContext(Dispatchers.IO) {
                     userDao.upsert(

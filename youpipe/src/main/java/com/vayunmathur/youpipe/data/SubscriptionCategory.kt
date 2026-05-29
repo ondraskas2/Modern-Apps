@@ -7,8 +7,8 @@ import androidx.room.ForeignKey
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 import com.vayunmathur.library.util.DatabaseItem
-import com.vayunmathur.library.util.TrueDao
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
@@ -24,7 +24,7 @@ data class SubscriptionCategory(
 ): DatabaseItem
 
 @Dao
-interface SubscriptionCategoryDao: TrueDao<SubscriptionCategory> {
+interface SubscriptionCategoryDao {
     @Query("SELECT * FROM SubscriptionCategory")
     fun getAllFlow(): Flow<List<SubscriptionCategory>>
 
@@ -33,6 +33,9 @@ interface SubscriptionCategoryDao: TrueDao<SubscriptionCategory> {
 
     @Query("DELETE FROM SubscriptionCategory WHERE category = :categoryName")
     suspend fun deleteCategory(categoryName: String)
+
+    @Upsert
+    suspend fun upsertAll(items: List<SubscriptionCategory>)
 
     @Transaction
     suspend fun replaceCategory(originalCategoryName: String?, categoryName: String, map: List<Long>) {

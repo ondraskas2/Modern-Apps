@@ -3,8 +3,6 @@ package com.vayunmathur.music.intents
 import com.vayunmathur.library.intents.music.PlayMusicData
 import com.vayunmathur.library.util.AssistantIntent
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
-import com.vayunmathur.music.data.Music
 import com.vayunmathur.music.data.MusicDatabase
 import com.vayunmathur.music.data.TYPE_MUSIC_PLAYLIST
 import com.vayunmathur.music.util.PlaybackManager
@@ -18,7 +16,7 @@ class PlayIntent: AssistantIntent<PlayMusicData, Unit>(serializer<PlayMusicData>
         val db = buildDatabase<MusicDatabase>()
         val pm = PlaybackManager.getInstance(this)
 
-        val allMusic = db.musicDao().getAll<Music>()
+        val allMusic = db.musicDao().getAll()
 
         val songsToPlay = when (input.type) {
             "song" -> allMusic.filter { it.id == input.id }

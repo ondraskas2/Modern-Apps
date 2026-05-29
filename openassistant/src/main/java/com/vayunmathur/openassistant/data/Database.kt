@@ -10,7 +10,6 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.Upsert
 import com.vayunmathur.library.util.DefaultConverters
-import com.vayunmathur.library.util.TrueDao
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
@@ -48,7 +47,7 @@ data class Memory(
 
 
 @Dao
-interface ConversationDao : TrueDao<Conversation> {
+interface ConversationDao {
     @Query("SELECT * FROM Conversation ORDER BY timestamp DESC")
     fun getAllFlow(): Flow<List<Conversation>>
 
@@ -59,14 +58,14 @@ interface ConversationDao : TrueDao<Conversation> {
     suspend fun getById(id: Long): Conversation?
 
     @Upsert
-    override suspend fun upsert(value: Conversation): Long
+    suspend fun upsert(value: Conversation): Long
 
     @Delete
-    override suspend fun delete(value: Conversation): Int
+    suspend fun delete(value: Conversation): Int
 }
 
 @Dao
-interface MessageDao : TrueDao<Message> {
+interface MessageDao {
     @Query("SELECT * FROM Message WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun getByConversationFlow(conversationId: Long): Flow<List<Message>>
 
@@ -80,14 +79,14 @@ interface MessageDao : TrueDao<Message> {
     suspend fun deleteById(id: Long)
 
     @Upsert
-    override suspend fun upsert(value: Message): Long
+    suspend fun upsert(value: Message): Long
 
     @Delete
-    override suspend fun delete(value: Message): Int
+    suspend fun delete(value: Message): Int
 }
 
 @Dao
-interface MemoryDao : TrueDao<Memory> {
+interface MemoryDao {
     @Query("SELECT * FROM Memory ORDER BY id ASC")
     fun getAllFlow(): Flow<List<Memory>>
 
@@ -98,10 +97,10 @@ interface MemoryDao : TrueDao<Memory> {
     suspend fun deleteById(id: Long)
 
     @Upsert
-    override suspend fun upsert(value: Memory): Long
+    suspend fun upsert(value: Memory): Long
 
     @Delete
-    override suspend fun delete(value: Memory): Int
+    suspend fun delete(value: Memory): Int
 }
 
 @TypeConverters(DefaultConverters::class)

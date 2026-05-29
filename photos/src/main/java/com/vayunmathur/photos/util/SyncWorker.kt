@@ -26,7 +26,6 @@ import androidx.work.WorkerParameters
 import androidx.work.ListenableWorker.Result as WorkResult
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.buildDatabase
-import com.vayunmathur.library.util.getAll
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoOCR
 import com.vayunmathur.photos.data.PhotoDatabase
@@ -58,7 +57,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             syncPhotos(applicationContext, database, null, lastGeneration)
         }
         
-        val photos = database.photoDao().getAll<Photo>()
+        val photos = database.photoDao().getAll()
         setExifData(photos, database, applicationContext)
         
         if (dataStore.getBoolean("image_understanding_enabled", false)) {
@@ -141,7 +140,7 @@ class OCRWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             setForeground(createForegroundInfo())
             val database =
                 applicationContext.buildDatabase<PhotoDatabase>()
-            val photos = database.photoDao().getAll<Photo>()
+            val photos = database.photoDao().getAll()
             runOCR(photos, database, applicationContext)
             WorkResult.success()
         }
@@ -215,7 +214,7 @@ suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri
     collectIds(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
 
     // 2. Handle deletions
-    val localIds = photoDao.getAll<Photo>().map { it.id }.toSet()
+    val localIds = photoDao.getAll().map { it.id }.toSet()
     val toDelete = if (uris != null) {
         val triggeredIds = uris.mapNotNull { runCatching { ContentUris.parseId(it) }.getOrNull() }.toSet()
         triggeredIds - allMediaStoreIds
@@ -241,7 +240,7 @@ suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri
         else -> null
     }
 
-    val existingPhotos = photoDao.getAll<Photo>().associateBy { it.id }
+    val existingPhotos = photoDao.getAll().associateBy { it.id }
     val newOrUpdatedPhotos = mutableListOf<Photo>()
 
     fun processCursor(cursor: android.database.Cursor, isVideo: Boolean) {

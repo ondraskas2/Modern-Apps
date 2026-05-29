@@ -5,15 +5,26 @@ import androidx.room.Database
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
-import com.vayunmathur.library.util.TrueDao
 
 @Dao
-interface PhotoDao: TrueDao<Photo> {
+interface PhotoDao {
     @Query("SELECT * FROM Photo")
     fun getAllFlow(): kotlinx.coroutines.flow.Flow<List<Photo>>
 
     @Query("SELECT * FROM Photo WHERE id = :id")
     fun getByIdFlow(id: Long): kotlinx.coroutines.flow.Flow<Photo?>
+
+    @Query("SELECT * FROM Photo")
+    suspend fun getAll(): List<Photo>
+
+    @Query("SELECT * FROM Photo WHERE uri = :uri")
+    suspend fun getByUri(uri: String): List<Photo>
+
+    @androidx.room.Upsert
+    suspend fun upsertAll(photos: List<Photo>)
+
+    @androidx.room.Delete
+    suspend fun delete(value: Photo): Int
 
     @Query("DELETE FROM Photo WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>)
