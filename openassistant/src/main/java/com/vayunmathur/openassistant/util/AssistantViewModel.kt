@@ -129,9 +129,23 @@ class AssistantViewModel(
         val context = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val oldModelFile = File(context.getExternalFilesDir(null)!!, "gemma4.litertlm")
-                if (oldModelFile.exists()) {
-                    oldModelFile.delete()
+                val externalDir = context.getExternalFilesDir(null) ?: return@launch
+                // Every model file we no longer use. Add to this list when the
+                // active model changes (e.g. gemma4-4b → gemma4-2b) so users
+                // don't keep stale gigabytes on disk and so the next launch
+                // re-triggers the downloader for the new file.
+                val legacyModelFiles = listOf("gemma4.litertlm", "gemma4-4b.litertlm")
+                var removedAny = false
+                for (name in legacyModelFiles) {
+                    val f = File(externalDir, name)
+                    if (f.exists() && f.delete()) {
+                        Log.i(TAG, "Deleted legacy model file $name")
+                        removedAny = true
+                    }
+                }
+                if (removedAny) {
+                    // Forces InitialDownloadChecker to re-evaluate which files
+                    // need downloading on next composition.
                     DataStoreUtils.getInstance(context).setBoolean("dbSetupComplete", false)
                 }
             } catch (e: Exception) {

@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             DynamicTheme {
                 InitialDownloadChecker(ds, listOf(
-                    Triple("https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm", "gemma4-4b.litertlm", "Model"),
+                    Triple("https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm", "gemma4-2b.litertlm", "Model"),
                 )) {
                     // Touching the assistantViewModel triggers init, which pre-warms
                     // the inference service and runs the legacy model-file cleanup.
