@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,13 +17,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,8 +38,6 @@ import com.vayunmathur.library.ui.IconPause
 import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.library.ui.ListPage
 import com.vayunmathur.library.ui.invisibleClickable
-import com.vayunmathur.library.util.BottomBarItem
-import com.vayunmathur.library.util.BottomNavBar
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.music.util.AlbumArt
 import com.vayunmathur.music.util.MusicViewModel
@@ -51,11 +46,14 @@ import com.vayunmathur.music.util.AddToPlaylistButton
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import com.vayunmathur.music.data.Music
-import kotlinx.coroutines.launch
-import kotlin.random.Random
 
+/**
+ * Songs tab content. No Scaffold / no BottomNavBar — those live in the
+ * surrounding [MusicTabsScreen]. ListPage's own Scaffold is kept (it owns
+ * the TopAppBar with the embedded search bar and the shuffle FAB).
+ */
 @Composable
-fun HomeScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
+fun HomeTabContent(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val context = LocalContext.current
     val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
     val currentSource by musicViewModel.currentSource.collectAsState()
@@ -65,56 +63,42 @@ fun HomeScreen(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, mus
         SyncWorker.enqueue(context)
     }
 
-    Scaffold(bottomBar = {
-        BottomNavBar(backStack, listOf(
-            BottomBarItem(stringResource(R.string.nav_home), Route.Home, R.drawable.baseline_library_music_24),
-            BottomBarItem(stringResource(R.string.nav_albums), Route.Albums, R.drawable.baseline_album_24),
-            BottomBarItem(stringResource(R.string.nav_artists), Route.Artists, R.drawable.outline_person_24),
-            BottomBarItem(stringResource(R.string.nav_playlists), Route.Playlists, R.drawable.baseline_library_music_24),
-        ), Route.Home)
-    }) { paddingValues ->
-        Box(Modifier.padding(paddingValues).consumeWindowInsets(paddingValues)) {
-            ListPage<Music, Route, Route.Song>(backStack, viewModel, stringResource(R.string.page_title_music), { music ->
-                val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
-                Text(
-                    text = music.title,
-                    color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                    fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal
+    ListPage<Music, Route, Route.Song>(backStack, viewModel, stringResource(R.string.page_title_music), { music ->
+        val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
+        Text(
+            text = music.title,
+            color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Unspecified,
+            fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal
+        )
+    }, {
+        Text(it.artist)
+    }, { toPlay ->
+        val allSongs = viewModel.getAll<Music>()
+        val toPlayIndex = allSongs.indexOfFirst { it.id == toPlay }
+        musicViewModel.playSong(allSongs, toPlayIndex, sourceId = "all_songs", sourceName = "All Songs")
+        Route.Song
+    }, leadingContent = { music ->
+        val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (isPlaying) {
+                Icon(
+                    painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
+                    contentDescription = "Playing",
+                    modifier = Modifier.size(24.dp).padding(end = 8.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
-            }, {
-                Text(it.artist)
-            }, { toPlay ->
-                val allSongs = viewModel.getAll<Music>()
-                val toPlayIndex = allSongs.indexOfFirst { it.id == toPlay }
-                musicViewModel.playSong(allSongs, toPlayIndex, sourceId = "all_songs", sourceName = "All Songs")
-                Route.Song
-            }, leadingContent = { music ->
-                val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (isPlaying) {
-                        Icon(
-                            painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
-                            contentDescription = "Playing",
-                            modifier = Modifier.size(24.dp).padding(end = 8.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    AlbumArt(music.uri.toUri(), Modifier.size(40.dp))
-                }
-            }, trailingContent = {
-music ->
-                AddToPlaylistButton(backStack, music)
-            }, itemModifier = { music ->
-                val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
-                if (isPlaying) Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.secondaryContainer)
-                else Modifier
-            }, searchEnabled = true, bottomBar = {
-                PlayingBottomBar(musicViewModel, backStack)
-            }, fab = {
-                ShufflePlayFab(viewModel, musicViewModel)
-            }, sortOrder = Comparator.comparing { it.title })
+            }
+            AlbumArt(music.uri.toUri(), Modifier.size(40.dp))
         }
-    }
+    }, trailingContent = { music ->
+        AddToPlaylistButton(backStack, music)
+    }, itemModifier = { music ->
+        val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "all_songs"
+        if (isPlaying) Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.secondaryContainer)
+        else Modifier
+    }, searchEnabled = true, fab = {
+        ShufflePlayFab(viewModel, musicViewModel)
+    }, sortOrder = Comparator.comparing { it.title })
 }
 
 @Composable

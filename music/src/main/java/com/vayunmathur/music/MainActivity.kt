@@ -29,12 +29,9 @@ import com.vayunmathur.music.R
 import com.vayunmathur.music.data.MIGRATION_1_2
 import com.vayunmathur.music.data.MIGRATION_2_3
 import com.vayunmathur.music.ui.AlbumDetailScreen
-import com.vayunmathur.music.ui.AlbumScreen
 import com.vayunmathur.music.ui.ArtistDetailScreen
-import com.vayunmathur.music.ui.ArtistScreen
-import com.vayunmathur.music.ui.HomeScreen
+import com.vayunmathur.music.ui.MusicTabsScreen
 import com.vayunmathur.music.ui.PlaylistDetailScreen
-import com.vayunmathur.music.ui.PlaylistScreen
 import com.vayunmathur.music.ui.SongScreen
 import com.vayunmathur.music.ui.dialogs.AddToPlaylistDialog
 import kotlinx.serialization.Serializable
@@ -81,12 +78,6 @@ sealed interface Route: NavKey {
     @Serializable
     data object Home: Route
     @Serializable
-    data object Albums: Route
-    @Serializable
-    data object Artists: Route
-    @Serializable
-    data object Playlists: Route
-    @Serializable
     data object Song: Route
 
     @Serializable
@@ -107,19 +98,10 @@ fun Navigation(viewModel: DatabaseViewModel, musicViewModel: MusicViewModel) {
     val backStack = rememberNavBackStack<Route>(Route.Home)
     MainNavigation(backStack) {
         entry<Route.Home> {
-            HomeScreen(backStack, viewModel, musicViewModel)
+            MusicTabsScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.Song> {
             SongScreen(backStack, musicViewModel)
-        }
-        entry<Route.Albums> {
-            AlbumScreen(backStack, viewModel, musicViewModel)
-        }
-        entry<Route.Artists> {
-            ArtistScreen(backStack, viewModel, musicViewModel)
-        }
-        entry<Route.Playlists> {
-            PlaylistScreen(backStack, viewModel, musicViewModel)
         }
         entry<Route.AlbumDetail> {
             AlbumDetailScreen(backStack, viewModel, musicViewModel, it.albumId)

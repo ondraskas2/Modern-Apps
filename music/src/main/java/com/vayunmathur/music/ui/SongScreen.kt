@@ -95,15 +95,15 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                                 }
                                 currentSource!!.startsWith("album_") -> {
                                     val id = currentSource!!.removePrefix("album_").toLong()
-                                    backStack.reset(Route.Home, Route.Albums, Route.AlbumDetail(id))
+                                    backStack.reset(Route.Home, Route.AlbumDetail(id))
                                 }
                                 currentSource!!.startsWith("playlist_") -> {
                                     val id = currentSource!!.removePrefix("playlist_").toLong()
-                                    backStack.reset(Route.Home, Route.Playlists, Route.PlaylistDetail(id))
+                                    backStack.reset(Route.Home, Route.PlaylistDetail(id))
                                 }
                                 currentSource!!.startsWith("artist_") -> {
                                     val id = currentSource!!.removePrefix("artist_").toLong()
-                                    backStack.reset(Route.Home, Route.Artists, Route.ArtistDetail(id))
+                                    backStack.reset(Route.Home, Route.ArtistDetail(id))
                                 }
                             }
                         }) {
