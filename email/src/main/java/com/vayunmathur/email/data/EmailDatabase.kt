@@ -20,7 +20,7 @@ import com.vayunmathur.email.OutboxEntry
         Attachment::class,
         OutboxEntry::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class EmailDatabase : RoomDatabase() {
@@ -70,6 +70,28 @@ abstract class EmailDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6 → v7: Extend [EmailAccount] with per-account IMAP/SMTP server
+         * config, a provider identifier, and an auth-type discriminator so we
+         * can support providers beyond Gmail (Outlook, Yahoo, iCloud, Fastmail,
+         * and arbitrary IMAP/SMTP servers). All defaults match the previous
+         * hard-coded Gmail values so existing rows continue to sync.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN provider TEXT NOT NULL DEFAULT 'gmail'")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN imapHost TEXT NOT NULL DEFAULT 'imap.gmail.com'")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN imapPort INTEGER NOT NULL DEFAULT 993")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN imapUseSsl INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN smtpHost TEXT NOT NULL DEFAULT 'smtp.gmail.com'")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN smtpPort INTEGER NOT NULL DEFAULT 465")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN smtpUseSsl INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN authType TEXT NOT NULL DEFAULT 'oauth2'")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN passwordEncrypted BLOB")
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN passwordIv BLOB")
+            }
+        }
+
         fun getInstance(context: Context): EmailDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -77,7 +99,7 @@ abstract class EmailDatabase : RoomDatabase() {
                     EmailDatabase::class.java,
                     "email-db"
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .build().also { instance = it }
             }
         }

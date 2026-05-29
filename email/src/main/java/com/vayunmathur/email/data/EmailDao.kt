@@ -16,6 +16,9 @@ interface EmailDao {
     @Query("SELECT * FROM EmailAccount")
     suspend fun getAccounts(): List<EmailAccount>
 
+    @Query("SELECT * FROM EmailAccount WHERE email = :email")
+    suspend fun getAccountByEmail(email: String): EmailAccount?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAccount(account: EmailAccount)
 

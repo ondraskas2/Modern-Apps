@@ -2,6 +2,7 @@ package com.vayunmathur.email
 
 import android.content.Context
 import android.net.Uri
+import com.vayunmathur.email.data.CredentialCrypto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -14,6 +15,39 @@ import javax.mail.internet.*
 import javax.mail.search.*
 import java.util.*
 
+/**
+ * IMAP or SMTP server endpoint. [useSsl] controls implicit SSL/TLS on connect
+ * (the `imaps` / `smtps` protocols on ports 993 / 465); `false` selects plain
+ * `imap` / `smtp` with a STARTTLS upgrade (ports 143 / 587).
+ */
+data class ServerConfig(val host: String, val port: Int, val useSsl: Boolean) {
+    val imapProtocol: String get() = if (useSsl) "imaps" else "imap"
+    val smtpProtocol: String get() = if (useSsl) "smtps" else "smtp"
+}
+
+/** Convenience: produce the IMAP server config that this account fetches from. */
+fun EmailAccount.imapServer(): ServerConfig = ServerConfig(imapHost, imapPort, imapUseSsl)
+
+/** Convenience: produce the SMTP server config used when sending from this account. */
+fun EmailAccount.smtpServer(): ServerConfig = ServerConfig(smtpHost, smtpPort, smtpUseSsl)
+
+/**
+ * Decrypt the stored credentials and produce an [EmailManager.AuthType]
+ * appropriate for this account — OAuth bearer token for Gmail, app password
+ * for everything else.
+ */
+fun EmailAccount.authType(): EmailManager.AuthType {
+    return if (authType == "oauth2") {
+        EmailManager.AuthType.OAuth2(accessToken)
+    } else {
+        val cipher = passwordEncrypted
+            ?: error("Password account ${email} is missing passwordEncrypted")
+        val iv = passwordIv
+            ?: error("Password account ${email} is missing passwordIv")
+        EmailManager.AuthType.Password(CredentialCrypto.decrypt(cipher, iv))
+    }
+}
+
 class EmailManager {
 
     sealed class AuthType {
@@ -21,31 +55,54 @@ class EmailManager {
         data class OAuth2(val accessToken: String) : AuthType()
     }
 
-    private fun getImapSession(auth: AuthType, host: String): Session {
+    private fun getImapSession(auth: AuthType, server: ServerConfig): Session {
         val properties = Properties()
-        properties["mail.store.protocol"] = "imaps"
-        properties["mail.imaps.host"] = host
-        properties["mail.imaps.port"] = "993"
-        properties["mail.imaps.ssl.enable"] = "true"
-        properties["mail.imaps.fetchsize"] = "1048576"
-        properties["mail.imaps.partialfetch"] = "true"
-
-        if (auth is AuthType.OAuth2) {
-            properties["mail.imaps.auth.mechanisms"] = "XOAUTH2"
+        if (server.useSsl) {
+            properties["mail.store.protocol"] = "imaps"
+            properties["mail.imaps.host"] = server.host
+            properties["mail.imaps.port"] = server.port.toString()
+            properties["mail.imaps.ssl.enable"] = "true"
+            properties["mail.imaps.fetchsize"] = "1048576"
+            properties["mail.imaps.partialfetch"] = "true"
+            if (auth is AuthType.OAuth2) {
+                properties["mail.imaps.auth.mechanisms"] = "XOAUTH2"
+            }
+        } else {
+            properties["mail.store.protocol"] = "imap"
+            properties["mail.imap.host"] = server.host
+            properties["mail.imap.port"] = server.port.toString()
+            properties["mail.imap.starttls.enable"] = "true"
+            properties["mail.imap.starttls.required"] = "true"
+            properties["mail.imap.fetchsize"] = "1048576"
+            properties["mail.imap.partialfetch"] = "true"
+            if (auth is AuthType.OAuth2) {
+                properties["mail.imap.auth.mechanisms"] = "XOAUTH2"
+            }
         }
         return Session.getInstance(properties).also { registerProviders(it) }
     }
 
-    private fun getSmtpSession(auth: AuthType, host: String): Session {
+    private fun getSmtpSession(auth: AuthType, server: ServerConfig): Session {
         val properties = Properties()
-        properties["mail.transport.protocol"] = "smtps"
-        properties["mail.smtps.host"] = host
-        properties["mail.smtps.port"] = "465"
-        properties["mail.smtps.ssl.enable"] = "true"
-        properties["mail.smtps.auth"] = "true"
-
-        if (auth is AuthType.OAuth2) {
-            properties["mail.smtps.auth.mechanisms"] = "XOAUTH2"
+        if (server.useSsl) {
+            properties["mail.transport.protocol"] = "smtps"
+            properties["mail.smtps.host"] = server.host
+            properties["mail.smtps.port"] = server.port.toString()
+            properties["mail.smtps.ssl.enable"] = "true"
+            properties["mail.smtps.auth"] = "true"
+            if (auth is AuthType.OAuth2) {
+                properties["mail.smtps.auth.mechanisms"] = "XOAUTH2"
+            }
+        } else {
+            properties["mail.transport.protocol"] = "smtp"
+            properties["mail.smtp.host"] = server.host
+            properties["mail.smtp.port"] = server.port.toString()
+            properties["mail.smtp.starttls.enable"] = "true"
+            properties["mail.smtp.starttls.required"] = "true"
+            properties["mail.smtp.auth"] = "true"
+            if (auth is AuthType.OAuth2) {
+                properties["mail.smtp.auth.mechanisms"] = "XOAUTH2"
+            }
         }
         return Session.getInstance(properties).also { registerProviders(it) }
     }
@@ -72,14 +129,15 @@ class EmailManager {
         }
     }
 
-    suspend fun <T> withStore(host: String, user: String, auth: AuthType, block: suspend (Store) -> T): T = withContext(Dispatchers.IO) {
-        val session = getImapSession(auth, host)
-        val store = session.getStore("imaps")
+    suspend fun <T> withStore(server: ServerConfig, user: String, auth: AuthType, block: suspend (Store) -> T): T = withContext(Dispatchers.IO) {
+        val session = getImapSession(auth, server)
+        val store = session.getStore(server.imapProtocol)
         try {
-            when (auth) {
-                is AuthType.Password -> store.connect(host, user, auth.value)
-                is AuthType.OAuth2 -> store.connect(host, user, auth.accessToken)
+            val credential = when (auth) {
+                is AuthType.Password -> auth.value
+                is AuthType.OAuth2 -> auth.accessToken
             }
+            store.connect(server.host, server.port, user, credential)
             block(store)
         } finally {
             store.close()
@@ -216,12 +274,12 @@ class EmailManager {
      * MessageThread screen the first time a message without a stored body is opened.
      */
     suspend fun fetchMessageBody(
-        host: String,
+        server: ServerConfig,
         user: String,
         auth: AuthType,
         folderName: String,
         uid: Long,
-    ): Triple<String?, Boolean, List<Attachment>> = withStore(host, user, auth) { store ->
+    ): Triple<String?, Boolean, List<Attachment>> = withStore(server, user, auth) { store ->
         fetchMessageBodyInStore(store, user, folderName, uid)
     }
 
@@ -246,7 +304,7 @@ class EmailManager {
         }
     }
 
-    suspend fun fetchFolders(host: String, user: String, auth: AuthType): List<EmailFolder> = withStore(host, user, auth) { store ->
+    suspend fun fetchFolders(server: ServerConfig, user: String, auth: AuthType): List<EmailFolder> = withStore(server, user, auth) { store ->
         val folders = store.defaultFolder.list("*")
         folders.map { folder ->
             EmailFolder(
@@ -261,7 +319,7 @@ class EmailManager {
     }
 
     suspend fun fetchMessages(
-        host: String,
+        server: ServerConfig,
         user: String,
         auth: AuthType,
         folderName: String,
@@ -274,7 +332,7 @@ class EmailManager {
          * returned for them. Saves a lot of network on repeated syncs.
          */
         skipUids: Set<Long> = emptySet(),
-    ): Pair<List<EmailMessage>, List<Attachment>> = withStore(host, user, auth) { store ->
+    ): Pair<List<EmailMessage>, List<Attachment>> = withStore(server, user, auth) { store ->
         val folder = store.getFolder(folderName)
         if ((folder.type and Folder.HOLDS_MESSAGES) == 0) return@withStore emptyList<EmailMessage>() to emptyList()
 
@@ -363,7 +421,7 @@ class EmailManager {
 
     suspend fun sendMessage(
         context: Context,
-        host: String,
+        server: ServerConfig,
         user: String,
         auth: AuthType,
         to: String,
@@ -374,7 +432,7 @@ class EmailManager {
         inReplyTo: String? = null,
         references: String? = null
     ) = withContext(Dispatchers.IO) {
-        val session = getSmtpSession(auth, host)
+        val session = getSmtpSession(auth, server)
         val message = MimeMessage(session)
         message.setFrom(InternetAddress(user))
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to))
@@ -414,12 +472,13 @@ class EmailManager {
 
         message.setContent(multipart)
 
-        val transport = session.getTransport("smtps")
+        val transport = session.getTransport(server.smtpProtocol)
         try {
-            when (auth) {
-                is AuthType.Password -> transport.connect(host, user, auth.value)
-                is AuthType.OAuth2 -> transport.connect(host, user, auth.accessToken)
+            val credential = when (auth) {
+                is AuthType.Password -> auth.value
+                is AuthType.OAuth2 -> auth.accessToken
             }
+            transport.connect(server.host, server.port, user, credential)
             transport.sendMessage(message, message.allRecipients)
         } finally {
             transport.close()
@@ -441,14 +500,14 @@ class EmailManager {
 
     suspend fun downloadAttachment(
         context: Context,
-        host: String,
+        server: ServerConfig,
         user: String,
         auth: AuthType,
         folderName: String,
         uid: Long,
         partId: String,
         fileName: String
-    ): String = withStore(host, user, auth) { store ->
+    ): String = withStore(server, user, auth) { store ->
         val folder = store.getFolder(folderName)
         folder.open(Folder.READ_ONLY)
         try {

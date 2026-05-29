@@ -177,9 +177,9 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             suspend fun attemptSend(acct: EmailAccount) {
                 emailManager.sendMessage(
                     context = getApplication(),
-                    host = "smtp.gmail.com",
+                    server = acct.smtpServer(),
                     user = acct.email,
-                    auth = EmailManager.AuthType.OAuth2(acct.accessToken),
+                    auth = acct.authType(),
                     to = to,
                     subject = subject,
                     body = body,
@@ -194,8 +194,11 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
                 try {
                     attemptSend(account)
                 } catch (e: javax.mail.AuthenticationFailedException) {
-                    // Token likely expired — refresh + retry once before
-                    // giving up and saving to the outbox.
+                    // For OAuth2 accounts the token might just be expired —
+                    // refresh + retry once. Password accounts can't be
+                    // auto-fixed, so just let the error fall through to the
+                    // outbox-save path.
+                    if (account.authType != "oauth2") throw e
                     val refreshed = TokenRefresher.refresh(getApplication(), account)
                         ?: throw e
                     attemptSend(refreshed)
@@ -238,12 +241,12 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchBodyIfNeeded(message: EmailMessage) {
         if (message.body != null) return
         viewModelScope.launch {
-            val account = dao.getAccounts().find { it.email == message.accountEmail } ?: return@launch
+            val account = dao.getAccountByEmail(message.accountEmail) ?: return@launch
             suspend fun attempt(acct: EmailAccount): Triple<String?, Boolean, List<Attachment>> {
                 return emailManager.fetchMessageBody(
-                    host = "imap.gmail.com",
+                    server = acct.imapServer(),
                     user = acct.email,
-                    auth = EmailManager.AuthType.OAuth2(acct.accessToken),
+                    auth = acct.authType(),
                     folderName = message.folderName,
                     uid = message.id,
                 )
@@ -252,6 +255,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
                 val (body, isHtml, attachments) = try {
                     attempt(account)
                 } catch (e: javax.mail.AuthenticationFailedException) {
+                    if (account.authType != "oauth2") throw e
                     val refreshed = TokenRefresher.refresh(getApplication(), account) ?: throw e
                     attempt(refreshed)
                 }
@@ -285,9 +289,9 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val path = emailManager.downloadAttachment(
                     context = getApplication(),
-                    host = "imap.gmail.com",
+                    server = account.imapServer(),
                     user = account.email,
-                    auth = EmailManager.AuthType.OAuth2(account.accessToken),
+                    auth = account.authType(),
                     folderName = attachment.folderName,
                     uid = attachment.messageId,
                     partId = attachment.partId,

@@ -33,6 +33,10 @@ object TokenRefresher {
      * `expiresAt`) or `null` if the refresh failed.
      */
     suspend fun refresh(context: Context, account: EmailAccount): EmailAccount? {
+        if (account.authType != "oauth2") {
+            Log.d("TokenRefresher", "Skipping refresh for non-OAuth2 account ${account.email}")
+            return null
+        }
         val refreshToken = account.refreshToken
         if (refreshToken.isNullOrBlank()) {
             Log.w("TokenRefresher", "No refresh token for ${account.email} — re-login required")

@@ -81,10 +81,35 @@ class MainActivity : ComponentActivity() {
             DynamicTheme {
                 MainContent(
                     viewModel = viewModel,
-                    onGoogleLogin = { startGoogleLogin() }
+                    onLaunchGoogleSignIn = { startGoogleLogin() }
                 )
             }
         }
+    }
+
+    /**
+     * Public so the Compose [com.vayunmathur.email.ui.AddAccountScreen] can
+     * trigger the Chrome-Custom-Tabs OAuth flow without owning the redirect
+     * URI / PKCE state itself.
+     */
+    fun startGoogleLogin() {
+        val verifier = generateCodeVerifier()
+        TokenState.codeVerifier = verifier
+        val challenge = generateCodeChallenge(verifier)
+
+        val authUri = Uri.parse("https://accounts.google.com/o/oauth2/v2/auth")
+            .buildUpon()
+            .appendQueryParameter("client_id", clientId)
+            .appendQueryParameter("redirect_uri", redirectUri)
+            .appendQueryParameter("response_type", "code")
+            .appendQueryParameter("scope", "https://mail.google.com/ email profile")
+            .appendQueryParameter("code_challenge", challenge)
+            .appendQueryParameter("code_challenge_method", "S256")
+            .appendQueryParameter("access_type", "offline")
+            .appendQueryParameter("prompt", "select_account")
+            .build()
+
+        startActivity(Intent(Intent.ACTION_VIEW, authUri))
     }
 
     override fun onStart() {
@@ -126,26 +151,6 @@ class MainActivity : ComponentActivity() {
             
             IntentState.navigationRoute = Route.Composer(to, subject, body)
         }
-    }
-
-    private fun startGoogleLogin() {
-        val verifier = generateCodeVerifier()
-        TokenState.codeVerifier = verifier
-        val challenge = generateCodeChallenge(verifier)
-
-        val authUri = Uri.parse("https://accounts.google.com/o/oauth2/v2/auth")
-            .buildUpon()
-            .appendQueryParameter("client_id", clientId)
-            .appendQueryParameter("redirect_uri", redirectUri)
-            .appendQueryParameter("response_type", "code")
-            .appendQueryParameter("scope", "https://mail.google.com/ email profile")
-            .appendQueryParameter("code_challenge", challenge)
-            .appendQueryParameter("code_challenge_method", "S256")
-            .appendQueryParameter("access_type", "offline")
-            .appendQueryParameter("prompt", "select_account")
-            .build()
-
-        startActivity(Intent(Intent.ACTION_VIEW, authUri))
     }
 
     private fun exchangeCodeForToken(code: String) {
@@ -239,15 +244,23 @@ data class UserInfo(
 )
 
 @Composable
-fun MainContent(viewModel: EmailViewModel, onGoogleLogin: () -> Unit) {
+fun MainContent(viewModel: EmailViewModel, onLaunchGoogleSignIn: () -> Unit) {
     val accounts by viewModel.accounts.collectAsState(emptyList())
     if (accounts.isEmpty()) {
-        LoginScreen(onGoogleLogin)
+        // First run: jump straight into the add-account picker. The conditional
+        // above auto-swaps us into EmailApp once the first account lands.
+        com.vayunmathur.email.ui.AddAccountScreen(
+            onBack = null,
+            onLaunchGoogleSignIn = onLaunchGoogleSignIn,
+            onAccountAdded = {},
+        )
     } else {
-        EmailApp(viewModel = viewModel, onAddAccount = onGoogleLogin)
+        EmailApp(viewModel = viewModel, onLaunchGoogleSignIn = onLaunchGoogleSignIn)
     }
 }
 
+// Kept for backwards-compat if anything else references it; the active first-
+// run UI is now AddAccountScreen.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(onGoogleLogin: () -> Unit) {
@@ -292,10 +305,12 @@ sealed interface Route : NavKey {
     ) : Route
     @Serializable
     object Outbox : Route
+    @Serializable
+    object AddAccount : Route
 }
 
 @Composable
-fun EmailApp(viewModel: EmailViewModel, onAddAccount: () -> Unit) {
+fun EmailApp(viewModel: EmailViewModel, onLaunchGoogleSignIn: () -> Unit) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val context = LocalContext.current
@@ -370,7 +385,7 @@ fun EmailApp(viewModel: EmailViewModel, onAddAccount: () -> Unit) {
                             label = { Text("Add Account") },
                             selected = false,
                             onClick = {
-                                onAddAccount()
+                                backStack.add(Route.AddAccount)
                                 scope.launch { drawerState.close() }
                             },
                             icon = { IconAdd() },
@@ -460,6 +475,13 @@ fun EmailApp(viewModel: EmailViewModel, onAddAccount: () -> Unit) {
                 OutboxScreen(
                     viewModel = viewModel,
                     onBack = { backStack.pop() }
+                )
+            }
+            entry<Route.AddAccount>(metadata = ListDetailPage()) {
+                com.vayunmathur.email.ui.AddAccountScreen(
+                    onBack = { backStack.pop() },
+                    onLaunchGoogleSignIn = onLaunchGoogleSignIn,
+                    onAccountAdded = { backStack.pop() },
                 )
             }
         }

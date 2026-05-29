@@ -13,6 +13,8 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.vayunmathur.email.EmailManager
 import com.vayunmathur.email.OutboxEntry
+import com.vayunmathur.email.authType
+import com.vayunmathur.email.smtpServer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -106,9 +108,9 @@ class OutboxSendWorker(
         suspend fun attempt(acct: com.vayunmathur.email.EmailAccount): kotlin.Result<Unit> = runCatching {
             manager.sendMessage(
                 context = applicationContext,
-                host = "smtp.gmail.com",
+                server = acct.smtpServer(),
                 user = acct.email,
-                auth = EmailManager.AuthType.OAuth2(acct.accessToken),
+                auth = acct.authType(),
                 to = entry.to,
                 subject = entry.subject,
                 body = entry.body,
@@ -126,6 +128,10 @@ class OutboxSendWorker(
             return SendResult.Failure(formatError(firstErr), firstErr)
         }
         // Token likely expired — refresh and retry exactly once.
+        // Password accounts can't be auto-refreshed; treat as a hard failure.
+        if (account.authType != "oauth2") {
+            return SendResult.Failure(formatError(firstErr), firstErr)
+        }
         Log.d(TAG, "Auth failure on send; refreshing token for ${account.email}")
         val refreshed = TokenRefresher.refresh(applicationContext, account)
             ?: return SendResult.Failure(

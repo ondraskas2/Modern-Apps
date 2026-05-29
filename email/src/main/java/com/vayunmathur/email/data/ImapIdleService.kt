@@ -15,6 +15,8 @@ import androidx.glance.appwidget.updateAll
 import com.sun.mail.imap.IMAPFolder
 import com.vayunmathur.email.EmailManager
 import com.vayunmathur.email.R
+import com.vayunmathur.email.authType
+import com.vayunmathur.email.imapServer
 import javax.mail.Folder
 import javax.mail.event.MessageCountAdapter
 import javax.mail.event.MessageCountEvent
@@ -81,6 +83,10 @@ class ImapIdleService : Service() {
                 backoffMs = 2_000L
                 delay(1_000L)
             } catch (e: javax.mail.AuthenticationFailedException) {
+                if (account.authType != "oauth2") {
+                    Log.w(TAG, "IDLE auth failed for password account ${account.email}; stopping retries")
+                    return
+                }
                 Log.d(TAG, "IDLE auth failed for ${account.email}; refreshing token")
                 val refreshed = TokenRefresher.refresh(applicationContext, account)
                 if (refreshed != null) {
@@ -112,9 +118,9 @@ class ImapIdleService : Service() {
         withContext(Dispatchers.IO) {
             val mgr = EmailManager()
             mgr.withStore(
-                host = "imap.gmail.com",
+                server = account.imapServer(),
                 user = account.email,
-                auth = EmailManager.AuthType.OAuth2(account.accessToken),
+                auth = account.authType(),
             ) { store ->
                 val folder = store.getFolder("INBOX") as IMAPFolder
                 folder.open(Folder.READ_ONLY)

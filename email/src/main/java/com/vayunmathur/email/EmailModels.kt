@@ -59,7 +59,28 @@ data class EmailAccount(
     @PrimaryKey val email: String,
     val accessToken: String,
     val refreshToken: String? = null,
-    val expiresAt: Long = 0
+    val expiresAt: Long = 0,
+    /**
+     * Preset identifier — `gmail`, `outlook`, `yahoo`, `icloud`, `fastmail`, or
+     * `custom`. Used to (a) skip Gmail-only behaviour (virtual folder filtering,
+     * OAuth token refresh) for non-Gmail accounts, and (b) display the provider
+     * name in account-picker UIs.
+     */
+    val provider: String = "gmail",
+    /** IMAP hostname this account fetches from. Hard-coded to Gmail's pre-multi-provider migration. */
+    val imapHost: String = "imap.gmail.com",
+    val imapPort: Int = 993,
+    /** true = implicit SSL/TLS on connect, false = plaintext + STARTTLS upgrade. */
+    val imapUseSsl: Boolean = true,
+    val smtpHost: String = "smtp.gmail.com",
+    val smtpPort: Int = 465,
+    val smtpUseSsl: Boolean = true,
+    /** `oauth2` (Google) or `password` (app passwords / IMAP+SMTP). */
+    val authType: String = "oauth2",
+    /** AES-256-GCM ciphertext of the app password — null for OAuth2 accounts. */
+    val passwordEncrypted: ByteArray? = null,
+    /** GCM IV used to decrypt [passwordEncrypted]. */
+    val passwordIv: ByteArray? = null,
 ) {
     fun getColor(): Long {
         val colors = listOf(

@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.work.*
 import com.vayunmathur.email.EmailManager
+import com.vayunmathur.email.authType
+import com.vayunmathur.email.imapServer
 import com.vayunmathur.email.widget.EmailWidget
 import androidx.glance.appwidget.updateAll
 import java.util.concurrent.TimeUnit
@@ -32,13 +34,13 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
             var account = original
             try {
                 Log.d("EmailSync", ">>> Starting sync for account: ${account.email}")
-                var auth = EmailManager.AuthType.OAuth2(account.accessToken)
+                var auth = account.authType()
 
                 // Open a SINGLE store for the whole account — folders + every
                 // folder's message sync all reuse one TCP/TLS connection.
                 // On auth failure we refresh the token and retry once.
                 suspend fun runSync(authToUse: EmailManager.AuthType, accountToUse: com.vayunmathur.email.EmailAccount) {
-                    manager.withStore("imap.gmail.com", accountToUse.email, authToUse) { store ->
+                    manager.withStore(accountToUse.imapServer(), accountToUse.email, authToUse) { store ->
                         Log.d("EmailSync", "Fetching folders for ${accountToUse.email}...")
                         val folders = manager.fetchFoldersInStore(store, accountToUse.email)
                         dao.insertFolders(folders)
@@ -46,10 +48,13 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
 
                         // Folders we actually fetch messages from:
                         //   - Must hold messages
-                        //   - Skip Gmail's virtual folders that mirror INBOX (saves a huge
-                        //     amount of duplicate downloads).
+                        //   - For Gmail, skip the virtual labels that mirror INBOX
+                        //     (saves a huge amount of duplicate downloads).
+                        val skipSet = if (accountToUse.provider == com.vayunmathur.email.data.PROVIDER_GMAIL) {
+                            GMAIL_VIRTUAL_FOLDERS
+                        } else emptySet()
                         val messageFolders = folders.filter { folder ->
-                            folder.holdsMessages && folder.fullName !in GMAIL_VIRTUAL_FOLDERS
+                            folder.holdsMessages && folder.fullName !in skipSet
                         }
                         val totalUnits = (accounts.size * messageFolders.size).coerceAtLeast(1)
 
@@ -148,6 +153,9 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                 try {
                     runSync(auth, account)
                 } catch (e: javax.mail.AuthenticationFailedException) {
+                    // Only OAuth2 accounts can be auto-recovered. Password
+                    // accounts surface the auth error to the user instead.
+                    if (account.authType != "oauth2") throw e
                     Log.d("EmailSync", "Auth failed for ${account.email}; refreshing token")
                     val refreshed = TokenRefresher.refresh(applicationContext, account)
                         ?: throw e
