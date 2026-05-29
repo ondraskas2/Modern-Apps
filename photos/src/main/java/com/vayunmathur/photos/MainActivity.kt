@@ -3,9 +3,9 @@ package com.vayunmathur.photos
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,13 +15,11 @@ import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -46,24 +44,38 @@ import com.vayunmathur.photos.ui.MapPage
 import com.vayunmathur.photos.ui.PhotoPage
 import com.vayunmathur.photos.ui.SecureFolderPage
 import com.vayunmathur.photos.ui.TrashPage
+import com.vayunmathur.photos.util.GalleryViewModel
+import com.vayunmathur.photos.util.GalleryViewModelFactory
 import com.vayunmathur.photos.util.ImageLoader
-import com.vayunmathur.photos.util.SyncWorker
+import com.vayunmathur.photos.util.PhotoMapViewModel
+import com.vayunmathur.photos.util.PhotoMapViewModelFactory
+import com.vayunmathur.photos.util.SecureFolderViewModel
+import com.vayunmathur.photos.util.SecureFolderViewModelFactory
 import kotlinx.serialization.Serializable
 import com.vayunmathur.library.R as LibraryR
-import com.vayunmathur.library.biometric.unlockDatabaseWithBiometrics
-import com.vayunmathur.photos.data.VaultDatabase
-import com.vayunmathur.photos.data.VaultPhoto
 
 val LocalColumnCount = staticCompositionLocalOf<MutableFloatState> {
     error("No LocalColumnCount provided")
 }
 
 class MainActivity : FragmentActivity() {
+    private lateinit var viewModel: DatabaseViewModel
+
+    private val galleryViewModel: GalleryViewModel by viewModels {
+        GalleryViewModelFactory(application, viewModel)
+    }
+    private val photoMapViewModel: PhotoMapViewModel by viewModels {
+        PhotoMapViewModelFactory(application)
+    }
+    private val secureFolderViewModel: SecureFolderViewModel by viewModels {
+        SecureFolderViewModelFactory(application)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val db = buildDatabase<PhotoDatabase>(PhotoDatabase.ALL_MIGRATIONS)
-        val viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
+        viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
         ImageLoader.init(this)
         setContent {
             DynamicTheme {
@@ -77,7 +89,7 @@ class MainActivity : FragmentActivity() {
                                 Manifest.permission.ACCESS_MEDIA_LOCATION
                             ), getString(R.string.grant_image_video_permissions)
                         ) {
-                            Navigation(viewModel)
+                            Navigation(viewModel, galleryViewModel, photoMapViewModel, secureFolderViewModel)
                         }
                     } else {
                         PermissionsChecker(
@@ -85,7 +97,7 @@ class MainActivity : FragmentActivity() {
                                 Manifest.permission.READ_EXTERNAL_STORAGE
                             ), getString(R.string.grant_storage_permission)
                         ) {
-                            Navigation(viewModel)
+                            Navigation(viewModel, galleryViewModel, photoMapViewModel, secureFolderViewModel)
                         }
                     }
                 }
@@ -113,27 +125,27 @@ sealed interface Route: NavKey {
 }
 
 @Composable
-fun Navigation(viewModel: DatabaseViewModel) {
+fun Navigation(
+    viewModel: DatabaseViewModel,
+    galleryViewModel: GalleryViewModel,
+    photoMapViewModel: PhotoMapViewModel,
+    secureFolderViewModel: SecureFolderViewModel,
+) {
     val backStack = rememberNavBackStack<Route>(Route.Gallery)
-    val context = LocalContext.current
-    val activity = context as FragmentActivity
-    var vaultViewModel by remember { mutableStateOf<DatabaseViewModel?>(null) }
-    var vaultPassword by remember { mutableStateOf<String?>(null) }
+    val vaultViewModel by secureFolderViewModel.vaultViewModel.collectAsState()
+    val vaultPassword by secureFolderViewModel.vaultPassword.collectAsState()
 
     MainNavigation(backStack) {
         entry<Route.Gallery> {
-            GalleryPage(backStack, viewModel, vaultViewModel, vaultPassword, onVaultUnlocked = { vvm, pass -> 
-                vaultViewModel = vvm
-                vaultPassword = pass
-            })
+            GalleryPage(backStack, viewModel, galleryViewModel, secureFolderViewModel)
         }
 
         entry<Route.Map> {
-            MapPage(backStack, viewModel)
+            MapPage(backStack, viewModel, photoMapViewModel)
         }
 
         entry<Route.PhotoPage> {
-            PhotoPage(viewModel, it.id, it.overridePhotosList)
+            PhotoPage(viewModel, photoMapViewModel, it.id, it.overridePhotosList)
         }
 
         entry<Route.Trash> {
@@ -141,27 +153,32 @@ fun Navigation(viewModel: DatabaseViewModel) {
         }
 
         entry<Route.SecureFolder> {
-            if (vaultViewModel == null) {
-                LaunchedEffect(Unit) {
-                    unlockDatabaseWithBiometrics(
-                        activity,
-                        onSuccess = { password ->
-                            val db = activity.buildDatabase<VaultDatabase>(emptyList(), password, "vault-db")
-                            vaultPassword = password
-                            vaultViewModel = DatabaseViewModel(db, VaultPhoto::class to db.vaultPhotoDao())
-                        },
-                        onFailure = {
-                            backStack.pop()
-                        }
-                    )
-                }
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                SecureFolderPage(backStack, vaultViewModel!!, vaultPassword!!)
-            }
+            SecureFolderEntry(backStack, secureFolderViewModel, vaultViewModel, vaultPassword)
         }
+    }
+}
+
+@Composable
+private fun SecureFolderEntry(
+    backStack: NavBackStack<Route>,
+    secureFolderViewModel: SecureFolderViewModel,
+    vaultViewModel: DatabaseViewModel?,
+    vaultPassword: String?,
+) {
+    val activity = LocalContext.current as FragmentActivity
+    if (vaultViewModel == null) {
+        LaunchedEffect(Unit) {
+            secureFolderViewModel.unlock(
+                activity,
+                onSuccess = { _, _ -> },
+                onFailure = { backStack.pop() },
+            )
+        }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+    } else {
+        SecureFolderPage(backStack, vaultViewModel, vaultPassword!!, secureFolderViewModel)
     }
 }
 

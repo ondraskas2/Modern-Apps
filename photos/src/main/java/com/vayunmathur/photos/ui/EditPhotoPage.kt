@@ -1,12 +1,5 @@
 package com.vayunmathur.photos.ui
 
-import android.content.ContentValues
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -37,6 +30,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -96,10 +90,7 @@ import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.photos.R
 import com.vayunmathur.photos.data.Photo
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.InputStream
+import com.vayunmathur.photos.util.PhotoEditViewModel
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -129,6 +120,7 @@ fun Drawing.computeBoundingBox(width: Float, height: Float): Rect {
 fun EditPhotoPage(
     backStack: NavBackStack<EditRoute>,
     viewModel: DatabaseViewModel,
+    photoEditViewModel: PhotoEditViewModel,
     id: Long,
     initialUri: String? = null
 ) {
@@ -290,68 +282,17 @@ fun EditPhotoPage(
         }
     }
 
-    var originalBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var transformedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val originalBitmap by photoEditViewModel.originalBitmap.collectAsState()
+    val transformedBitmap by photoEditViewModel.transformedBitmap.collectAsState()
 
     LaunchedEffect(photo?.uri) {
         val uri = photo?.uri?.toUri() ?: return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            try {
-                context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val options = BitmapFactory.Options().apply {
-                        inJustDecodeBounds = true
-                    }
-                    BitmapFactory.decodeStream(inputStream, null, options)
-
-                    var inSampleSize = 1
-                    val targetW = 2048
-                    val targetH = 2048
-                    if (options.outHeight > targetH || options.outWidth > targetW) {
-                        val halfHeight = options.outHeight / 2
-                        val halfWidth = options.outWidth / 2
-                        while (halfHeight / inSampleSize >= targetH && halfWidth / inSampleSize >= targetW) {
-                            inSampleSize *= 2
-                        }
-                    }
-
-                    options.inJustDecodeBounds = false
-                    options.inSampleSize = inSampleSize
-
-                    context.contentResolver.openInputStream(uri)?.use { inputStream2 ->
-                        originalBitmap = BitmapFactory.decodeStream(inputStream2, null, options)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        photoEditViewModel.decode(uri)
     }
 
     LaunchedEffect(originalBitmap, rotation, isCropping, if (isCropping) Unit else cropRect) {
-        val original = originalBitmap ?: return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            val matrix = Matrix()
-            matrix.postRotate(rotation)
-
-            var result = Bitmap.createBitmap(
-                original,
-                0, 0, original.width, original.height,
-                matrix, true
-            )
-
-            if (!isCropping) {
-                val left = (cropRect.left * result.width).roundToInt().coerceIn(0, result.width - 1)
-                val top = (cropRect.top * result.height).roundToInt().coerceIn(0, result.height - 1)
-                val width = ((cropRect.right - cropRect.left) * result.width).roundToInt()
-                    .coerceAtMost(result.width - left)
-                val height = ((cropRect.bottom - cropRect.top) * result.height).roundToInt()
-                    .coerceAtMost(result.height - top)
-
-                if (width > 0 && height > 0) {
-                    result = Bitmap.createBitmap(result, left, top, width, height)
-                }
-            }
-            transformedBitmap = result
+        if (originalBitmap != null) {
+            photoEditViewModel.applyTransform(rotation, cropRect, isCropping)
         }
     }
 
@@ -462,19 +403,15 @@ fun EditPhotoPage(
                                     onClick = {
                                         showSaveMenu = false
                                         photo?.let {
-                                            scope.launch {
-                                                savePhoto(
-                                                    context,
-                                                    it,
-                                                    rotation,
-                                                    cropRect,
-                                                    drawings.toList(),
-                                                    texts.toList(),
-                                                    currentViewportWidth,
-                                                    false
-                                                )
-                                                context.finish()
-                                            }
+                                            photoEditViewModel.savePhoto(
+                                                it,
+                                                rotation,
+                                                cropRect,
+                                                drawings.toList(),
+                                                texts.toList(),
+                                                currentViewportWidth,
+                                                false,
+                                            ) { context.finish() }
                                         }
                                     }
                                 )
@@ -483,19 +420,15 @@ fun EditPhotoPage(
                                     onClick = {
                                         showSaveMenu = false
                                         photo?.let {
-                                            scope.launch {
-                                                savePhoto(
-                                                    context,
-                                                    it,
-                                                    rotation,
-                                                    cropRect,
-                                                    drawings.toList(),
-                                                    texts.toList(),
-                                                    currentViewportWidth,
-                                                    true
-                                                )
-                                                context.finish()
-                                            }
+                                            photoEditViewModel.savePhoto(
+                                                it,
+                                                rotation,
+                                                cropRect,
+                                                drawings.toList(),
+                                                texts.toList(),
+                                                currentViewportWidth,
+                                                true,
+                                            ) { context.finish() }
                                         }
                                     }
                                 )
@@ -1148,127 +1081,4 @@ fun Handle(offset: Offset, onDrag: (Offset) -> Unit) {
                 }
             }
     )
-}
-
-suspend fun savePhoto(
-    context: android.content.Context,
-    photo: Photo,
-    rotation: Float,
-    cropRect: Rect,
-    drawings: List<Drawing>,
-    texts: List<TextElement>,
-    viewportWidth: Float,
-    asCopy: Boolean
-) = withContext(Dispatchers.IO) {
-    val inputStream: InputStream? = context.contentResolver.openInputStream(photo.uri.toUri())
-    val originalBitmap = BitmapFactory.decodeStream(inputStream) ?: return@withContext
-    val matrix = Matrix()
-    matrix.postRotate(rotation)
-    var transformedBitmap = Bitmap.createBitmap(
-        originalBitmap,
-        0,
-        0,
-        originalBitmap.width,
-        originalBitmap.height,
-        matrix,
-        true
-    )
-    val left = (cropRect.left * transformedBitmap.width).roundToInt()
-        .coerceIn(0, transformedBitmap.width - 1)
-    val top = (cropRect.top * transformedBitmap.height).roundToInt()
-        .coerceIn(0, transformedBitmap.height - 1)
-    val width = ((cropRect.right - cropRect.left) * transformedBitmap.width).roundToInt()
-        .coerceAtMost(transformedBitmap.width - left)
-    val height = ((cropRect.bottom - cropRect.top) * transformedBitmap.height).roundToInt()
-        .coerceAtMost(transformedBitmap.height - top)
-    if (width > 0 && height > 0) {
-        transformedBitmap = Bitmap.createBitmap(transformedBitmap, left, top, width, height)
-    }
-    val resultBitmap = transformedBitmap.copy(Bitmap.Config.ARGB_8888, true)
-    val canvas = android.graphics.Canvas(resultBitmap)
-    val paint = android.graphics.Paint().apply {
-        isAntiAlias = true; strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin =
-        android.graphics.Paint.Join.ROUND; style = android.graphics.Paint.Style.STROKE
-    }
-    if (drawings.isNotEmpty()) {
-        val saveCount = canvas.saveLayer(
-            0f,
-            0f,
-            resultBitmap.width.toFloat(),
-            resultBitmap.height.toFloat(),
-            null
-        )
-        drawings.forEach { drawing ->
-            paint.color = drawing.color; paint.strokeWidth = drawing.strokeWidth; paint.alpha =
-            (drawing.opacity * 255).roundToInt()
-            if (drawing.tool == DrawingTool.Eraser) {
-                paint.xfermode =
-                    android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
-            } else {
-                paint.xfermode = null
-            }
-            val path = android.graphics.Path()
-            drawing.points.firstOrNull()?.let { first ->
-                path.moveTo(
-                    first.x * resultBitmap.width,
-                    first.y * resultBitmap.height
-                ); drawing.points.drop(1).forEach { next ->
-                path.lineTo(
-                    next.x * resultBitmap.width,
-                    next.y * resultBitmap.height
-                )
-            }
-            }
-            canvas.drawPath(path, paint)
-        }
-        canvas.restoreToCount(saveCount)
-    }
-    if (texts.isNotEmpty()) {
-        val textPaint = android.graphics.Paint().apply {
-            isAntiAlias = true; style = android.graphics.Paint.Style.FILL; textAlign =
-            android.graphics.Paint.Align.LEFT
-        }
-        texts.forEach { textElement ->
-            textPaint.color = textElement.color; textPaint.textSize =
-            textElement.fontSize * (resultBitmap.width / viewportWidth)
-            val fontMetrics = textPaint.fontMetrics
-            canvas.save();
-            canvas.translate(
-                textElement.x * resultBitmap.width,
-                textElement.y * resultBitmap.height
-            )
-            canvas.rotate(textElement.rotation)
-            canvas.drawText(textElement.text, 0f, -fontMetrics.ascent, textPaint)
-            canvas.restore()
-        }
-    }
-    val resolver = context.contentResolver
-    val nowSeconds = System.currentTimeMillis() / 1000
-    if (asCopy) {
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${photo.name}");
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-            put(MediaStore.Images.Media.DATE_MODIFIED, nowSeconds);
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
-        }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-        uri?.let {
-            resolver.openOutputStream(it)
-                ?.use { out -> resultBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-        }
-    } else {
-        val uri = photo.uri.toUri()
-        try {
-            resolver.openOutputStream(uri, "rwt")
-                ?.use { out -> resultBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) };
-            val updateValues = ContentValues().apply {
-                put(
-                    MediaStore.Images.Media.DATE_MODIFIED,
-                    nowSeconds
-                )
-            }; resolver.update(uri, updateValues, null, null)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 }

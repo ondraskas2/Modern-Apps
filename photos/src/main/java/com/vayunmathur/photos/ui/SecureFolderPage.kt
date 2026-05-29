@@ -29,10 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,26 +54,27 @@ import com.vayunmathur.photos.NavigationBar
 import com.vayunmathur.photos.R
 import com.vayunmathur.photos.Route
 import com.vayunmathur.photos.data.VaultPhoto
-import com.vayunmathur.photos.util.SecureFolderManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.vayunmathur.photos.util.SecureFolderViewModel
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SecureFolderPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewModel, password: String) {
+fun SecureFolderPage(
+    backStack: NavBackStack<Route>,
+    viewModel: DatabaseViewModel,
+    password: String,
+    secureFolderViewModel: SecureFolderViewModel,
+) {
     val photos by viewModel.data<VaultPhoto>().collectAsState()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var columnCount by LocalColumnCount.current
-    val selectedIds = remember { mutableStateListOf<Long>() }
+    val selectedIds by secureFolderViewModel.selectedIds.collectAsState()
     val isSelectionMode = selectedIds.isNotEmpty()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { 
+                title = {
                     if (isSelectionMode) {
                         Text(stringResource(R.string.items_selected, selectedIds.size))
                     } else {
@@ -86,7 +83,7 @@ fun SecureFolderPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMode
                 },
                 navigationIcon = {
                     if (isSelectionMode) {
-                        IconButton(onClick = { selectedIds.clear() }) {
+                        IconButton(onClick = { secureFolderViewModel.clearSelection() }) {
                             IconClose()
                         }
                     }
@@ -95,19 +92,7 @@ fun SecureFolderPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMode
                     if (isSelectionMode) {
                         IconButton(onClick = {
                             val selectedPhotos = photos.filter { it.id in selectedIds }
-                            scope.launch {
-                                val sfm = SecureFolderManager(context)
-                                try {
-                                    selectedPhotos.forEach { photo ->
-                                        val restoredUri = sfm.decryptAndRestore(photo, password)
-                                        if (restoredUri != null) {
-                                            viewModel.delete(photo)
-                                        }
-                                    }
-                                    selectedIds.clear()
-                                } catch (e: Exception) {
-                                }
-                            }
+                            secureFolderViewModel.restorePhotos(selectedPhotos, viewModel, password)
                         }) {
                             IconUnarchive()
                         }
@@ -153,11 +138,17 @@ fun SecureFolderPage(backStack: NavBackStack<Route>, viewModel: DatabaseViewMode
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(photos, { it.id }) { photo ->
-                        VaultPhotoItem(photo, password, selectedIds.contains(photo.id), isSelectionMode) {
+                        VaultPhotoItem(
+                            photo = photo,
+                            password = password,
+                            isSelected = photo.id in selectedIds,
+                            isSelectionMode = isSelectionMode,
+                            secureFolderViewModel = secureFolderViewModel,
+                        ) {
                             if (isSelectionMode) {
-                                if (selectedIds.contains(photo.id)) selectedIds.remove(photo.id) else selectedIds.add(photo.id)
+                                secureFolderViewModel.toggleSelection(photo.id)
                             } else {
-                                selectedIds.add(photo.id)
+                                secureFolderViewModel.addSelection(photo.id)
                             }
                         }
                     }
@@ -174,19 +165,14 @@ fun VaultPhotoItem(
     password: String,
     isSelected: Boolean,
     isSelectionMode: Boolean,
-    onClick: () -> Unit
+    secureFolderViewModel: SecureFolderViewModel,
+    onClick: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    
+    val thumbnails by secureFolderViewModel.thumbnails.collectAsState()
+    val bitmap = thumbnails[photo.thumbnailPath]
+
     LaunchedEffect(photo.thumbnailPath) {
-        withContext(Dispatchers.IO) {
-            try {
-                val sfm = SecureFolderManager(context)
-                bitmap = sfm.decryptThumbnail(photo.thumbnailPath, password)
-            } catch (e: Exception) {
-            }
-        }
+        secureFolderViewModel.requestThumbnail(photo.thumbnailPath, password)
     }
 
     Box(
@@ -202,7 +188,7 @@ fun VaultPhotoItem(
     ) {
         if (bitmap != null) {
             Image(
-                bitmap = bitmap!!.asImageBitmap(),
+                bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -210,7 +196,7 @@ fun VaultPhotoItem(
         } else {
             Box(Modifier.fillMaxSize().background(Color.DarkGray))
         }
-        
+
         if (isSelectionMode) {
             Box(
                 modifier = Modifier

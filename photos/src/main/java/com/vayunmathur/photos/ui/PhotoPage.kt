@@ -2,7 +2,6 @@ package com.vayunmathur.photos.ui
 
 import android.content.Context
 import android.content.Intent
-import android.location.Geocoder
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -68,12 +67,11 @@ import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.photos.R
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.util.PhotoMapViewModel
 import kotlin.math.absoluteValue
 import kotlin.time.Instant
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 
@@ -81,7 +79,7 @@ import kotlinx.datetime.toLocalDateTime
 data class ZoomState(val scale: Float = 1f, val offset: Offset = Offset.Zero)
 
 @Composable
-fun PhotoPage(viewModel: DatabaseViewModel, id: Long, overridePhotosList: List<Photo>?) {
+fun PhotoPage(viewModel: DatabaseViewModel, photoMapViewModel: PhotoMapViewModel, id: Long, overridePhotosList: List<Photo>?) {
     val photosAll by viewModel.data<Photo>().collectAsState(initial = emptyList())
     val photos = overridePhotosList ?: photosAll
     val context = LocalContext.current
@@ -115,6 +113,7 @@ fun PhotoPage(viewModel: DatabaseViewModel, id: Long, overridePhotosList: List<P
                 PhotoDetailView(
                         photo = photo,
                         context = context,
+                        photoMapViewModel = photoMapViewModel,
                         pagerState = pagerState,
                         pageIndex = pageIndex,
                         isSettled = pagerState.settledPage == pageIndex,
@@ -144,6 +143,7 @@ fun PhotoPage(viewModel: DatabaseViewModel, id: Long, overridePhotosList: List<P
 fun PhotoDetailView(
         photo: Photo,
         context: Context,
+        photoMapViewModel: PhotoMapViewModel,
         pagerState: PagerState,
         pageIndex: Int,
         isSettled: Boolean,
@@ -153,7 +153,8 @@ fun PhotoDetailView(
         onToggleMetadata: () -> Unit,
         onEditPhoto: () -> Unit
 ) {
-    var countryName by remember(photo.id) { mutableStateOf<String?>(null) }
+    val countryNames by photoMapViewModel.countryNames.collectAsState()
+    val countryName = countryNames[photo.id]
     var size by remember { mutableStateOf(IntSize.Zero) }
 
     val updatedZoomState by rememberUpdatedState(currentZoom)
@@ -180,17 +181,7 @@ fun PhotoDetailView(
 
     LaunchedEffect(photo.id) {
         if (photo.lat != null && photo.long != null) {
-            withContext(Dispatchers.IO) {
-                try {
-                    val geocoder = Geocoder(context)
-                    countryName =
-                            geocoder.getFromLocation(photo.lat, photo.long, 1)
-                                    ?.firstOrNull()
-                                    ?.countryName
-                } catch (e: Exception) {
-                    countryName = "Unknown"
-                }
-            }
+            photoMapViewModel.requestCountryName(photo.id, photo.lat, photo.long)
         }
     }
 

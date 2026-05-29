@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,21 +17,25 @@ import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.DatabaseViewModel
 import com.vayunmathur.library.util.DialogPage
 import com.vayunmathur.library.util.MainNavigation
-import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.library.util.rememberNavBackStack
-import com.vayunmathur.photos.data.DrawingTool
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoDatabase
-import kotlinx.serialization.Serializable
+import com.vayunmathur.photos.util.PhotoEditViewModel
+import com.vayunmathur.photos.util.PhotoEditViewModelFactory
 
 class EditActivity : ComponentActivity() {
+    private lateinit var viewModel: DatabaseViewModel
+    private val photoEditViewModel: PhotoEditViewModel by viewModels {
+        PhotoEditViewModelFactory(application, viewModel)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         val db = buildDatabase<PhotoDatabase>(PhotoDatabase.ALL_MIGRATIONS)
-        val viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
+        viewModel = DatabaseViewModel(db, Photo::class to db.photoDao())
 
         setContent {
             DynamicTheme {
@@ -55,7 +60,7 @@ class EditActivity : ComponentActivity() {
                 }
 
                 if (photoId != -1L || photoUri != null) {
-                    EditNavigation(viewModel, photoId, photoUri)
+                    EditNavigation(viewModel, photoEditViewModel, photoId, photoUri)
                 }
             }
         }
@@ -63,11 +68,16 @@ class EditActivity : ComponentActivity() {
 }
 
 @Composable
-fun EditNavigation(viewModel: DatabaseViewModel, photoId: Long, photoUri: String?) {
+fun EditNavigation(
+    viewModel: DatabaseViewModel,
+    photoEditViewModel: PhotoEditViewModel,
+    photoId: Long,
+    photoUri: String?,
+) {
     val backStack = rememberNavBackStack<EditRoute>(EditRoute.EditPhoto(photoId, photoUri))
     MainNavigation(backStack) {
         entry<EditRoute.EditPhoto> {
-            EditPhotoPage(backStack, viewModel, it.id, it.uri)
+            EditPhotoPage(backStack, viewModel, photoEditViewModel, it.id, it.uri)
         }
 
         entry<EditRoute.DrawingSettings>(DialogPage()) {
@@ -75,4 +85,3 @@ fun EditNavigation(viewModel: DatabaseViewModel, photoId: Long, photoUri: String
         }
     }
 }
-
