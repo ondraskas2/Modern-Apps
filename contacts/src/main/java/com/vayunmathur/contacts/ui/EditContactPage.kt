@@ -103,18 +103,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
 
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
-            try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val bitmap = BitmapFactory.decodeStream(inputStream).scale(500, 500)
-                val baos = Buffer()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, baos.outputStream())
-                val value = Base64.encode(baos.readByteArray())
-                viewModel.updateEditDraft {
-                    it.copy(photo = it.photo?.withValue(value) ?: Photo(0, value))
-                }
-            } catch (e: Exception) {
-                Log.e("EditContactPage", "Error processing picked media from URI: $uri", e)
-            }
+            viewModel.setEditDraftPhotoFromUri(uri)
         }
     }
 

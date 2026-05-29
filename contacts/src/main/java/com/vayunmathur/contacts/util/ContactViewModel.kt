@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.provider.ContactsContract
 import android.util.Log
+import androidx.core.graphics.scale
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.contacts.data.Address
@@ -504,6 +505,36 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         editingOriginal = null
         editingContactId = null
         editingInitialized = false
+    }
+
+    /**
+     * Decodes the picked image URI off the main thread, scales it to 500x500,
+     * Base64-encodes it, and updates [editDraft]'s photo. Errors are logged
+     * and the draft is left unchanged so the picker callback never blocks the
+     * UI thread (large gallery photos can take 100+ ms to decode).
+     */
+    fun setEditDraftPhotoFromUri(uri: android.net.Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ctx = getApplication<Application>()
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    val bitmap = BitmapFactory.decodeStream(input)
+                        ?: return@launch
+                    val scaled = bitmap.scale(500, 500)
+                    val baos = okio.Buffer()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 100, baos.outputStream())
+                    val encoded = android.util.Base64.encodeToString(baos.readByteArray(), android.util.Base64.NO_WRAP)
+                    encoded
+                } ?: return@launch
+                updateEditDraft { draft ->
+                    val newPhoto = draft.photo?.withValue(bytes)
+                        ?: com.vayunmathur.contacts.data.Photo(0, bytes)
+                    draft.copy(photo = newPhoto)
+                }
+            } catch (e: Exception) {
+                Log.e("ContactViewModel", "Error decoding picked photo: $uri", e)
+            }
+        }
     }
 
     /**
