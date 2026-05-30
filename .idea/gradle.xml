@@ -40,12 +40,14 @@
             <option value="$PROJECT_DIR$/library/network" />
             <option value="$PROJECT_DIR$/library/widgets" />
             <option value="$PROJECT_DIR$/maps" />
+            <option value="$PROJECT_DIR$/messages" />
             <option value="$PROJECT_DIR$/music" />
             <option value="$PROJECT_DIR$/notes" />
             <option value="$PROJECT_DIR$/openassistant" />
             <option value="$PROJECT_DIR$/passwords" />
             <option value="$PROJECT_DIR$/pdf" />
             <option value="$PROJECT_DIR$/photos" />
+            <option value="$PROJECT_DIR$/weather" />
             <option value="$PROJECT_DIR$/youpipe" />
           </set>
         </option>
