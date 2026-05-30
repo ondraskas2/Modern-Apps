@@ -89,6 +89,62 @@ class MessagesViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * Search contacts across both backends + the device contact db.
+     * The UI calls this on every keystroke; debounce is the caller's
+     * concern (use Compose `LaunchedEffect(query) { delay(150); … }`).
+     */
+    suspend fun searchContacts(query: String): List<ContactSuggestion> =
+        MessagesSessionManager.searchContacts(query)
+
+    /** Which sources already have an existing 1:1 thread with this number? */
+    suspend fun resolveSourcesForNumber(phoneE164: String): Set<com.vayunmathur.messages.data.MessageSource> =
+        MessagesSessionManager.resolveSourcesForNumber(phoneE164)
+
+    /**
+     * Read a content:// URI's bytes + mime + filename off the IO
+     * dispatcher. Returns null if the URI is unreadable.
+     *
+     * Exposed here (vs. having callers do it inline) because the
+     * Compose-side new-conversation screen needs to read multiple URIs
+     * from a share intent before any single send is fired, and it's
+     * cleaner to keep the contentResolver dance in one place.
+     */
+    suspend fun readUri(uri: android.net.Uri): NewMediaPart? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val cr = getApplication<Application>().contentResolver
+            val bytes = runCatching { cr.openInputStream(uri)?.use { it.readBytes() } }
+                .getOrNull() ?: return@withContext null
+            val mime = cr.getType(uri) ?: "application/octet-stream"
+            val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "attachment"
+            NewMediaPart(bytes = bytes, mime = mime, fileName = name)
+        }
+
+    private fun queryDisplayName(uri: android.net.Uri): String? = try {
+        val cr = getApplication<Application>().contentResolver
+        cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() } else null
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * Create + send to a brand-new thread in one call. Returns the new
+     * conversation id (prefixed) so the caller can navigate into it.
+     */
+    fun sendNewMessage(
+        source: com.vayunmathur.messages.data.MessageSource,
+        recipients: List<String>,
+        body: String?,
+        media: NewMediaPart? = null,
+        onResult: (String?) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            onResult(MessagesSessionManager.sendNewMessage(source, recipients, body, media))
+        }
+    }
+
     fun fetchMessages(conversationId: String) {
         MessagesSessionManager.fetchMessages(conversationId)
     }

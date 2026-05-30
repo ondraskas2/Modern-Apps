@@ -261,6 +261,141 @@ object MessagesSessionManager {
     }
 
     /**
+     * Search contacts across all available sources.
+     *
+     * Merges (and deduplicates by phone) hits from:
+     *  - **gmessages** server-side contact list (when connected). The
+     *    server doesn't accept a query filter so we pull once and
+     *    filter client-side. The list is short (a few hundred).
+     *  - **gvoice** server-side autocomplete (when connected). Empty
+     *    [query] pulls the top ~500; non-empty narrows server-side.
+     *  - **Device contacts** via [ContactResolver] for name-only and
+     *    number-only matches not already covered by either backend.
+     *
+     * Returned in stable order: matches whose [ContactSuggestion.source]
+     * is non-null come first (we know they're reachable on at least one
+     * source), then device-only entries. Within each group, prefix
+     * matches on the display name rank above substring matches.
+     */
+    suspend fun searchContacts(query: String): List<ContactSuggestion> {
+        val q = query.trim()
+        val isPhone = q.startsWith("+") && q.length >= 4
+        val results = mutableListOf<ContactSuggestion>()
+
+        // gmessages: pull the top-contacts list once when query is
+        // empty (initial picker open), otherwise fall through to a
+        // filter on the full contacts list. The list isn't reactive
+        // so we just do a one-shot fetch each call.
+        if (GMessagesClient.state.value is com.vayunmathur.messages.gmessages.GMessagesClient.State.Connected) {
+            val list = if (q.isEmpty()) GMessagesClient.listTopContacts() else GMessagesClient.listContacts()
+            results += list.filter { c -> q.isEmpty() || matches(c, q) }
+        }
+        // gvoice: server-side filter for non-empty queries; full list
+        // for empty.
+        if (GVoiceClient.state.value is com.vayunmathur.messages.gvoice.GVoiceClient.State.Connected) {
+            results += GVoiceClient.autocompleteContacts(q)
+                .filter { c -> q.isEmpty() || matches(c, q) }
+        }
+        // Always include device contact matches so users see names from
+        // their phone even when neither backend's contact list knows
+        // about them. ContactResolver.search supports both name+number.
+        results += ContactResolver.search(appContext, q).map { dc ->
+            ContactSuggestion(
+                displayName = dc.displayName,
+                phoneE164 = dc.phoneE164,
+                avatarUrl = dc.photoUri,
+                source = null,
+            )
+        }
+        // Also: literal-number entry. If the user typed something that
+        // looks like a phone number and it isn't already in the list,
+        // add a "Send to {number}" row so they can send to a brand-new
+        // contact without first saving them.
+        if (isPhone && results.none { it.phoneE164 == q }) {
+            results += ContactSuggestion(displayName = q, phoneE164 = q, avatarUrl = null, source = null)
+        }
+        // Dedupe by phone, preferring entries that carry a source.
+        return results
+            .groupBy { it.phoneE164 ?: it.displayName }
+            .map { (_, group) -> group.minByOrNull { if (it.source == null) 1 else 0 }!! }
+    }
+
+    private fun matches(c: ContactSuggestion, q: String): Boolean {
+        val needle = q.lowercase()
+        return c.displayName.lowercase().contains(needle) ||
+            (c.phoneE164?.lowercase()?.contains(needle) == true)
+    }
+
+    /**
+     * Which sources already have an existing thread for [phoneE164]?
+     * Drives the "smart routing" decision in the new-conversation
+     * picker: zero sources → user picks; one source → route there;
+     * two sources → user picks.
+     */
+    suspend fun resolveSourcesForNumber(phoneE164: String): Set<MessageSource> {
+        if (phoneE164.isBlank()) return emptySet()
+        // Normalize for comparison: strip non-digits + leading '+'.
+        val needle = normalizePhone(phoneE164)
+        val all = db.conversationDao().observeAll().firstOrNull().orEmpty()
+        return all.asSequence()
+            .filter { !it.isGroup && it.peerPhoneE164 != null }
+            .filter { normalizePhone(it.peerPhoneE164!!) == needle }
+            .map { it.source }
+            .toSet()
+    }
+
+    private fun normalizePhone(raw: String): String =
+        raw.filter { it.isDigit() }.trimStart('0')
+
+    /**
+     * Start a brand-new conversation (and send the first text + optional
+     * media in the same call).
+     *
+     * gmessages: GET_OR_CREATE_CONVERSATION → SEND_MESSAGE/SEND_MEDIA.
+     * gvoice: builds a ReqSendSMS with `recipients` set so the server
+     * creates the thread in one round trip.
+     *
+     * Returns the new conversation id on success, or null on failure.
+     */
+    suspend fun sendNewMessage(
+        source: MessageSource,
+        recipients: List<String>,
+        body: String?,
+        media: NewMediaPart? = null,
+    ): String? {
+        if (recipients.isEmpty()) return null
+        return when (source) {
+            MessageSource.MESSAGES_WEB -> {
+                val convId = GMessagesClient.getOrCreateConversation(recipients) ?: return null
+                val ok = if (media != null) {
+                    GMessagesClient.sendMedia(
+                        conversationId = convId,
+                        data = media.bytes,
+                        mime = media.mime,
+                        fileName = media.fileName,
+                        caption = body,
+                    )
+                } else {
+                    GMessagesClient.sendMessage(convId, body.orEmpty())
+                }
+                if (ok) convId else null
+            }
+            MessageSource.VOICE -> {
+                if (media != null) {
+                    GVoiceClient.sendNewThreadMedia(
+                        recipients = recipients,
+                        mime = media.mime,
+                        data = media.bytes,
+                        caption = body,
+                    )
+                } else {
+                    GVoiceClient.sendNewThread(recipients, body.orEmpty())
+                }
+            }
+        }
+    }
+
+    /**
      * Bulk-write a backfill batch of messages in ONE transaction.
      * Called by the protocol clients when LIST_MESSAGES / GetThread
      * returns — saves dozens of separate Flow notifications when
@@ -313,6 +448,14 @@ object MessagesSessionManager {
             is GMEvent.ConversationUpdate -> {
                 val id = "${event.source.idPrefix}:${event.conversationId}"
                 val existing = db.conversationDao().get(id)
+                // One-shot guard: rows persisted before the gmessages
+                // microseconds→milliseconds fix have last_ts > 1e14
+                // (≈ year 5138 in ms). Treat those as "no existing
+                // timestamp" so the first refresh after the fix lands
+                // immediately re-anchors to the correct scale rather
+                // than holding the stale huge value via maxOf.
+                val priorTs = existing?.lastMessageTimestamp
+                    ?.takeIf { it < STALE_MICROSECOND_THRESHOLD_MS } ?: 0L
                 val merged = Conversation(
                     id = id,
                     source = event.source,
@@ -320,7 +463,7 @@ object MessagesSessionManager {
                     peerPhoneE164 = event.peerPhone ?: existing?.peerPhoneE164,
                     avatarUrl = event.avatarUrl ?: existing?.avatarUrl,
                     lastMessagePreview = event.lastPreview ?: existing?.lastMessagePreview,
-                    lastMessageTimestamp = maxOf(event.lastTimestamp, existing?.lastMessageTimestamp ?: 0L),
+                    lastMessageTimestamp = maxOf(event.lastTimestamp, priorTs),
                     unreadCount = event.unreadCount,
                     isGroup = event.isGroup,
                     participantCount = event.participantCount,
@@ -378,9 +521,37 @@ object MessagesSessionManager {
         conversationId.startsWith("${MessageSource.VOICE.idPrefix}:") -> MessageSource.VOICE
         else -> null
     }
+
+    /** ≈ year 5138 in epoch-ms. Any persisted `last_ts` larger than this
+     *  is almost certainly a stale microsecond value from before the
+     *  gmessages timestamp fix; treat it as missing. */
+    private const val STALE_MICROSECOND_THRESHOLD_MS = 100_000_000_000_000L
 }
 
 /** Action passed to [MessagesSessionManager.sendReaction]. Mirrors the
  *  three-state add/remove/switch enum in [SendReactionRequest.Action]
  *  without exposing the protobuf type to non-protocol callers. */
 enum class ReactionAction { ADD, REMOVE, SWITCH }
+
+/** Media payload for [MessagesSessionManager.sendNewMessage]. Keeping
+ *  bytes + meta together so callers don't need a 4-arg overload. */
+data class NewMediaPart(
+    val bytes: ByteArray,
+    val mime: String,
+    val fileName: String,
+) {
+    // ByteArray equality is reference-based by default; provide proper
+    // value equality so test fixtures and === sites behave sanely.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is NewMediaPart) return false
+        return mime == other.mime && fileName == other.fileName && bytes.contentEquals(other.bytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = bytes.contentHashCode()
+        result = 31 * result + mime.hashCode()
+        result = 31 * result + fileName.hashCode()
+        return result
+    }
+}

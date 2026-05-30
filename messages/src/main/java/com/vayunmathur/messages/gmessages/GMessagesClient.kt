@@ -4,6 +4,12 @@ import android.content.Context
 import android.util.Log
 import client.Client.ListConversationsRequest
 import client.Client.ListConversationsResponse
+import client.Client.ListContactsRequest
+import client.Client.ListContactsResponse
+import client.Client.ListTopContactsRequest
+import client.Client.ListTopContactsResponse
+import client.Client.GetOrCreateConversationRequest
+import client.Client.GetOrCreateConversationResponse
 import client.Client.ListMessagesRequest
 import client.Client.ListMessagesResponse
 import client.Client.MessagePayload
@@ -334,6 +340,114 @@ object GMessagesClient {
         return parsed?.success == true
     }
 
+    /**
+     * Create (or return an existing) conversation for [numbers].
+     *
+     * Mirrors `Client.GetOrCreateConversation` (`pkg/libgm/methods.go:52`).
+     * Single phone = 1:1 thread. Multiple phones = SMS group, or RCS
+     * group when [createRcsGroup] + [rcsGroupName] is supplied.
+     *
+     * Returns the source-prefixed conversation id of the (possibly
+     * newly-created) thread, or null on failure. The relay emits a
+     * GET_UPDATES with the new conversation immediately after; we also
+     * emit a synthetic [GMEvent.ConversationUpdate] so the inbox sees
+     * the row before the long-poll catches up.
+     */
+    suspend fun getOrCreateConversation(
+        numbers: List<String>,
+        rcsGroupName: String? = null,
+        createRcsGroup: Boolean = false,
+    ): String? {
+        if (numbers.isEmpty() || _state.value !is State.Connected) return null
+        val req = GetOrCreateConversationRequest.newBuilder()
+            .addAllNumbers(numbers.map {
+                conversations.Conversations.ContactNumber.newBuilder()
+                    .setMysteriousInt(2)  // 2 = "from contact list", per libgm
+                    .setNumber(it)
+                    .build()
+            })
+            .apply {
+                if (createRcsGroup) {
+                    setCreateRCSGroup(true)
+                    rcsGroupName?.let { setRCSGroupName(it) }
+                }
+            }
+            .build()
+        val resp = sessionHandler.sendAndWait(ActionType.GET_OR_CREATE_CONVERSATION, req)
+            ?: return null
+        val parsed = runCatching {
+            GetOrCreateConversationResponse.parseFrom(resp.decryptedData ?: return null)
+        }.getOrNull() ?: return null
+
+        if (parsed.status == GetOrCreateConversationResponse.Status.CREATE_RCS) {
+            // The server is telling us "you asked for RCS but this set
+            // of participants isn't RCS-capable — try again without".
+            // The bridge does the same retry (handlematrix.go).
+            Log.i(TAG, "getOrCreate: CREATE_RCS — retrying with SMS")
+            return getOrCreateConversation(numbers, rcsGroupName = null, createRcsGroup = false)
+        }
+        if (!parsed.hasConversation()) {
+            Log.w(TAG, "getOrCreate: status=${parsed.status} but no conversation")
+            return null
+        }
+        val conv = parsed.conversation
+        // Eagerly emit a synthetic ConversationUpdate so the inbox row
+        // appears before the long-poll's GET_UPDATES delivers the same
+        // info. emitConversation is idempotent via Room upsert so the
+        // duplicate from the long-poll is harmless.
+        emitConversation(conv)
+        return "${source.idPrefix}:${conv.conversationID}"
+    }
+
+    /**
+     * Server-side contact list, used to populate the recipient picker.
+     * Mirrors `Client.ListContacts` (`pkg/libgm/methods.go:34`).
+     * The bridge passes hardcoded magic ints (1, 350, 50) that we
+     * preserve verbatim — the relay rejects requests without them.
+     */
+    suspend fun listContacts(): List<com.vayunmathur.messages.util.ContactSuggestion> {
+        if (_state.value !is State.Connected) return emptyList()
+        val req = ListContactsRequest.newBuilder()
+            .setI1(1)
+            .setI2(350)
+            .setI3(50)
+            .build()
+        val resp = sessionHandler.sendAndWait(ActionType.LIST_CONTACTS, req) ?: return emptyList()
+        val parsed = runCatching {
+            ListContactsResponse.parseFrom(resp.decryptedData ?: return emptyList())
+        }.getOrNull() ?: return emptyList()
+        return (0 until parsed.contactsCount).mapNotNull { i ->
+            parsed.getContacts(i).toSuggestion()
+        }
+    }
+
+    /** Server-side "frequent contacts" — used as the picker's initial
+     *  suggestion list before the user types anything. */
+    suspend fun listTopContacts(count: Int = 20): List<com.vayunmathur.messages.util.ContactSuggestion> {
+        if (_state.value !is State.Connected) return emptyList()
+        val req = ListTopContactsRequest.newBuilder().setCount(count).build()
+        val resp = sessionHandler.sendAndWait(ActionType.LIST_TOP_CONTACTS, req) ?: return emptyList()
+        val parsed = runCatching {
+            ListTopContactsResponse.parseFrom(resp.decryptedData ?: return emptyList())
+        }.getOrNull() ?: return emptyList()
+        return (0 until parsed.contactsCount).mapNotNull { i ->
+            parsed.getContacts(i).toSuggestion()
+        }
+    }
+
+    private fun conversations.Conversations.Contact.toSuggestion(): com.vayunmathur.messages.util.ContactSuggestion? {
+        val phone = number?.number?.takeIf { it.isNotBlank() }
+            ?: number?.number2?.takeIf { it.isNotBlank() }
+            ?: return null
+        val displayName = name.takeIf { it.isNotBlank() } ?: phone
+        return com.vayunmathur.messages.util.ContactSuggestion(
+            displayName = displayName,
+            phoneE164 = phone,
+            avatarUrl = null,
+            source = source,
+        )
+    }
+
     @Suppress("UNUSED_PARAMETER")
     @Deprecated("kept for binary compat — call sendMessage(conversationId, body) directly", level = DeprecationLevel.HIDDEN)
     suspend fun sendMessageLegacy(conversationId: String, body: String): Boolean =
@@ -532,7 +646,7 @@ object GMessagesClient {
                 peerPhone = if (isGroup) null else peerPhone,
                 avatarUrl = contact?.photoUri,
                 lastPreview = if (c.hasLatestMessage()) c.latestMessage.displayContent.takeIf { it.isNotBlank() } else null,
-                lastTimestamp = c.lastMessageTimestamp,
+                lastTimestamp = toMillis(c.lastMessageTimestamp),
                 unreadCount = if (c.unread) 1 else 0,
                 isGroup = isGroup,
                 participantCount = otherParticipants.size,
@@ -587,7 +701,7 @@ object GMessagesClient {
                 else com.vayunmathur.messages.data.MessageDirection.INCOMING,
             state = if (outgoing) com.vayunmathur.messages.data.MessageState.SENT
                 else com.vayunmathur.messages.data.MessageState.DELIVERED,
-            timestamp = m.timestamp,
+            timestamp = toMillis(m.timestamp),
             senderName = if (m.hasSenderParticipant()) {
                 m.senderParticipant.fullName.takeIf { it.isNotBlank() }
                     ?: m.senderParticipant.firstName.takeIf { it.isNotBlank() }
@@ -595,6 +709,15 @@ object GMessagesClient {
             reactionsJson = extractReactionsJson(m),
         )
     }
+
+    /**
+     * The relay returns timestamps in **microseconds** since epoch (see
+     * `time.UnixMicro(conv.GetLastMessageTimestamp())` in the Go bridge
+     * `pkg/connector/chatsync.go`). Everywhere else in this app (Room,
+     * notifications, [java.util.Date], Voice's emission path) expects
+     * **milliseconds**. Convert at the boundary so we never mix units.
+     */
+    private fun toMillis(usec: Long): Long = usec / 1000
 
     /** Roll up the per-emoji reaction entries on a Message into the
      *  [count: Int] aggregate we store. */
@@ -639,7 +762,7 @@ object GMessagesClient {
                 messageId = m.messageID,
                 body = body,
                 outgoing = outgoing,
-                timestamp = m.timestamp,
+                timestamp = toMillis(m.timestamp),
                 senderName = if (m.hasSenderParticipant()) {
                     m.senderParticipant.fullName.takeIf { it.isNotBlank() }
                         ?: m.senderParticipant.firstName.takeIf { it.isNotBlank() }
@@ -660,7 +783,7 @@ object GMessagesClient {
                     peerPhone = if (m.hasSenderParticipant()) {
                         m.senderParticipant.id.number.takeIf { it.isNotBlank() }
                     } else null,
-                    timestamp = m.timestamp,
+                    timestamp = toMillis(m.timestamp),
                 )
             )
         }

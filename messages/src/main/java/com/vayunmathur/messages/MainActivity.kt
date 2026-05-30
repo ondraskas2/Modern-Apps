@@ -1,34 +1,50 @@
 package com.vayunmathur.messages
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.PermissionsChecker
 import com.vayunmathur.library.util.ListPage
 import com.vayunmathur.library.util.MainNavigation
+import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.util.rememberNavBackStack
 import com.vayunmathur.messages.data.buildMessagesDatabase
+import com.vayunmathur.messages.ui.ComposeScreen
 import com.vayunmathur.messages.ui.ConversationScreen
 import com.vayunmathur.messages.ui.InboxScreen
 import com.vayunmathur.messages.ui.SettingsScreen
 import com.vayunmathur.messages.ui.setup.MessagesPairingScreen
 import com.vayunmathur.messages.ui.setup.VoiceLoginScreen
+import com.vayunmathur.messages.util.IncomingIntent
 import com.vayunmathur.messages.util.MessagesViewModel
+import com.vayunmathur.messages.util.ShareIntentParser
 import kotlinx.serialization.Serializable
 
 class MainActivity : ComponentActivity() {
 
+    /** Bridges Activity-side intent updates into the Compose backstack.
+     *  Each newly delivered intent goes through this state; Compose
+     *  observes and routes via [applyIntentRoute]. */
+    private val pendingIntent: MutableState<Intent?> = mutableStateOf(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingIntent.value = intent
         setContent {
             DynamicTheme {
                 // POST_NOTIFICATIONS is the only runtime perm we strictly
@@ -48,10 +64,17 @@ class MainActivity : ComponentActivity() {
                 }
                 PermissionsChecker(perms, getString(R.string.permissions_post_notifications)) {
                     val db = remember { buildMessagesDatabase(this@MainActivity) }
-                    Navigation(db)
+                    Navigation(db, pendingIntent)
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Re-delivering an intent while the activity is already alive
+        // (singleTop). Hand it off to Compose for backstack routing.
+        pendingIntent.value = intent
     }
 }
 
@@ -63,14 +86,44 @@ sealed interface Route : NavKey {
     @Serializable data object Settings : Route
     @Serializable data object PairMessages : Route
     @Serializable data object LoginVoice : Route
+
+    /**
+     * "Compose new" screen — recipient picker + body + media preview.
+     * Used both for the inbox FAB ("New chat") and as the landing
+     * surface for share-sheet intents / smsto: deep links.
+     */
+    @Serializable data class Compose(
+        /** Pre-filled recipient (E.164 or any free-form string). null = empty field. */
+        val initialNumber: String? = null,
+        /** Pre-filled body. null = empty. */
+        val initialBody: String? = null,
+        /** content:// URIs of media to attach. Encoded as strings so the
+         *  route remains Serializable. */
+        val initialMediaUris: List<String> = emptyList(),
+        /** Best-effort mime hint from the share intent. */
+        val initialMime: String? = null,
+    ) : Route
 }
 
 @Composable
 private fun Navigation(
     db: com.vayunmathur.messages.data.MessagesDatabase,
+    pendingIntent: MutableState<Intent?>,
     vm: MessagesViewModel = viewModel(),
 ) {
     val backStack = rememberNavBackStack<Route>(Route.Inbox)
+
+    // Consume each newly-delivered intent exactly once. snapshotFlow
+    // turns the State into a Flow so we get re-triggered every time
+    // onNewIntent updates the value; the `null` reset is the "ack".
+    LaunchedEffect(Unit) {
+        snapshotFlow { pendingIntent.value }.collect { intent ->
+            if (intent == null) return@collect
+            applyIntentRoute(backStack, ShareIntentParser.parse(intent))
+            pendingIntent.value = null
+        }
+    }
+
     MainNavigation(backStack) {
         entry<Route.Inbox>(metadata = ListPage { }) {
             InboxScreen(backStack, vm, db)
@@ -86,6 +139,58 @@ private fun Navigation(
         }
         entry<Route.LoginVoice> {
             VoiceLoginScreen(backStack)
+        }
+        entry<Route.Compose> { route ->
+            ComposeScreen(
+                backStack = backStack,
+                vm = vm,
+                db = db,
+                initialNumber = route.initialNumber,
+                initialBody = route.initialBody,
+                initialMediaUris = route.initialMediaUris.map(Uri::parse),
+                initialMime = route.initialMime,
+            )
+        }
+    }
+}
+
+/**
+ * Apply a parsed [IncomingIntent] to the navigation back-stack.
+ *
+ * Strategy:
+ *  - OpenConversation → reset to `[Inbox, Conversation(id)]` so the
+ *    user can press back to the inbox once they're done.
+ *  - OpenNumber / Share → reset to `[Inbox, Compose(...)]` for the
+ *    same reason.
+ *  - null → no-op (activity was launched without an actionable intent).
+ */
+private fun applyIntentRoute(
+    backStack: NavBackStack<Route>,
+    incoming: IncomingIntent?,
+) {
+    when (incoming) {
+        null -> Unit
+        is IncomingIntent.OpenConversation -> {
+            backStack.reset(Route.Inbox, Route.Conversation(incoming.conversationId))
+        }
+        is IncomingIntent.OpenNumber -> {
+            backStack.reset(
+                Route.Inbox,
+                Route.Compose(
+                    initialNumber = incoming.phone,
+                    initialBody = incoming.prefilledBody,
+                ),
+            )
+        }
+        is IncomingIntent.Share -> {
+            backStack.reset(
+                Route.Inbox,
+                Route.Compose(
+                    initialBody = incoming.text,
+                    initialMediaUris = incoming.mediaUris.map(Uri::toString),
+                    initialMime = incoming.mime,
+                ),
+            )
         }
     }
 }

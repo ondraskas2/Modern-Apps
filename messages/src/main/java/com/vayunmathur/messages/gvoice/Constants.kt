@@ -51,6 +51,18 @@ object VoiceEndpoints {
     const val EndpointMarkAllRead = "$ApiBaseUrl/thread/markallread"
     const val EndpointDeleteThread = "$ApiBaseUrl/thread/delete"
 
+    /**
+     * Contacts/PeopleStack endpoints. These live on a different host
+     * ([ContactsDomain]) and the request headers + URL-query bundle are
+     * adjusted by [com.vayunmathur.messages.gvoice.GVoiceRpcClient]
+     * based on the destination domain — see [GVoiceRpcClient.buildUrl]
+     * and [GVoiceRpcClient.applyHeaders].
+     */
+    private const val ContactsBaseUrl =
+        "https://$ContactsDomain/\$rpc/peoplestack.PeopleStackAutocompleteService"
+    const val EndpointAutocompleteContacts = "$ContactsBaseUrl/Autocomplete"
+    const val EndpointLookupContacts = "$ContactsBaseUrl/Lookup"
+
     private const val RealtimeBaseUrl = "https://$RealtimeDomain"
     const val EndpointRealtimeChannel = "$RealtimeBaseUrl/punctual/multi-watch/channel"
     const val EndpointRealtimeChooseServer = "$RealtimeBaseUrl/punctual/v1/chooseServer"

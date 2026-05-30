@@ -521,56 +521,6 @@ private fun ConvAvatar(conversation: Conversation?) {
     }
 }
 
-@Composable
-private fun ComposeRow(
-    draft: String,
-    onDraftChange: (String) -> Unit,
-    sending: Boolean,
-    onSend: () -> Unit,
-    onAttach: () -> Unit,
-) {
-    Surface(
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onAttach, enabled = !sending) {
-                Text(
-                    "+",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(stringResource(R.string.conversation_compose_placeholder)) },
-                maxLines = 5,
-                enabled = !sending,
-                shape = RoundedCornerShape(24.dp),
-            )
-            IconButton(onClick = onSend, enabled = draft.isNotBlank() && !sending) {
-                if (sending) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(
-                        stringResource(R.string.conversation_send),
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-        }
-    }
-}
-
 private fun formatTime(ts: Long): String =
     DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(ts))
 

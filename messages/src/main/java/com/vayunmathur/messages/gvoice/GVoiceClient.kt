@@ -296,6 +296,202 @@ object GVoiceClient {
             else -> null
         }
 
+    /**
+     * Send a text message to a brand-new thread keyed by [recipients].
+     * Mirrors the bridge's "no portal id yet" path
+     * (`pkg/connector/handlematrix.go:49`): build a [Requests.ReqSendSMS]
+     * with `setRecipients(...)` and **no** `setThreadID`; the server
+     * creates the thread and returns its assigned id in the response.
+     *
+     * Returns the new conversation id (prefixed with [source.idPrefix])
+     * on success, or null on failure.
+     */
+    suspend fun sendNewThread(recipients: List<String>, body: String): String? {
+        if (recipients.isEmpty()) return null
+        if (_state.value !is State.Connected) return null
+        val client = rpc ?: return null
+        val req = Requests.ReqSendSMS.newBuilder()
+            .addAllRecipients(recipients)
+            .setText(body)
+            .setTransactionID(
+                Requests.ReqSendSMS.WrappedTxnID.newBuilder()
+                    .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
+                    .build()
+            )
+            .setTrackingData(
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
+            )
+            .build()
+        return sendNewThreadInner(client, req)
+    }
+
+    /**
+     * MMS variant of [sendNewThread]. Caption is optional; pass null to
+     * send the media alone.
+     */
+    suspend fun sendNewThreadMedia(
+        recipients: List<String>,
+        mime: String,
+        data: ByteArray,
+        caption: String?,
+    ): String? {
+        if (recipients.isEmpty()) return null
+        if (_state.value !is State.Connected) return null
+        val client = rpc ?: return null
+        val mediaType = mimeToVoiceMediaType(mime) ?: run {
+            Log.w(TAG, "sendNewThreadMedia: unsupported MIME $mime")
+            return null
+        }
+        val media = Requests.ReqSendSMS.Media.newBuilder()
+            .setType(mediaType)
+            .setData(com.google.protobuf.ByteString.copyFrom(data))
+            .build()
+        val req = Requests.ReqSendSMS.newBuilder()
+            .addAllRecipients(recipients)
+            .apply { caption?.takeIf { it.isNotBlank() }?.let { setText(it) } }
+            .setMedia(media)
+            .setTransactionID(
+                Requests.ReqSendSMS.WrappedTxnID.newBuilder()
+                    .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
+                    .build()
+            )
+            .setTrackingData(
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
+            )
+            .build()
+        return sendNewThreadInner(client, req)
+    }
+
+    private suspend fun sendNewThreadInner(
+        client: GVoiceRpcClient,
+        req: Requests.ReqSendSMS,
+    ): String? = try {
+        val resp = client.postPbLite(
+            url = VoiceEndpoints.EndpointSendSms,
+            body = req,
+            responseTemplate = Responses.RespSendSMS.getDefaultInstance(),
+        )
+        // The server-assigned thread id appears in resp.threadID for
+        // newly-created threads. If absent we have no way to surface
+        // the result; return null so the caller can show an error.
+        val threadId = resp.threadID.takeIf { it.isNotBlank() }
+        if (threadId == null) {
+            Log.w(TAG, "sendNewThread: missing threadID in response (itemId=${resp.threadItemID})")
+            null
+        } else {
+            // Kick a backfill so the realtime channel surfaces the
+            // brand-new thread metadata immediately.
+            kickoffBackfill()
+            "${source.idPrefix}:$threadId"
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "sendNewThread failed: ${t.message}")
+        null
+    }
+
+    /**
+     * Server-side contact autocomplete. Mirrors `Client.AutocompleteContacts`
+     * in `pkg/libgv/client.go:172`. Empty [query] returns the top ~500
+     * contacts (used to populate the picker initially); non-empty
+     * narrows to ~15 matches.
+     */
+    suspend fun autocompleteContacts(query: String): List<com.vayunmathur.messages.util.ContactSuggestion> {
+        if (_state.value !is State.Connected) return emptyList()
+        val client = rpc ?: return emptyList()
+        val maxResults: Int = if (query.isEmpty()) 500 else 15
+        val req = Requests.ReqAutocompleteContacts.newBuilder()
+            .setUnknownInt1(243)
+            .setQuery(query)
+            .addAllUnknownInts3(listOf(1, 2))
+            .setMaxResults(maxResults)
+            .build()
+        val resp = try {
+            client.postPbLite(
+                url = VoiceEndpoints.EndpointAutocompleteContacts,
+                body = req,
+                responseTemplate = Responses.RespAutocompleteContacts.getDefaultInstance(),
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "autocompleteContacts failed: ${t.message}")
+            return emptyList()
+        }
+        return (0 until resp.resultsCount).flatMap { i ->
+            personToSuggestions(resp.getResults(i))
+        }
+    }
+
+    /**
+     * Resolve one-or-more phone numbers to known contacts via
+     * peoplestack Lookup. Mirrors `Client.LookupContact`. Returned map
+     * is keyed by E.164 phone with a [ContactSuggestion] value when a
+     * match exists; missing keys = no match.
+     */
+    suspend fun lookupContact(phones: List<String>): Map<String, com.vayunmathur.messages.util.ContactSuggestion> {
+        if (phones.isEmpty() || _state.value !is State.Connected) return emptyMap()
+        val client = rpc ?: return emptyMap()
+        val req = Requests.ReqLookupContacts.newBuilder()
+            .setUnknownInt1(243)
+            .addAllUnknownInts2(listOf(1, 2))
+            .addAllTargets(phones.map { p ->
+                contacts.Contacts.ContactID.newBuilder().setPhone(p).build()
+            })
+            .build()
+        val resp = try {
+            client.postPbLite(
+                url = VoiceEndpoints.EndpointLookupContacts,
+                body = req,
+                responseTemplate = Responses.RespLookupContacts.getDefaultInstance(),
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "lookupContact failed: ${t.message}")
+            return emptyMap()
+        }
+        val out = mutableMapOf<String, com.vayunmathur.messages.util.ContactSuggestion>()
+        for (i in 0 until resp.matchesCount) {
+            val match = resp.getMatches(i)
+            val phone = match.id.phone.takeIf { it.isNotBlank() } ?: continue
+            personToSuggestions(match.autocompletion).firstOrNull()?.let { out[phone] = it }
+        }
+        return out
+    }
+
+    /**
+     * Flatten a [PersonWrapper] into one [ContactSuggestion] per phone
+     * contact-method. Email-only entries are dropped — we can't send
+     * SMS to them.
+     */
+    private fun personToSuggestions(
+        wrapper: contacts.Contacts.PersonWrapper,
+    ): List<com.vayunmathur.messages.util.ContactSuggestion> {
+        val person = wrapper.person ?: return emptyList()
+        // The display name lives on the contact method's displayInfo;
+        // typically all methods on a person share the same name, so
+        // just use the first non-blank one we see.
+        val displayName = (0 until person.contactMethodsCount)
+            .asSequence()
+            .map { person.getContactMethods(it) }
+            .mapNotNull { it.displayInfo?.name?.value?.takeIf { v -> v.isNotBlank() } }
+            .firstOrNull()
+            ?: "Unknown"
+        val avatar = (0 until person.contactMethodsCount)
+            .asSequence()
+            .map { person.getContactMethods(it) }
+            .mapNotNull { it.displayInfo?.photo?.url?.takeIf { v -> v.isNotBlank() } }
+            .firstOrNull()
+        return (0 until person.contactMethodsCount).mapNotNull { idx ->
+            val cm = person.getContactMethods(idx)
+            val rawPhone = cm.phone?.canonicalValue?.takeIf { it.isNotBlank() }
+                ?: cm.phone?.displayValue?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            com.vayunmathur.messages.util.ContactSuggestion(
+                displayName = displayName,
+                phoneE164 = rawPhone,
+                avatarUrl = avatar,
+                source = source,
+            )
+        }
+    }
+
     /** Load (or refresh) messages for a thread. */
     fun fetchMessages(conversationId: String, count: Int = 100) {
         if (_state.value !is State.Connected) return
