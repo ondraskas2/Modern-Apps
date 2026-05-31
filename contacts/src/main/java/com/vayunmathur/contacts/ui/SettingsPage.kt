@@ -72,7 +72,6 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings)) },
-                navigationIcon = { IconNavigation(backStack) }
             )
         },
         floatingActionButton = {
