@@ -34,4 +34,12 @@
     <string name="video_stat_format">%1$s 次观看 | %2$s</string>
     <string name="label_description">描述</string>
     <string name="label_loading_subscriptions">正在加载最新订阅</string>
+    <string name="title_settings">设置</string>
+    <string name="label_sponsorblock">启用 SponsorBlock</string>
+    <string name="label_sponsorblock_description">自动跳过视频中的赞助片段</string>
+    <string name="label_backup_restore">备份和恢复</string>
+    <string name="label_restore_youpipe">从 YouPipe 恢复</string>
+    <string name="label_import_newpipe">导入 NewPipe 订阅</string>
+    <string name="label_import_youtube">从 YouTube (Takeout) 导入</string>
+    <string name="label_export_youpipe">导出订阅</string>
 </resources>
