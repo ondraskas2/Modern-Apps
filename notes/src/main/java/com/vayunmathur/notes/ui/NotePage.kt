@@ -151,14 +151,6 @@ fun NotePage(
                         backStack.pop()
                     }
                 }
-                if (!showSearchBar) {
-                    IconButton({
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("note", note.content))
-                    }) {
-                        IconCopy()
-                    }
-                }
             }
         }, actions = {
             if (!showSearchBar) {
@@ -169,6 +161,12 @@ fun NotePage(
                     isEditing = !isEditing
                 }) {
                     if (isEditing) IconVisible() else IconEdit()
+                }
+                IconButton({
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("note", note.content))
+                }) {
+                    IconCopy()
                 }
                 IconButton({
                     notesViewModel.requestShare(note.title, note.content)
