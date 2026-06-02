@@ -37,6 +37,7 @@ class LongPoll(
     private val authProvider: () -> AuthData,
     private val sessionHandler: SessionHandler,
     private val onEvent: suspend (LongPollEvent) -> Unit,
+    private val refreshToken: suspend () -> Unit = {},
 ) {
     private var job: Job? = null
 
@@ -69,6 +70,10 @@ class LongPoll(
     }
 
     private suspend fun openAndRead(): Boolean {
+        // Refresh token before each poll iteration, matching Go's doLongPoll.
+        try { refreshToken() } catch (t: Throwable) {
+            Log.w(TAG, "token refresh before long-poll failed: ${t.message}")
+        }
         val auth = authProvider()
         val token = auth.tachyonToken() ?: run {
             Log.w(TAG, "no tachyon token, can't open long-poll")

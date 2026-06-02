@@ -35,6 +35,9 @@ object Endpoints {
     const val GetWebEncryptionKeyUrl = "$PairingBase/GetWebEncryptionKey"
     const val RevokeRelayPairingUrl = "$PairingBase/RevokeRelayPairing"
 
+    private const val RegistrationBase = "$ImBase/\$rpc/google.internal.communications.instantmessaging.v1.Registration"
+    const val RegisterRefreshUrl = "$RegistrationBase/RegisterRefresh"
+
     private const val MessagingBase = "$ImBase/\$rpc/google.internal.communications.instantmessaging.v1.Messaging"
     const val ReceiveMessagesUrl = "$MessagingBase/ReceiveMessages"
     const val SendMessageUrl = "$MessagingBase/SendMessage"

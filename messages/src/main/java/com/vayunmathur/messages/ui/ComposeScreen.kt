@@ -94,6 +94,7 @@ fun ComposeScreen(
     initialBody: String?,
     initialMediaUris: List<Uri>,
     initialMime: String?,
+    initialSource: MessageSource? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -103,28 +104,31 @@ fun ComposeScreen(
     var query by remember { mutableStateOf(initialNumber.orEmpty()) }
     var selectedRecipient by remember { mutableStateOf<ContactSuggestion?>(null) }
     val suggestions = remember { mutableStateListOf<ContactSuggestion>() }
-    // 150 ms debounce on the search so we don't hammer the autocomplete
-    // endpoint on every keystroke. The first effect at empty-query
-    // pulls the initial "top contacts" list.
+    // 150 ms debounce on the search. When initialSource is set, only
+    // search device contacts (no server-side contact discovery).
     LaunchedEffect(query) {
         delay(150)
         suggestions.clear()
-        suggestions.addAll(vm.searchContacts(query))
+        if (initialSource != null) {
+            suggestions.addAll(vm.searchDeviceContacts(query))
+        } else {
+            suggestions.addAll(vm.searchContacts(query))
+        }
     }
 
-    // Source selection state. We resolve which source(s) a number is
-    // already on whenever the selected recipient changes; that drives
-    // both the segmented-control visibility and the auto-pick.
+    // Source selection state. When initialSource is set (from the FAB
+    // source picker), skip the resolve and lock to that source.
     var availableSources by remember { mutableStateOf<Set<MessageSource>>(emptySet()) }
-    var chosenSource by remember { mutableStateOf<MessageSource?>(null) }
+    var chosenSource by remember { mutableStateOf<MessageSource?>(initialSource) }
     LaunchedEffect(selectedRecipient) {
+        if (initialSource != null) {
+            chosenSource = initialSource
+            return@LaunchedEffect
+        }
         val phone = selectedRecipient?.phoneE164 ?: return@LaunchedEffect
         availableSources = vm.resolveSourcesForNumber(phone)
         chosenSource = when {
             availableSources.size == 1 -> availableSources.single()
-            // Picker-source hint when the contact came from a backend
-            // (gvoice autocomplete / gmessages contact list) — preselect
-            // that source when no thread exists yet.
             selectedRecipient?.source != null && availableSources.isEmpty() ->
                 selectedRecipient?.source
             else -> null
@@ -165,13 +169,21 @@ fun ComposeScreen(
                         chosenSource = null
                     },
                 )
-                // Source picker — only when ambiguous. Pre-existing or
-                // single-source threads are shown as a small "via …" label.
-                SourcePicker(
-                    available = availableSources,
-                    chosen = chosenSource,
-                    onChange = { chosenSource = it },
-                )
+                // Source picker — hidden when initialSource is locked.
+                if (initialSource != null) {
+                    Text(
+                        "Sending via ${labelFor(initialSource)}",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                } else {
+                    SourcePicker(
+                        available = availableSources,
+                        chosen = chosenSource,
+                        onChange = { chosenSource = it },
+                    )
+                }
             } else {
                 OutlinedTextField(
                     value = query,

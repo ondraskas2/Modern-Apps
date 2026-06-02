@@ -31,6 +31,9 @@ class SessionHandler(
 ) {
     private val waiters = ConcurrentHashMap<String, CompletableDeferred<IncomingRpc>>()
 
+    @Volatile
+    private var currentSessionId: String = UUID.randomUUID().toString()
+
     /**
      * Send an RPC and wait up to [timeoutMs] ms for the matching
      * response. Returns null on timeout.
@@ -86,17 +89,18 @@ class SessionHandler(
 
     /**
      * The "wake up" call libgm makes after each pair / reconnect.
-     * Sends GET_UPDATES with requestID == the local sessionID and TTL = 0.
-     * Without this, a freshly-paired relay won't forward subsequent data
-     * events back to us, so LIST_CONVERSATIONS and friends hang forever.
+     * Resets the internal session UUID (matching Go's ResetSessionID),
+     * then sends GET_UPDATES with requestID == the new sessionID and
+     * TTL = 0. Without this, the relay won't forward data events.
      */
-    suspend fun setActiveSession(sessionId: String): Boolean {
-        Log.i(TAG, "setActiveSession (GET_UPDATES, requestID=sessionID=$sessionId)")
+    suspend fun setActiveSession(): Boolean {
+        currentSessionId = UUID.randomUUID().toString()
+        Log.i(TAG, "setActiveSession (GET_UPDATES, requestID=sessionID=$currentSessionId)")
         val envelope = buildEnvelopeWithFixedRequestId(
             action = ActionType.GET_UPDATES,
             payload = null,
             messageType = MessageType.BUGLE_MESSAGE,
-            requestId = sessionId,
+            requestId = currentSessionId,
             omitTtl = true,
         )
         return try {
@@ -155,7 +159,6 @@ class SessionHandler(
         omitTtl: Boolean,
     ): OutgoingRPCMessage {
         val auth = authProvider()
-        val sessionId = auth.sessionId
 
         val serializedPayload = payload?.toByteArray() ?: ByteArray(0)
         val encryptedPayload = if (serializedPayload.isNotEmpty()) {
@@ -166,7 +169,7 @@ class SessionHandler(
             .setRequestID(requestId)
             .setAction(action)
             .setEncryptedProtoData(encryptedPayload.toByteString())
-            .setSessionID(sessionId)
+            .setSessionID(currentSessionId)
             .build()
 
         val builder = OutgoingRPCMessage.newBuilder()

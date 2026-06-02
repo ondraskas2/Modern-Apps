@@ -1,7 +1,9 @@
 package com.vayunmathur.messages.gmessages
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
+import authentication.Authentication
 import client.Client.ListConversationsRequest
 import client.Client.ListConversationsResponse
 import client.Client.ListContactsRequest
@@ -25,6 +27,7 @@ import client.Client.DeleteConversationData
 import client.Client.ConversationActionStatus
 import client.Client.DeleteMessageRequest
 import client.Client.DeleteMessageResponse
+import com.google.protobuf.ByteString
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.util.ContactResolver
 import conversations.Conversations.Conversation
@@ -33,6 +36,7 @@ import conversations.Conversations.MessageInfo
 import conversations.Conversations.MessageContent
 import conversations.Conversations.ReactionData
 import events.Events.UpdateEvents
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +77,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 object GMessagesClient {
 
     private const val TAG = "GMessagesClient"
+    
+    /** Refresh token if it expires within this buffer (1 hour). Matches Go implementation. */
+    private const val REFRESH_TACHYON_BUFFER_MS = 60 * 60 * 1000L
+
+    /** Default TTL when the server returns 0 (24 hours in microseconds). Matches Go `updateTachyonAuthToken`. */
+    private const val DEFAULT_TTL_US = 24L * 60 * 60 * 1_000_000
 
     sealed interface State {
         data object Idle : State
@@ -102,6 +112,7 @@ object GMessagesClient {
         authProvider = { auth },
         sessionHandler = sessionHandler,
         onEvent = ::handleLongPollEvent,
+        refreshToken = ::refreshAuthToken,
     )
     private var backfillJob: Job? = null
 
@@ -123,7 +134,7 @@ object GMessagesClient {
             Log.i(TAG, "found persisted pair, resuming long-poll")
             longPoll.start(scope)
             _state.value = State.Connected
-            kickoffBackfill()
+            scope.launch { postConnect() }
         }
     }
 
@@ -132,7 +143,7 @@ object GMessagesClient {
         if (auth.isPaired() && _state.value !is State.Connected) {
             longPoll.start(scope)
             _state.value = State.Connected
-            kickoffBackfill()
+            scope.launch { postConnect() }
         }
     }
 
@@ -150,10 +161,11 @@ object GMessagesClient {
         // Fresh keys for a fresh pair.
         auth = AuthData.generateInitial()
         val result = PairFlow.registerAndBuildQrUrl(rpc, auth)
+        val ttlUs = result.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
         auth = auth.copy(
             tachyonAuthTokenB64 = android.util.Base64.encodeToString(result.tachyonToken, android.util.Base64.NO_WRAP),
-            tachyonTtlUs = result.tachyonTtlUs,
-            tachyonExpiryMs = System.currentTimeMillis() + (result.tachyonTtlUs / 1000),
+            tachyonTtlUs = ttlUs,
+            tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
         )
         // Open the long-poll now so we receive the Paired event when the
         // user finishes scanning.
@@ -423,7 +435,7 @@ object GMessagesClient {
 
     /** Server-side "frequent contacts" — used as the picker's initial
      *  suggestion list before the user types anything. */
-    suspend fun listTopContacts(count: Int = 20): List<com.vayunmathur.messages.util.ContactSuggestion> {
+    suspend fun listTopContacts(count: Int = 8): List<com.vayunmathur.messages.util.ContactSuggestion> {
         if (_state.value !is State.Connected) return emptyList()
         val req = ListTopContactsRequest.newBuilder().setCount(count).build()
         val resp = sessionHandler.sendAndWait(ActionType.LIST_TOP_CONTACTS, req) ?: return emptyList()
@@ -519,9 +531,110 @@ object GMessagesClient {
         }
     }
 
+    /**
+     * Post-connect sequence matching Go's `postConnect`:
+     * wait for long-poll to settle, set active session, then backfill.
+     */
+    private suspend fun postConnect() {
+        kotlinx.coroutines.delay(2_000)
+        sessionHandler.setActiveSession()
+        kotlinx.coroutines.delay(1_000)
+        kickoffBackfill()
+    }
+
     fun forceResync() {
         if (_state.value !is State.Connected) return
-        kickoffBackfill()
+        scope.launch {
+            // Try to refresh token first, then do backfill
+            refreshAuthToken()
+            kickoffBackfill()
+        }
+    }
+
+    /**
+     * Refresh the tachyon auth token if it's about to expire.
+     * Based on Go implementation in pkg/libgm/client.go.
+     * Uses the RegisterRefresh endpoint with ECDSA-signed request.
+     */
+    /**
+     * Refresh the tachyon auth token if it's about to expire.
+     * Port of `refreshAuthToken` in `pkg/libgm/client.go`.
+     */
+    suspend fun refreshAuthToken() {
+        val currentAuth = auth
+        val browser = currentAuth.browser() ?: return
+
+        val now = System.currentTimeMillis()
+        val timeUntilExpiry = currentAuth.tachyonExpiryMs - now
+        if (timeUntilExpiry > REFRESH_TACHYON_BUFFER_MS) {
+            Log.d(TAG, "Token refresh not needed, expires in ${timeUntilExpiry / 1000}s")
+            return
+        }
+
+        Log.i(TAG, "Refreshing auth token (expires in ${timeUntilExpiry / 1000}s)")
+
+        try {
+            val requestId = UUID.randomUUID().toString()
+            val timestamp = System.currentTimeMillis() * 1000
+
+            // sign() uses SHA256withECDSA which hashes internally —
+            // pass the raw bytes, NOT a pre-computed SHA-256 digest.
+            val signData = "$requestId:$timestamp".toByteArray(Charsets.UTF_8)
+            val signature = currentAuth.refreshKey.sign(signData)
+
+            val tachyonToken = currentAuth.tachyonToken() ?: return
+            val authMessage = Authentication.AuthMessage.newBuilder()
+                .setRequestID(requestId)
+                .setTachyonAuthToken(ByteString.copyFrom(tachyonToken))
+                .setNetwork(PairFlow.QrNetwork)
+                .setConfigVersion(PairFlow.ConfigVersion)
+                .build()
+
+            val refreshRequest = Authentication.RegisterRefreshRequest.newBuilder()
+                .setMessageAuth(authMessage)
+                .setCurrBrowserDevice(browser)
+                .setUnixTimestamp(timestamp)
+                .setSignature(ByteString.copyFrom(signature))
+                .setParameters(
+                    Authentication.RegisterRefreshRequest.Parameters.newBuilder()
+                        .setEmptyArr(Authentication.EmptyArr.getDefaultInstance())
+                        .build()
+                )
+                .setMessageType(2)
+                .build()
+
+            val response = rpc.postProtobuf(
+                url = Endpoints.RegisterRefreshUrl,
+                body = refreshRequest,
+                responseTemplate = Authentication.RegisterRefreshResponse.getDefaultInstance()
+            )
+            if (response == null) {
+                Log.w(TAG, "Token refresh failed: no response")
+                return
+            }
+
+            val tokenData = response.tokenData
+            val newToken = tokenData.tachyonAuthToken
+            if (newToken == null || newToken.isEmpty()) {
+                Log.w(TAG, "Token refresh failed: no token in response")
+                return
+            }
+
+            var newTtlUs = tokenData.ttl
+            if (newTtlUs == 0L) {
+                newTtlUs = DEFAULT_TTL_US
+            }
+            auth = currentAuth.copy(
+                tachyonAuthTokenB64 = Base64.encodeToString(newToken.toByteArray(), Base64.NO_WRAP),
+                tachyonTtlUs = newTtlUs,
+                tachyonExpiryMs = System.currentTimeMillis() + (newTtlUs / 1000)
+            )
+            auth.save(appContext)
+            Log.i(TAG, "Auth token refreshed successfully, new expiry in ${newTtlUs / 1000 / 1000}s")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to refresh auth token", e)
+        }
     }
 
     // ----------------------------------------------------------------
@@ -546,12 +659,13 @@ object GMessagesClient {
 
     private suspend fun handlePaired(p: LongPollEvent.Paired) {
         Log.i(TAG, "received Paired event — switching to Connected (ttlUs=${p.tachyonTtlUs})")
+        val ttlUs = p.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
         auth = auth.copy(
             mobileDeviceB64 = p.mobileDeviceB64,
             browserDeviceB64 = p.browserDeviceB64,
             tachyonAuthTokenB64 = p.tachyonTokenB64,
-            tachyonTtlUs = p.tachyonTtlUs,
-            tachyonExpiryMs = System.currentTimeMillis() + (p.tachyonTtlUs / 1000),
+            tachyonTtlUs = ttlUs,
+            tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
         )
         auth.save(appContext)
         _state.value = State.Connected
@@ -573,12 +687,7 @@ object GMessagesClient {
         longPoll.stop()
         longPoll.start(scope)
 
-        // Give the new long-poll a moment to actually open before the
-        // wake-up + backfill RPCs depend on it for their responses.
-        kotlinx.coroutines.delay(1_000)
-        sessionHandler.setActiveSession(auth.sessionId)
-        kotlinx.coroutines.delay(1_000)
-        kickoffBackfill()
+        postConnect()
     }
 
     private suspend fun handleDataMessage(msg: IncomingRpc) {

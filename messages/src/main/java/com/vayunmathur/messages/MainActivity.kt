@@ -23,6 +23,7 @@ import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.util.rememberNavBackStack
 import com.vayunmathur.messages.data.buildMessagesDatabase
+import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.ui.ComposeScreen
 import com.vayunmathur.messages.ui.ConversationScreen
 import com.vayunmathur.messages.ui.InboxScreen
@@ -102,6 +103,9 @@ sealed interface Route : NavKey {
         val initialMediaUris: List<String> = emptyList(),
         /** Best-effort mime hint from the share intent. */
         val initialMime: String? = null,
+        /** Pre-selected source (MESSAGES_WEB or VOICE). When set the source
+         *  picker in ComposeScreen is hidden and this source is used. */
+        val initialSource: String? = null,
     ) : Route
 }
 
@@ -149,6 +153,9 @@ private fun Navigation(
                 initialBody = route.initialBody,
                 initialMediaUris = route.initialMediaUris.map(Uri::parse),
                 initialMime = route.initialMime,
+                initialSource = route.initialSource?.let { name ->
+                    runCatching { MessageSource.valueOf(name) }.getOrNull()
+                },
             )
         }
     }

@@ -97,6 +97,9 @@ class MessagesViewModel(application: Application) : AndroidViewModel(application
     suspend fun searchContacts(query: String): List<ContactSuggestion> =
         MessagesSessionManager.searchContacts(query)
 
+    suspend fun searchDeviceContacts(query: String): List<ContactSuggestion> =
+        MessagesSessionManager.searchDeviceContacts(query)
+
     /** Which sources already have an existing 1:1 thread with this number? */
     suspend fun resolveSourcesForNumber(phoneE164: String): Set<com.vayunmathur.messages.data.MessageSource> =
         MessagesSessionManager.resolveSourcesForNumber(phoneE164)

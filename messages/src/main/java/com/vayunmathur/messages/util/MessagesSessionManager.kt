@@ -261,6 +261,27 @@ object MessagesSessionManager {
     }
 
     /**
+     * Search device contacts only (no server-side queries).
+     * Used by the new-conversation flow when the source is pre-selected.
+     */
+    suspend fun searchDeviceContacts(query: String): List<ContactSuggestion> {
+        val q = query.trim()
+        val isPhone = q.startsWith("+") && q.length >= 4
+        val results = ContactResolver.search(appContext, q).map { dc ->
+            ContactSuggestion(
+                displayName = dc.displayName,
+                phoneE164 = dc.phoneE164,
+                avatarUrl = dc.photoUri,
+                source = null,
+            )
+        }.toMutableList()
+        if (isPhone && results.none { it.phoneE164 == q }) {
+            results += ContactSuggestion(displayName = q, phoneE164 = q, avatarUrl = null, source = null)
+        }
+        return results
+    }
+
+    /**
      * Search contacts across all available sources.
      *
      * Merges (and deduplicates by phone) hits from:

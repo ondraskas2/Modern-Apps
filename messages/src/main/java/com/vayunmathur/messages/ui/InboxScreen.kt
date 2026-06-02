@@ -79,6 +79,7 @@ fun InboxScreen(
     val conversations by db.conversationDao().observeAll().collectAsState(initial = emptyList())
     val connectionStates by vm.connectionStates.collectAsState()
     var pendingDelete by remember { mutableStateOf<Conversation?>(null) }
+    var showSourcePicker by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -92,7 +93,7 @@ fun InboxScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { backStack.add(Route.Compose()) }) {
+            FloatingActionButton(onClick = { showSourcePicker = true }) {
                 com.vayunmathur.library.ui.IconAdd()
             }
         },
@@ -129,6 +130,26 @@ fun InboxScreen(
                 }
             }
         }
+    }
+
+    if (showSourcePicker) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showSourcePicker = false },
+            title = { Text("New conversation") },
+            text = { Text("Choose which service to send from:") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showSourcePicker = false
+                    backStack.add(Route.Compose(initialSource = MessageSource.MESSAGES_WEB.name))
+                }) { Text("Google Messages") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showSourcePicker = false
+                    backStack.add(Route.Compose(initialSource = MessageSource.VOICE.name))
+                }) { Text("Google Voice") }
+            },
+        )
     }
 
     pendingDelete?.let { conv ->
