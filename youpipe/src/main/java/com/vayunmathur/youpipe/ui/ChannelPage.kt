@@ -177,7 +177,7 @@ fun ChannelHeader(channelInfo: ChannelInfo) {
     }, Modifier, {
 
     }, {
-        Text(stringResource(R.string.channel_info, countString(context, channelInfo.subscribers), channelInfo.videos))
+        Text(stringResource(R.string.channel_info, countString(context, channelInfo.subscribers)))
     }, {
         AsyncImage(
             model = ImageRequest.Builder(context)
