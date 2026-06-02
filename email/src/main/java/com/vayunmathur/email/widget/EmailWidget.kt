@@ -29,6 +29,8 @@ import kotlinx.coroutines.withContext
 
 class EmailWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        // Query the database directly for recent messages.
+        // No read status indicators, so widget doesn't need to refresh on read changes.
         val messages = withContext(Dispatchers.IO) {
             try {
                 EmailDatabase.getInstance(context).emailDao().getRecentUnifiedMessages()
@@ -102,7 +104,7 @@ class EmailWidget : GlanceAppWidget() {
                 })),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Colored Bar
+            // Colored Bar (account color)
             Box(
                 modifier = GlanceModifier
                     .width(6.dp)
@@ -118,7 +120,7 @@ class EmailWidget : GlanceAppWidget() {
                     Text(
                         text = msg.subject,
                         style = TextStyle(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Normal,
                             fontSize = 14.sp,
                             color = GlanceTheme.colors.onSurface
                         ),
@@ -136,7 +138,7 @@ class EmailWidget : GlanceAppWidget() {
                 Text(
                     text = msg.from.substringBefore("<").trim(),
                     style = TextStyle(
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.Normal,
                         fontSize = 13.sp,
                         color = GlanceTheme.colors.onSurface
                     ),

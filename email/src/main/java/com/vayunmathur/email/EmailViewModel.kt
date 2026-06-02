@@ -9,6 +9,8 @@ import com.vayunmathur.email.data.EmailSyncState
 import com.vayunmathur.email.data.EmailSyncWorker
 import com.vayunmathur.email.data.OutboxManager
 import com.vayunmathur.email.data.OutboxSendWorker
+import com.vayunmathur.email.widget.EmailWidget
+import com.vayunmathur.library.widgets.updateWidget
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -18,6 +20,7 @@ import java.io.File
 class EmailViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = EmailDatabase.getInstance(application).emailDao()
     private val emailManager = EmailManager()
+    private val appContext = application.applicationContext
     
     val accounts = dao.getAccountsFlow()
 

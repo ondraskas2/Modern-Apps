@@ -253,16 +253,19 @@ fun EmailApp(viewModel: EmailViewModel) {
                     }
 
                     // Pinned footer: logout stays visible no matter how long the list above is.
-                    HorizontalDivider()
-                    NavigationDrawerItem(
-                        label = { Text("Logout Current Account") },
-                        selected = false,
-                        onClick = {
-                            viewModel.logout(context)
-                            scope.launch { drawerState.close() }
-                        },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
-                    )
+                    // Only show logout button when a specific account is selected (not in unified inbox)
+                    if (selectedAccountEmail != null) {
+                        HorizontalDivider()
+                        NavigationDrawerItem(
+                            label = { Text("Logout Current Account") },
+                            selected = false,
+                            onClick = {
+                                viewModel.logout(context)
+                                scope.launch { drawerState.close() }
+                            },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
+                    }
                 }
             }
         }
@@ -509,9 +512,6 @@ fun MessageListScreen(
                                         if (selectedUids.isNotEmpty()) {
                                             viewModel.toggleMessageSelection(message.id)
                                         } else {
-                                            if (!message.isRead) {
-                                                viewModel.markAsRead(message.accountEmail, message.folderName, message.id, true)
-                                            }
                                             onMessageClick(message)
                                         }
                                     },
@@ -528,24 +528,18 @@ fun MessageListScreen(
                                     color = accountColor
                                 ) {}
                             }
+                            // Primary color band indicator for unread messages
+                            Surface(
+                                modifier = Modifier.width(4.dp).fillMaxHeight(),
+                                color = if (message.isRead) Color.Transparent else MaterialTheme.colorScheme.primary
+                            ) {}
                             ListItem(
-                                leadingContent = {
-                                    // Unread indicator: small filled circle on the left.
-                                    // For read messages we render an invisible spacer of
-                                    // the same size so the subject stays aligned across rows.
-                                    Box(
-                                        modifier = Modifier
-                                            .size(10.dp)
-                                            .background(
-                                                color = if (message.isRead) Color.Transparent else MaterialTheme.colorScheme.primary,
-                                                shape = androidx.compose.foundation.shape.CircleShape
-                                            )
-                                    )
-                                },
+                                leadingContent = null,
                                 headlineContent = {
                                     Text(
                                         text = message.subject,
-                                        style = MaterialTheme.typography.bodyLarge
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (message.isRead) FontWeight.Normal else FontWeight.Bold
                                     )
                                 },
                                 supportingContent = {
@@ -598,6 +592,18 @@ fun MessageThreadScreen(
     onForward: (String, String?) -> Unit
 ) {
     val messages by viewModel.getThread(accountEmail, threadId).collectAsState(emptyList())
+    var hasMarkedAsRead by remember(threadId) { mutableStateOf(false) }
+
+    // Mark all unread messages in the thread as read when the screen loads.
+    // Only run once per thread navigation to allow user to mark as unread.
+    LaunchedEffect(messages) {
+        if (!hasMarkedAsRead && messages.isNotEmpty()) {
+            messages.filter { !it.isRead }.forEach { msg ->
+                viewModel.markAsRead(msg.accountEmail, msg.folderName, msg.id, true)
+            }
+            hasMarkedAsRead = true
+        }
+    }
 
     Scaffold(
         topBar = {

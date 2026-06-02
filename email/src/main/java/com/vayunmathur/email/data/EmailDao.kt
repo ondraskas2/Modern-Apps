@@ -74,6 +74,9 @@ interface EmailDao {
     @Query("SELECT * FROM EmailMessage WHERE folderName = 'INBOX' ORDER BY dateMillis DESC, id DESC LIMIT 10")
     suspend fun getRecentUnifiedMessages(): List<EmailMessage>
 
+    @Query("SELECT * FROM EmailMessage WHERE folderName = 'INBOX' ORDER BY dateMillis DESC, id DESC LIMIT 10")
+    fun getRecentUnifiedMessagesFlow(): Flow<List<EmailMessage>>
+
     // ---- One-time backfill for the dateMillis column ----
 
     /** Rows persisted before `dateMillis` existed; their `date` string needs parsing. */
