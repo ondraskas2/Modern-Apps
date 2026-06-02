@@ -71,6 +71,11 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                                 if (messages.isNotEmpty()) dao.insertMessages(messages)
                                 if (attachments.isNotEmpty()) dao.insertAttachments(attachments)
 
+                                // Sync read status from server for already-known messages
+                                if (knownUids.isNotEmpty() && folder.fullName == "INBOX") {
+                                    syncReadStatus(store, accountToUse.email, folder.fullName, knownUids)
+                                }
+
                                 // Notifications: only for INBOX, only when the app
                                 // isn't already in the foreground, and only for UIDs
                                 // strictly greater than the last UID we've already
@@ -164,6 +169,38 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
 
     companion object {
         private const val SYNC_WORK_NAME = "EmailSyncWorker"
+
+        /**
+         * Sync read/unread flags from the IMAP server for messages we already
+         * have locally. Runs over the most recent messages in the folder to
+         * keep the local read status in sync with other clients.
+         */
+        private suspend fun EmailSyncWorker.syncReadStatus(
+            store: javax.mail.Store,
+            accountEmail: String,
+            folderName: String,
+            knownUids: Set<Long>,
+        ) {
+            val db = EmailDatabase.getInstance(applicationContext)
+            val dao = db.emailDao()
+            val folder = store.getFolder(folderName)
+            if ((folder.type and javax.mail.Folder.HOLDS_MESSAGES) == 0) return
+            folder.open(javax.mail.Folder.READ_ONLY)
+            try {
+                val uidFolder = folder as? javax.mail.UIDFolder ?: return
+                // Check read status for the 50 most recent known UIDs
+                val uidsToCheck = knownUids.sortedDescending().take(50)
+                for (uid in uidsToCheck) {
+                    try {
+                        val msg = uidFolder.getMessageByUID(uid) ?: continue
+                        val serverIsRead = msg.isSet(javax.mail.Flags.Flag.SEEN)
+                        dao.updateReadStatus(accountEmail, folderName, uid, serverIsRead)
+                    } catch (_: Exception) {}
+                }
+            } finally {
+                try { folder.close(false) } catch (_: Throwable) {}
+            }
+        }
 
         /**
          * Gmail's IMAP exposes several "virtual" labels that mirror INBOX (and

@@ -474,6 +474,27 @@ class EmailManager {
         return uri.path?.let { File(it).name }
     }
 
+    /**
+     * Update the SEEN (read/unread) flag on the IMAP server for a single message.
+     */
+    suspend fun setSeenFlag(
+        server: ServerConfig,
+        user: String,
+        auth: AuthType,
+        folderName: String,
+        uid: Long,
+        seen: Boolean,
+    ) = withStore(server, user, auth) { store ->
+        val folder = store.getFolder(folderName)
+        folder.open(Folder.READ_WRITE)
+        try {
+            val msg = (folder as UIDFolder).getMessageByUID(uid) ?: return@withStore
+            msg.setFlag(Flags.Flag.SEEN, seen)
+        } finally {
+            try { folder.close(false) } catch (_: Throwable) {}
+        }
+    }
+
     suspend fun downloadAttachment(
         context: Context,
         server: ServerConfig,

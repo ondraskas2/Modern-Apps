@@ -108,6 +108,20 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
     fun markAsRead(accountEmail: String, folderName: String, uid: Long, isRead: Boolean) {
         viewModelScope.launch {
             dao.updateReadStatus(accountEmail, folderName, uid, isRead)
+            // Sync read status to IMAP server
+            val account = dao.getAccountByEmail(accountEmail) ?: return@launch
+            try {
+                emailManager.setSeenFlag(
+                    server = account.imapServer(),
+                    user = account.email,
+                    auth = account.authType(),
+                    folderName = folderName,
+                    uid = uid,
+                    seen = isRead,
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("EmailViewModel", "Failed to sync read status to server: ${e.message}")
+            }
         }
     }
 
