@@ -36,7 +36,7 @@
     <string name="label_loading_subscriptions">Caricamento iscrizioni più recenti</string>
     <string name="title_settings">Impostazioni</string>
     <string name="label_sponsorblock">Abilita SponsorBlock</string>
-    <string name="label_sponsorblock_description">Salta automaticamente i segmenti sponsorizzati nei video</string>
+    <string name="label_sponsorblock_description">Seleziona le parti dall\'elenco sottostante per saltarle nei video</string>
     <string name="label_backup_restore">Backup e ripristino</string>
     <string name="label_restore_youpipe">Ripristina da YouPipe</string>
     <string name="label_import_newpipe">Importa iscrizioni NewPipe</string>
