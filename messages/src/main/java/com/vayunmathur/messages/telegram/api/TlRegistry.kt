@@ -1,0 +1,164 @@
+package com.vayunmathur.messages.telegram.api
+
+import android.util.Log
+import com.vayunmathur.messages.telegram.api.types.*
+import com.vayunmathur.messages.telegram.mtproto.tl.Fields
+import com.vayunmathur.messages.telegram.mtproto.tl.TlBuffer
+import com.vayunmathur.messages.telegram.mtproto.tl.TlObject
+
+object TlRegistry {
+    private const val TAG = "TlRegistry"
+
+    fun decode(buf: TlBuffer): TlObject {
+        val typeId = buf.int32()
+        return decodeById(typeId, buf)
+    }
+
+    fun decodeById(typeId: Int, buf: TlBuffer): TlObject {
+        return when (typeId) {
+            // Updates containers
+            0x74ae4240.toInt() -> decodeUpdates(buf)
+            0x725b04c3.toInt() -> decodeUpdatesCombined(buf)
+            0x78d4dec1.toInt() -> decodeUpdateShort(buf)
+            0x313bc7f8.toInt() -> decodeUpdateShortMessage(buf)
+            0x4d6deea5.toInt() -> decodeUpdateShortChatMessage(buf)
+            0xe317af7e.toInt() -> UpdatesTooLong
+
+            // Individual updates
+            0x1f2b0afd.toInt() -> decodeUpdateNewMessage(buf)
+            0x62ba04d9.toInt() -> decodeUpdateNewChannelMessage(buf)
+            0xa20db0e5.toInt() -> decodeUpdateDeleteMessages(buf)
+            0xe40370a3.toInt() -> decodeUpdateEditMessage(buf)
+            0x9c974fdf.toInt() -> decodeUpdateReadHistoryInbox(buf)
+
+            // Auth
+            0x2390fe44.toInt() -> AuthSentCode.decode(buf)
+            0x2ea2c0d4.toInt() -> AuthAuthorization.decode(buf)
+            0x957b50fb.toInt() -> AuthPassword.decode(buf)
+
+            // Users
+            0x215c4438.toInt() -> User.decode(buf)
+            0xd3bc4b7a.toInt() -> UserEmpty.decode(buf)
+
+            // UpdatesState
+            0xa56c2a3e.toInt() -> UpdatesState.decode(buf)
+
+            else -> {
+                Log.w(TAG, "Unknown type: 0x${typeId.toUInt().toString(16)}")
+                UnknownObject(typeId, buf.data())
+            }
+        }
+    }
+
+    fun decodeMessage(buf: TlBuffer): TlObject {
+        val id = buf.int32()
+        return when (id) {
+            0x94345242.toInt() -> Message.decode(buf)
+            0x90a6ca84.toInt() -> MessageEmpty.decode(buf)
+            0x2b085862.toInt() -> MessageService.decode(buf)
+            else -> UnknownObject(id, buf.data())
+        }
+    }
+
+    fun decodeVector(buf: TlBuffer, elementDecoder: (TlBuffer) -> TlObject): List<TlObject> {
+        val vecId = buf.int32() // TYPE_VECTOR
+        val count = buf.int32()
+        return (0 until count).map { elementDecoder(buf) }
+    }
+
+    private fun decodeUpdates(buf: TlBuffer): Updates {
+        val updates = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val users = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val chats = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val date = buf.int32()
+        val seq = buf.int32()
+        return Updates(updates, users, chats, date, seq)
+    }
+
+    private fun decodeUpdatesCombined(buf: TlBuffer): UpdatesCombined {
+        val updates = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val users = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val chats = decodeVector(buf) { b -> val id = b.int32(); decodeById(id, b) }
+        val date = buf.int32()
+        val seqStart = buf.int32()
+        val seq = buf.int32()
+        return UpdatesCombined(updates, users, chats, date, seqStart, seq)
+    }
+
+    private fun decodeUpdateShort(buf: TlBuffer): UpdateShort {
+        val update = decode(buf)
+        val date = buf.int32()
+        return UpdateShort(update, date)
+    }
+
+    private fun decodeUpdateShortMessage(buf: TlBuffer): UpdateShortMessage {
+        val flags = Fields.decode(buf)
+        val out = flags.has(1)
+        val id = buf.int32()
+        val userId = buf.int64()
+        val message = buf.string()
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        val date = buf.int32()
+        return UpdateShortMessage(id, userId, message, pts, ptsCount, date, out)
+    }
+
+    private fun decodeUpdateShortChatMessage(buf: TlBuffer): UpdateShortChatMessage {
+        val flags = Fields.decode(buf)
+        val out = flags.has(1)
+        val id = buf.int32()
+        val fromId = buf.int64()
+        val chatId = buf.int64()
+        val message = buf.string()
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        val date = buf.int32()
+        return UpdateShortChatMessage(id, fromId, chatId, message, pts, ptsCount, date, out)
+    }
+
+    private fun decodeUpdateNewMessage(buf: TlBuffer): UpdateNewMessage {
+        val msg = decodeMessage(buf)
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        return UpdateNewMessage(msg, pts, ptsCount)
+    }
+
+    private fun decodeUpdateNewChannelMessage(buf: TlBuffer): UpdateNewChannelMessage {
+        val msg = decodeMessage(buf)
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        return UpdateNewChannelMessage(msg, pts, ptsCount)
+    }
+
+    private fun decodeUpdateDeleteMessages(buf: TlBuffer): UpdateDeleteMessages {
+        val vecId = buf.int32()
+        val count = buf.int32()
+        val msgs = (0 until count).map { buf.int32() }
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        return UpdateDeleteMessages(msgs, pts, ptsCount)
+    }
+
+    private fun decodeUpdateEditMessage(buf: TlBuffer): UpdateEditMessage {
+        val msg = decodeMessage(buf)
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        return UpdateEditMessage(msg, pts, ptsCount)
+    }
+
+    private fun decodeUpdateReadHistoryInbox(buf: TlBuffer): UpdateReadHistoryInbox {
+        val flags = Fields.decode(buf)
+        if (flags.has(0)) buf.int32() // folder_id
+        val peer = decodePeer(buf)
+        val maxId = buf.int32()
+        buf.int32() // still_unread_count
+        val pts = buf.int32()
+        val ptsCount = buf.int32()
+        return UpdateReadHistoryInbox(peer, maxId, pts)
+    }
+}
+
+data class UnknownObject(val actualTypeId: Int, val rawData: ByteArray) : TlObject {
+    override val typeId = actualTypeId
+    override fun encode(buf: TlBuffer) { buf.putRawBytes(rawData) }
+}

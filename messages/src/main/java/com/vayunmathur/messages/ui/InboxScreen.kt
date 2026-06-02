@@ -108,6 +108,8 @@ fun InboxScreen(
                 states = connectionStates,
                 onPairMessages = { backStack.add(Route.PairMessages) },
                 onSetupVoice = { backStack.add(Route.LoginVoice) },
+                onSetupTelegram = { backStack.add(Route.LoginTelegram) },
+                onSetupSignal = { backStack.add(Route.LoginSignal) },
             )
 
             if (conversations.isEmpty()) {
@@ -136,18 +138,32 @@ fun InboxScreen(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showSourcePicker = false },
             title = { Text("New conversation") },
-            text = { Text("Choose which service to send from:") },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = {
-                    showSourcePicker = false
-                    backStack.add(Route.Compose(initialSource = MessageSource.MESSAGES_WEB.name))
-                }) { Text("Google Messages") }
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose which service to send from:")
+                    androidx.compose.material3.TextButton(onClick = {
+                        showSourcePicker = false
+                        backStack.add(Route.Compose(initialSource = MessageSource.MESSAGES_WEB.name))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Google Messages") }
+                    androidx.compose.material3.TextButton(onClick = {
+                        showSourcePicker = false
+                        backStack.add(Route.Compose(initialSource = MessageSource.VOICE.name))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Google Voice") }
+                    androidx.compose.material3.TextButton(onClick = {
+                        showSourcePicker = false
+                        backStack.add(Route.Compose(initialSource = MessageSource.TELEGRAM.name))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Telegram") }
+                    androidx.compose.material3.TextButton(onClick = {
+                        showSourcePicker = false
+                        backStack.add(Route.Compose(initialSource = MessageSource.SIGNAL.name))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Signal") }
+                }
             },
+            confirmButton = {},
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     showSourcePicker = false
-                    backStack.add(Route.Compose(initialSource = MessageSource.VOICE.name))
-                }) { Text("Google Voice") }
+                }) { Text("Cancel") }
             },
         )
     }
@@ -184,6 +200,8 @@ private fun SetupPrompts(
     states: Map<MessageSource, SourceConnectionState>,
     onPairMessages: () -> Unit,
     onSetupVoice: () -> Unit,
+    onSetupTelegram: () -> Unit,
+    onSetupSignal: () -> Unit,
 ) {
     val msgsState = states[MessageSource.MESSAGES_WEB]
     if (msgsState is SourceConnectionState.NeedsSetup || msgsState is SourceConnectionState.Disconnected) {
@@ -201,6 +219,24 @@ private fun SetupPrompts(
             description = stringResource(R.string.inbox_setup_voice_desc),
             actionLabel = stringResource(R.string.inbox_setup_voice_action),
             onAction = onSetupVoice,
+        )
+    }
+    val telegramState = states[MessageSource.TELEGRAM]
+    if (telegramState is SourceConnectionState.NeedsSetup || telegramState is SourceConnectionState.Disconnected) {
+        SetupCard(
+            title = stringResource(R.string.inbox_setup_telegram_title),
+            description = stringResource(R.string.inbox_setup_telegram_desc),
+            actionLabel = stringResource(R.string.inbox_setup_telegram_action),
+            onAction = onSetupTelegram,
+        )
+    }
+    val signalState = states[MessageSource.SIGNAL]
+    if (signalState is SourceConnectionState.NeedsSetup || signalState is SourceConnectionState.Disconnected) {
+        SetupCard(
+            title = stringResource(R.string.inbox_setup_signal_title),
+            description = stringResource(R.string.inbox_setup_signal_desc),
+            actionLabel = stringResource(R.string.inbox_setup_signal_action),
+            onAction = onSetupSignal,
         )
     }
 }
@@ -313,6 +349,8 @@ private fun SourceChip(source: MessageSource) {
     val (label, color) = when (source) {
         MessageSource.MESSAGES_WEB -> "Phone" to MaterialTheme.colorScheme.tertiary
         MessageSource.VOICE -> "Voice" to MaterialTheme.colorScheme.primary
+        MessageSource.TELEGRAM -> "Telegram" to MaterialTheme.colorScheme.secondary
+        MessageSource.SIGNAL -> "Signal" to MaterialTheme.colorScheme.secondary
     }
     Surface(
         shape = RoundedCornerShape(8.dp),

@@ -597,7 +597,7 @@ object GMessagesClient {
                 .setSignature(ByteString.copyFrom(signature))
                 .setParameters(
                     Authentication.RegisterRefreshRequest.Parameters.newBuilder()
-                        .setEmptyArr(Authentication.EmptyArr.getDefaultInstance())
+                        .setEmptyArr(util.Util.EmptyArr.getDefaultInstance())
                         .build()
                 )
                 .setMessageType(2)

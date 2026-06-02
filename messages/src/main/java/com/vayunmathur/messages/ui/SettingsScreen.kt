@@ -67,6 +67,13 @@ fun SettingsScreen(
                 onConfigure = { backStack.add(Route.LoginVoice) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.VOICE) },
             )
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            SourceSection(
+                title = stringResource(R.string.source_telegram),
+                state = states[MessageSource.TELEGRAM] ?: SourceConnectionState.Idle,
+                onConfigure = { backStack.add(Route.LoginTelegram) },
+                onDisconnect = { MessagesSessionManager.stop(MessageSource.TELEGRAM) },
+            )
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
             OutlinedButton(
                 onClick = { vm.forceResync() },

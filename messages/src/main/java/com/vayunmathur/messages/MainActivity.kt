@@ -29,6 +29,8 @@ import com.vayunmathur.messages.ui.ConversationScreen
 import com.vayunmathur.messages.ui.InboxScreen
 import com.vayunmathur.messages.ui.SettingsScreen
 import com.vayunmathur.messages.ui.setup.MessagesPairingScreen
+import com.vayunmathur.messages.ui.setup.SignalLoginScreen
+import com.vayunmathur.messages.ui.setup.TelegramLoginScreen
 import com.vayunmathur.messages.ui.setup.VoiceLoginScreen
 import com.vayunmathur.messages.util.IncomingIntent
 import com.vayunmathur.messages.util.MessagesViewModel
@@ -87,6 +89,8 @@ sealed interface Route : NavKey {
     @Serializable data object Settings : Route
     @Serializable data object PairMessages : Route
     @Serializable data object LoginVoice : Route
+    @Serializable data object LoginTelegram : Route
+    @Serializable data object LoginSignal : Route
 
     /**
      * "Compose new" screen — recipient picker + body + media preview.
@@ -143,6 +147,12 @@ private fun Navigation(
         }
         entry<Route.LoginVoice> {
             VoiceLoginScreen(backStack)
+        }
+        entry<Route.LoginTelegram> {
+            TelegramLoginScreen(backStack)
+        }
+        entry<Route.LoginSignal> {
+            SignalLoginScreen(backStack)
         }
         entry<Route.Compose> { route ->
             ComposeScreen(

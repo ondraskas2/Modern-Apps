@@ -41,6 +41,38 @@
     <!-- Sources -->
     <string name="source_messages">Phone (Messages)</string>
     <string name="source_voice">Google Voice</string>
+    <string name="source_telegram">Telegram</string>
+
+    <!-- Telegram setup -->
+    <string name="setup_telegram_title">Sign in to Telegram</string>
+    <string name="setup_telegram_intro">Enter your phone number to sign in to your Telegram account. You\'ll receive a verification code via Telegram or SMS.</string>
+    <string name="setup_telegram_phone_label">Phone number</string>
+    <string name="setup_telegram_phone_placeholder">+1 555 123 4567</string>
+    <string name="setup_telegram_send_code">Send code</string>
+    <string name="setup_telegram_connecting">Connecting to Telegram…</string>
+    <string name="setup_telegram_code_sent">A verification code was sent to %1$s. Enter it below.</string>
+    <string name="setup_telegram_code_label">Verification code</string>
+    <string name="setup_telegram_verify">Verify</string>
+    <string name="setup_telegram_2fa_prompt">Your account has two-factor authentication enabled. Enter your cloud password.</string>
+    <string name="setup_telegram_2fa_hint">Hint: %1$s</string>
+    <string name="setup_telegram_password_label">Password</string>
+    <string name="setup_telegram_sign_in">Sign in</string>
+    <string name="setup_telegram_disconnected">Disconnected: %1$s</string>
+    <string name="inbox_setup_telegram_title">Sign in to Telegram</string>
+    <string name="inbox_setup_telegram_desc">Sign in to your Telegram account to see your chats here.</string>
+    <string name="inbox_setup_telegram_action">Sign in</string>
+
+    <!-- Signal setup -->
+    <string name="setup_signal_title">Link Signal</string>
+    <string name="setup_signal_intro">Scan the QR code below with your Signal app to link this device.</string>
+    <string name="setup_signal_link">Link Signal</string>
+    <string name="setup_signal_connecting">Connecting to Signal…</string>
+    <string name="setup_signal_scan_prompt">Open Signal on your phone → Settings → Linked Devices → Link New Device, then scan the code below.</string>
+    <string name="setup_signal_disconnected">Disconnected: %1$s</string>
+    <string name="inbox_setup_signal_title">Link Signal</string>
+    <string name="inbox_setup_signal_desc">Link your Signal account to see your messages here.</string>
+    <string name="inbox_setup_signal_action">Link device</string>
+    <string name="source_signal">Signal</string>
 
     <!-- Notifications -->
     <string name="channel_sync_name">Background sync</string>

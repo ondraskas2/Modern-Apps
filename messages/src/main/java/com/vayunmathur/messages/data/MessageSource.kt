@@ -15,12 +15,20 @@ enum class MessageSource {
 
     /** Conversations on the user's Google Voice number, accessed via
      *  cookie-based authentication against voice.google.com. */
-    VOICE;
+    VOICE,
+
+    /** Conversations on Telegram, accessed via MTProto. */
+    TELEGRAM,
+
+    /** Conversations on Signal, accessed via libsignal + WebSocket. */
+    SIGNAL;
 
     /** Prefix for compound primary keys (e.g. "msgs:<thread_id>"). */
     val idPrefix: String get() = when (this) {
         MESSAGES_WEB -> "msgs"
         VOICE -> "voice"
+        TELEGRAM -> "tg"
+        SIGNAL -> "sig"
     }
 }
 

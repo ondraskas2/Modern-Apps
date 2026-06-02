@@ -2,6 +2,8 @@ package com.vayunmathur.messages.util
 
 import com.vayunmathur.messages.gmessages.GMessagesClient
 import com.vayunmathur.messages.gvoice.GVoiceClient
+import com.vayunmathur.messages.signal.SignalClient
+import com.vayunmathur.messages.telegram.TelegramClient
 
 /**
  * Source-agnostic connection state.
@@ -38,4 +40,23 @@ fun GVoiceClient.State.toUnified(): SourceConnectionState = when (this) {
     GVoiceClient.State.Connecting -> SourceConnectionState.Connecting
     GVoiceClient.State.Connected -> SourceConnectionState.Connected
     is GVoiceClient.State.Disconnected -> SourceConnectionState.Disconnected(reason)
+}
+
+fun TelegramClient.State.toUnified(): SourceConnectionState = when (this) {
+    TelegramClient.State.Idle -> SourceConnectionState.Idle
+    TelegramClient.State.NeedsSetup -> SourceConnectionState.NeedsSetup("Sign in")
+    is TelegramClient.State.AwaitingCode -> SourceConnectionState.Connecting
+    is TelegramClient.State.AwaitingPassword -> SourceConnectionState.Connecting
+    TelegramClient.State.Connecting -> SourceConnectionState.Connecting
+    TelegramClient.State.Connected -> SourceConnectionState.Connected
+    is TelegramClient.State.Disconnected -> SourceConnectionState.Disconnected(reason)
+}
+
+fun SignalClient.State.toUnified(): SourceConnectionState = when (this) {
+    SignalClient.State.Idle -> SourceConnectionState.Idle
+    SignalClient.State.NeedsSetup -> SourceConnectionState.NeedsSetup("Link device")
+    is SignalClient.State.AwaitingQrScan -> SourceConnectionState.Pairing(qrUrl)
+    SignalClient.State.Connecting -> SourceConnectionState.Connecting
+    SignalClient.State.Connected -> SourceConnectionState.Connected
+    is SignalClient.State.Disconnected -> SourceConnectionState.Disconnected(reason)
 }

@@ -438,4 +438,6 @@ private fun MediaThumb(uri: Uri, onRemove: () -> Unit) {
 private fun labelFor(source: MessageSource): String = when (source) {
     MessageSource.MESSAGES_WEB -> "Messages"
     MessageSource.VOICE -> "Voice"
+    MessageSource.TELEGRAM -> "Telegram"
+    MessageSource.SIGNAL -> "Signal"
 }

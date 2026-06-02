@@ -18,6 +18,13 @@ android {
     defaultConfig {
         applicationId = "com.vayunmathur.messages"
     }
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
 
 // ----------------------------------------------------------------
@@ -150,4 +157,16 @@ dependencies {
     // Network — for any auxiliary HTTP we end up needing outside the
     // dedicated RPC client.
     implementation(project(":library:network"))
+
+    // Bouncy Castle — AES-IGE for MTProto encryption
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
+    // Signal protocol crypto (Double Ratchet, sealed sender, pre-keys, etc.)
+    implementation("org.signal:libsignal-android:0.68.1")
+
+    // OkHttp — WebSocket transport for Signal
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // kotlinx.serialization — session data persistence
+    implementation(libs.kotlinx.serialization.json)
 }

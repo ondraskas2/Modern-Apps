@@ -12,6 +12,8 @@ import com.vayunmathur.messages.data.buildMessagesDatabase
 import com.vayunmathur.messages.gmessages.GMEvent
 import com.vayunmathur.messages.gmessages.GMessagesClient
 import com.vayunmathur.messages.gvoice.GVoiceClient
+import com.vayunmathur.messages.signal.SignalClient
+import com.vayunmathur.messages.telegram.TelegramClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +52,8 @@ object MessagesSessionManager {
         mapOf(
             MessageSource.MESSAGES_WEB to SourceConnectionState.Idle,
             MessageSource.VOICE to SourceConnectionState.Idle,
+            MessageSource.TELEGRAM to SourceConnectionState.Idle,
+            MessageSource.SIGNAL to SourceConnectionState.Idle,
         )
     )
     val connectionStates: StateFlow<Map<MessageSource, SourceConnectionState>> =
@@ -66,6 +70,8 @@ object MessagesSessionManager {
     private val backfillComplete = mutableMapOf(
         MessageSource.MESSAGES_WEB to false,
         MessageSource.VOICE to false,
+        MessageSource.TELEGRAM to false,
+        MessageSource.SIGNAL to false,
     )
 
     fun init(context: Context) {
@@ -74,6 +80,8 @@ object MessagesSessionManager {
         db = buildMessagesDatabase(appContext)
         GMessagesClient.init(appContext)
         GVoiceClient.init(appContext)
+        TelegramClient.init(appContext)
+        SignalClient.init(appContext)
         Log.i(TAG, "init")
         wireCollectors()
     }
@@ -84,13 +92,19 @@ object MessagesSessionManager {
         if (!initialized.get()) return
         GMessagesClient.start()
         GVoiceClient.start()
+        TelegramClient.start()
+        SignalClient.start()
     }
 
     fun stop() {
         GMessagesClient.stop()
         GVoiceClient.stop()
+        TelegramClient.stop()
+        SignalClient.stop()
         backfillComplete[MessageSource.MESSAGES_WEB] = false
         backfillComplete[MessageSource.VOICE] = false
+        backfillComplete[MessageSource.TELEGRAM] = false
+        backfillComplete[MessageSource.SIGNAL] = false
     }
 
     /** Stop one source independently — used from the per-source
@@ -99,6 +113,8 @@ object MessagesSessionManager {
         when (source) {
             MessageSource.MESSAGES_WEB -> GMessagesClient.stop()
             MessageSource.VOICE -> GVoiceClient.stop()
+            MessageSource.TELEGRAM -> TelegramClient.stop()
+            MessageSource.SIGNAL -> SignalClient.stop()
         }
         backfillComplete[source] = false
     }
@@ -122,6 +138,8 @@ object MessagesSessionManager {
         val ok = when (source) {
             MessageSource.MESSAGES_WEB -> GMessagesClient.sendMessage(conversationId, body)
             MessageSource.VOICE -> GVoiceClient.sendMessage(conversationId, body)
+            MessageSource.TELEGRAM -> TelegramClient.sendMessage(conversationId, body)
+            MessageSource.SIGNAL -> SignalClient.sendMessage(conversationId, body)
         }
         db.messageDao().updateState(
             pendingId,
@@ -172,6 +190,20 @@ object MessagesSessionManager {
                 mime = mime,
                 caption = caption,
             )
+            MessageSource.TELEGRAM -> TelegramClient.sendMedia(
+                conversationId = conversationId,
+                bytes = bytes,
+                mime = mime,
+                fileName = fileName,
+                caption = caption,
+            )
+            MessageSource.SIGNAL -> SignalClient.sendMedia(
+                conversationId = conversationId,
+                bytes = bytes,
+                mime = mime,
+                fileName = fileName,
+                caption = caption,
+            )
         }
         db.messageDao().updateState(
             pendingId,
@@ -200,6 +232,12 @@ object MessagesSessionManager {
             MessageSource.VOICE -> {
                 GVoiceClient.markRead(conversationId)
             }
+            MessageSource.TELEGRAM -> {
+                TelegramClient.markRead(conversationId)
+            }
+            MessageSource.SIGNAL -> {
+                SignalClient.markRead(conversationId)
+            }
         }
     }
 
@@ -218,6 +256,12 @@ object MessagesSessionManager {
             }
             MessageSource.VOICE -> {
                 GVoiceClient.deleteThread(conversationId)
+            }
+            MessageSource.TELEGRAM -> {
+                TelegramClient.deleteThread(conversationId)
+            }
+            MessageSource.SIGNAL -> {
+                SignalClient.deleteThread(conversationId)
             }
         }
         if (ok) db.conversationDao().deleteById(conversationId)
@@ -245,6 +289,18 @@ object MessagesSessionManager {
                 },
             )
             MessageSource.VOICE -> false
+            MessageSource.TELEGRAM -> TelegramClient.sendReaction(
+                messageId = messageId,
+                conversationId = msg.conversationId,
+                emoji = emoji,
+                add = action == ReactionAction.ADD || action == ReactionAction.SWITCH,
+            )
+            MessageSource.SIGNAL -> SignalClient.sendReaction(
+                messageId = messageId,
+                conversationId = msg.conversationId,
+                emoji = emoji,
+                add = action == ReactionAction.ADD || action == ReactionAction.SWITCH,
+            )
         }
     }
 
@@ -257,6 +313,8 @@ object MessagesSessionManager {
         return when (source) {
             MessageSource.MESSAGES_WEB -> GMessagesClient.sendTyping(conversationId)
             MessageSource.VOICE -> false
+            MessageSource.TELEGRAM -> TelegramClient.sendTyping(conversationId)
+            MessageSource.SIGNAL -> SignalClient.sendTyping(conversationId)
         }
     }
 
@@ -315,6 +373,14 @@ object MessagesSessionManager {
         // for empty.
         if (GVoiceClient.state.value is com.vayunmathur.messages.gvoice.GVoiceClient.State.Connected) {
             results += GVoiceClient.autocompleteContacts(q)
+                .filter { c -> q.isEmpty() || matches(c, q) }
+        }
+        if (TelegramClient.state.value is TelegramClient.State.Connected) {
+            results += TelegramClient.searchContacts(q)
+                .filter { c -> q.isEmpty() || matches(c, q) }
+        }
+        if (SignalClient.state.value is SignalClient.State.Connected) {
+            results += SignalClient.searchContacts(q)
                 .filter { c -> q.isEmpty() || matches(c, q) }
         }
         // Always include device contact matches so users see names from
@@ -413,6 +479,40 @@ object MessagesSessionManager {
                     GVoiceClient.sendNewThread(recipients, body.orEmpty())
                 }
             }
+            MessageSource.TELEGRAM -> {
+                if (media != null) {
+                    val convId = TelegramClient.sendNewThread(recipients, body.orEmpty())
+                    if (convId != null) {
+                        TelegramClient.sendMedia(
+                            conversationId = convId,
+                            bytes = media.bytes,
+                            mime = media.mime,
+                            fileName = media.fileName,
+                            caption = body,
+                        )
+                    }
+                    convId
+                } else {
+                    TelegramClient.sendNewThread(recipients, body.orEmpty())
+                }
+            }
+            MessageSource.SIGNAL -> {
+                if (media != null) {
+                    val convId = SignalClient.sendNewThread(recipients, body.orEmpty())
+                    if (convId != null) {
+                        SignalClient.sendMedia(
+                            conversationId = convId,
+                            bytes = media.bytes,
+                            mime = media.mime,
+                            fileName = media.fileName,
+                            caption = body,
+                        )
+                    }
+                    convId
+                } else {
+                    SignalClient.sendNewThread(recipients, body.orEmpty())
+                }
+            }
         }
     }
 
@@ -430,12 +530,16 @@ object MessagesSessionManager {
     fun forceResync() {
         GMessagesClient.forceResync()
         GVoiceClient.forceResync()
+        TelegramClient.forceResync()
+        SignalClient.forceResync()
     }
 
     fun fetchMessages(conversationId: String) {
         when (sourceFor(conversationId)) {
             MessageSource.MESSAGES_WEB -> GMessagesClient.fetchMessages(conversationId)
             MessageSource.VOICE -> GVoiceClient.fetchMessages(conversationId)
+            MessageSource.TELEGRAM -> TelegramClient.fetchMessages(conversationId)
+            MessageSource.SIGNAL -> SignalClient.fetchMessages(conversationId)
             null -> Unit
         }
     }
@@ -457,10 +561,28 @@ object MessagesSessionManager {
             }
         }
         collectorJobs += scope.launch {
+            TelegramClient.state.collect { s ->
+                _connectionStates.value =
+                    _connectionStates.value + (MessageSource.TELEGRAM to s.toUnified())
+            }
+        }
+        collectorJobs += scope.launch {
+            SignalClient.state.collect { s ->
+                _connectionStates.value =
+                    _connectionStates.value + (MessageSource.SIGNAL to s.toUnified())
+            }
+        }
+        collectorJobs += scope.launch {
             GMessagesClient.events.collect { handleEvent(it) }
         }
         collectorJobs += scope.launch {
             GVoiceClient.events.collect { handleEvent(it) }
+        }
+        collectorJobs += scope.launch {
+            TelegramClient.events.collect { handleEvent(it) }
+        }
+        collectorJobs += scope.launch {
+            SignalClient.events.collect { handleEvent(it) }
         }
     }
 
@@ -540,6 +662,8 @@ object MessagesSessionManager {
     private fun sourceFor(conversationId: String): MessageSource? = when {
         conversationId.startsWith("${MessageSource.MESSAGES_WEB.idPrefix}:") -> MessageSource.MESSAGES_WEB
         conversationId.startsWith("${MessageSource.VOICE.idPrefix}:") -> MessageSource.VOICE
+        conversationId.startsWith("${MessageSource.TELEGRAM.idPrefix}:") -> MessageSource.TELEGRAM
+        conversationId.startsWith("${MessageSource.SIGNAL.idPrefix}:") -> MessageSource.SIGNAL
         else -> null
     }
 

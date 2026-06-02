@@ -24,4 +24,6 @@ data class ContactSuggestion(
     val avatarUrl: String?,
     /** Which backend surfaced this contact. `null` = device contact only. */
     val source: MessageSource? = null,
+    /** Telegram @username, when available. */
+    val username: String? = null,
 )
