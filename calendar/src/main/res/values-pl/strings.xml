@@ -55,4 +55,5 @@
     <string name="create_a_calendar">Utwórz kalendarz</string>
     <string name="choose_timezone">Wybierz strefę czasową</string>
     <string name="delete_calendar_name_confirm">Czy na pewno chcesz usunąć „%1$s”? Spowoduje to usunięcie wszystkich wydarzeń w kalendarzu.</string>
+    <string name="open_location_in_navigation">Otwórz lokalizację</string>
 </resources>
