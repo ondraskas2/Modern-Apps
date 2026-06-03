@@ -164,8 +164,4 @@
     <string name="section_quick_stats">Quick stats</string>
     <string name="section_today_activity">Today</string>
     <string name="section_this_week">This week</string>
-
-    <!-- BodyPage FAB -->
-    <string name="fab_add_weight">Add weight</string>
-    <string name="fab_add_bp">Add blood pressure</string>
 </resources>
