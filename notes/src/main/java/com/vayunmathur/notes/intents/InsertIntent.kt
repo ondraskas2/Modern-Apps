@@ -12,7 +12,7 @@ import kotlinx.serialization.serializer
 class InsertIntent: AssistantIntent<NoteData, Unit>(serializer<NoteData>(), serializer<Unit>()) {
 
     override suspend fun performCalculation(input: NoteData) {
-        val db = buildDatabase<NoteDatabase>()
+        val db = buildDatabase<NoteDatabase>(dbName = "notes-db")
         db.noteDao().upsert(Note(title = input.title, content = input.content))
     }
 }

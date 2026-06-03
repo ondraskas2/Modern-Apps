@@ -8,7 +8,7 @@ class AppBackupAgent : BaseBackupAgent() {
     override val dbConfigs: List<Pair<String, String>>
         get() {
             val pass = DatabaseHelper(this).getPassphrase()
-            return listOf("passwords-db" to pass)
+            return listOf("notes-db" to pass)
         }
 
     override val extraFiles: List<File>

@@ -11,7 +11,7 @@ import kotlinx.serialization.serializer
 class GetIntent: AssistantIntent<Unit, List<NoteData>>(serializer<Unit>(), serializer<List<NoteData>>()) {
 
     override suspend fun performCalculation(input: Unit): List<NoteData> {
-        val db = buildDatabase<NoteDatabase>()
+        val db = buildDatabase<NoteDatabase>(dbName = "notes-db")
         return db.noteDao().getAll().map { NoteData(it.title, it.content) }
     }
 }

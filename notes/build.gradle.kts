@@ -11,4 +11,5 @@ android {
 
 dependencies {
     implementRoom(libs)
+    implementation(libs.reorderable)
 }
