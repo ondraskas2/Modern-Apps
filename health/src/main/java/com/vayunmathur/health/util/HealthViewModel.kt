@@ -3,19 +3,9 @@ package com.vayunmathur.health.util
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.pdf.PdfRenderer
-import android.net.Uri
-import android.os.ResultReceiver
 import android.util.Log
-import androidx.core.content.FileProvider
-import androidx.core.graphics.createBitmap
-import androidx.health.connect.client.feature.ExperimentalPersonalHealthRecordApi
-import androidx.health.connect.client.records.MedicalResource
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.fhir.model.r4b.Immunization
-import com.google.fhir.model.r4b.Observation
 import com.vayunmathur.health.R
 import com.vayunmathur.health.data.Ingredient
 import com.vayunmathur.health.data.NutritionData
@@ -26,7 +16,6 @@ import com.vayunmathur.health.data.RecordType
 import com.vayunmathur.health.data.ServingUnit
 import com.vayunmathur.health.ui.HealthMetricConfig
 import com.vayunmathur.health.ui.HistoryItem
-import com.vayunmathur.health.ui.JSON
 import com.vayunmathur.health.ui.MetricDashboardData
 import com.vayunmathur.library.util.Tuple4
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +46,6 @@ import kotlin.time.Clock
  * Owns:
  *  - All HealthConnect / Room health-record queries previously called from composables
  *    (point-in-time metrics for the main page, bar/line chart aggregations).
- *  - Medical record (Immunization / Observation) reads + FHIR JSON parse.
  *  - Nutrition / hydration logging writes (Room + HealthConnect insert).
  *  - Recipe / Ingredient CRUD (Room).
  *  - PDF → image conversion + InferenceService dispatch for the OpenAssistant extraction flow.
@@ -65,8 +53,7 @@ import kotlin.time.Clock
  * Composables should:
  *  - Use `viewModel.<metric>InRange(type, start, end).collectAsState(0.0)` for flow-based reads.
  *  - Call `viewModel.loadMainPageMetrics()`, `viewModel.loadBarChartData(...)`,
- *    `viewModel.refreshImmunizations()`, etc. from a single `LaunchedEffect` and
- *    collect the resulting `StateFlow`.
+ *    etc. from a single `LaunchedEffect` and collect the resulting `StateFlow`.
  *  - Keep purely-UI state (dialog visibility, pager state, focus, text-field cursor) in compose.
  */
 class HealthViewModel(application: Application) : AndroidViewModel(application) {
@@ -421,116 +408,6 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // ============================================================================================
-    //  Medical records (Immunizations / Lab Results).
-    // ============================================================================================
-
-    private val _immunizations = MutableStateFlow<List<Immunization>>(emptyList())
-    val immunizations: StateFlow<List<Immunization>> = _immunizations.asStateFlow()
-
-    private val _labResults = MutableStateFlow<List<Observation>>(emptyList())
-    val labResults: StateFlow<List<Observation>> = _labResults.asStateFlow()
-
-    @OptIn(ExperimentalPersonalHealthRecordApi::class)
-    fun refreshImmunizations() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _immunizations.value = HealthAPI
-                    .allMedicalRecords(MedicalResource.MEDICAL_RESOURCE_TYPE_VACCINES)
-                    .map { JSON.decodeFromString<Immunization>(it.fhirResource.data) }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh immunizations", e)
-            }
-        }
-    }
-
-    @OptIn(ExperimentalPersonalHealthRecordApi::class)
-    fun refreshLabResults() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _labResults.value = HealthAPI
-                    .allMedicalRecords(MedicalResource.MEDICAL_RESOURCE_TYPE_LABORATORY_RESULTS)
-                    .map { JSON.decodeFromString<Observation>(it.fhirResource.data) }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh lab results", e)
-            }
-        }
-    }
-
-    fun writeImmunization(jsonResult: String) {
-        viewModelScope.launch {
-            try {
-                HealthAPI.writeMedicalRecord(jsonResult)
-                refreshImmunizations()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to write immunization record", e)
-            }
-        }
-    }
-
-    fun writeLabResult(jsonResult: String) {
-        viewModelScope.launch {
-            try {
-                HealthAPI.writeMedicalRecord(jsonResult)
-                refreshLabResults()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to write lab result record", e)
-            }
-        }
-    }
-
-    /**
-     * Converts [uri] (a PDF) to per-page PNGs in the cache dir, then sends them to the
-     * OpenAssistant InferenceService for extraction. The result is delivered via [receiver].
-     * If the PDF cannot be opened or no pages render, [onFailedToStart] is invoked on the main
-     * thread so the caller can clear any "processing" UI state.
-     */
-    fun extractMedicalDataFromPdf(
-        uri: Uri,
-        userText: String,
-        schema: String,
-        receiver: ResultReceiver,
-        onFailedToStart: () -> Unit,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val ctx = getApplication<Application>()
-            try {
-                val imagePaths = convertPdfToImages(ctx, uri)
-                if (imagePaths.isEmpty()) {
-                    withContext(Dispatchers.Main) { onFailedToStart() }
-                    return@launch
-                }
-                val intent = Intent().apply {
-                    setClassName(
-                        "com.vayunmathur.openassistant",
-                        "com.vayunmathur.openassistant.util.InferenceService",
-                    )
-                    putExtra("user_text", userText)
-                    val uris = imagePaths.map { path ->
-                        val u = FileProvider.getUriForFile(
-                            ctx,
-                            "${ctx.packageName}.fileprovider",
-                            File(path),
-                        )
-                        ctx.grantUriPermission(
-                            "com.vayunmathur.openassistant",
-                            u,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                        )
-                        u
-                    }
-                    putParcelableArrayListExtra("image_uris", ArrayList(uris))
-                    putExtra("schema", schema)
-                    putExtra("RECEIVER", receiver)
-                }
-                withContext(Dispatchers.Main) { ctx.startService(intent) }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error processing PDF", e)
-                withContext(Dispatchers.Main) { onFailedToStart() }
-            }
-        }
-    }
-
-    // ============================================================================================
     //  Nutrition / hydration logging.
     // ============================================================================================
 
@@ -744,32 +621,3 @@ data class MainPageMetrics(
     val leanBodyMass: Double? = null,
     val bodyWaterMass: Double? = null,
 )
-
-/** Internal PDF → image helper. Splits a multi-page PDF into per-page PNGs in the cache dir. */
-private fun convertPdfToImages(context: Context, uri: Uri): List<String> {
-    val imagePaths = mutableListOf<String>()
-    try {
-        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-            val renderer = PdfRenderer(pfd)
-            for (i in 0 until renderer.pageCount) {
-                try {
-                    val page = renderer.openPage(i)
-                    val bitmap = createBitmap(page.width, page.height)
-                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    val file = File(context.cacheDir, "pdf_page_$i.png")
-                    FileOutputStream(file).use { out ->
-                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    }
-                    page.close()
-                    imagePaths.add(file.absolutePath)
-                } catch (e: Exception) {
-                    Log.e("HealthViewModel", "Error rendering PDF page $i", e)
-                }
-            }
-            renderer.close()
-        }
-    } catch (e: Exception) {
-        Log.e("HealthViewModel", "Error opening PDF file descriptor for URI: $uri", e)
-    }
-    return imagePaths
-}

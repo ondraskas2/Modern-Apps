@@ -2,22 +2,13 @@ package com.vayunmathur.health.util
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.health.connect.client.HealthConnectClient
-import androidx.health.connect.client.feature.ExperimentalPersonalHealthRecordApi
-import androidx.health.connect.client.records.FhirVersion
 import androidx.health.connect.client.records.HydrationRecord
-import androidx.health.connect.client.records.MedicalResource
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.metadata.Metadata
-import androidx.health.connect.client.request.CreateMedicalDataSourceRequest
-import androidx.health.connect.client.request.GetMedicalDataSourcesRequest
-import androidx.health.connect.client.request.ReadMedicalResourcesInitialRequest
-import androidx.health.connect.client.request.ReadMedicalResourcesPageRequest
-import androidx.health.connect.client.request.UpsertMedicalResourceRequest
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
 import androidx.health.connect.client.units.Volume
@@ -35,11 +26,6 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.minus
 import kotlinx.datetime.plus
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
-import androidx.core.net.toUri
 
 object HealthAPI {
     lateinit var healthConnectClient: HealthConnectClient
@@ -788,78 +774,6 @@ object HealthAPI {
                     Tuple3(date.date.toEpochDays() * 24 + date.hour, it.totalValue, it.totalValue2)
                 }
             }
-        }
-    }
-
-    @OptIn(ExperimentalPersonalHealthRecordApi::class)
-    suspend fun allMedicalRecords(type: Int): List<MedicalResource> {
-        val allRecords = mutableListOf<MedicalResource>()
-        var pageToken: String? = null
-        do {
-            val request =
-                    if (pageToken == null) ReadMedicalResourcesInitialRequest(type, setOf())
-                    else ReadMedicalResourcesPageRequest(pageToken)
-            val response = healthConnectClient.readMedicalResources(request)
-            allRecords += response.medicalResources
-            pageToken = response.nextPageToken
-        } while (pageToken != null)
-        return allRecords
-    }
-
-    @OptIn(ExperimentalPersonalHealthRecordApi::class)
-    suspend fun getOrCreateDataSource(): String {
-        Log.d("HealthAPI", "getOrCreateDataSource")
-        val dataSources =
-                healthConnectClient.getMedicalDataSources(GetMedicalDataSourcesRequest(emptyList()))
-        val existing = dataSources.find { it.displayName == "OpenAssistant Extraction" }
-        if (existing != null) {
-            Log.d("HealthAPI", "Found existing data source: ${existing.id}")
-            return existing.id
-        }
-
-        Log.i("HealthAPI", "Creating new data source for OpenAssistant Extraction")
-        return healthConnectClient.createMedicalDataSource(
-                        CreateMedicalDataSourceRequest(
-                                fhirBaseUri =
-                                    "https://com.vayunmathur.openassistant/extraction".toUri(),
-                                displayName = "OpenAssistant Extraction",
-                                fhirVersion = FhirVersion(4, 0, 1)
-                        )
-                )
-                .id
-    }
-
-    @OptIn(ExperimentalPersonalHealthRecordApi::class)
-    suspend fun writeMedicalRecord(fhirData: String) {
-        val json =
-                try {
-                    Json.parseToJsonElement(fhirData).jsonObject.toMutableMap()
-                } catch (e: Exception) {
-                    Log.e("HealthAPI", "Failed to parse FHIR data as JSON", e)
-                    return
-                }
-
-        // Always ensure a random ID is present as requested
-        json["id"] = JsonPrimitive(UUID.randomUUID().toString())
-
-        val finalData = JsonObject(json).toString()
-
-        Log.d("HealthAPI", "writeMedicalRecord (sanitized): $finalData")
-        val dataSourceId = getOrCreateDataSource()
-        try {
-            healthConnectClient.upsertMedicalResources(
-                    listOf(
-                            UpsertMedicalResourceRequest(
-                                    dataSourceId = dataSourceId,
-                                    fhirVersion = FhirVersion(4, 0, 1),
-                                    data = finalData
-                            )
-                    )
-            )
-            Log.i("HealthAPI", "Medical record written successfully")
-        } catch (e: Exception) {
-            Log.e("HealthAPI", "Failed to write medical record to Health Connect", e)
-            throw e
         }
     }
 }

@@ -156,10 +156,18 @@ class WebViewWebSocket(
                         }
                     }
                     
-                    // Load blank page to avoid CSP issues from WhatsApp website
-                    // The WebSocket connection is independent of page content
-                    // Using about:blank ensures no interference from page scripts
-                    Log.d(TAG, "Loading about:blank")
+                    // Load blank page with WhatsApp origin to ensure correct Origin header
+                    // The WebSocket will be created from this origin, so the browser will set
+                    // Origin: https://web.whatsapp.com automatically
+                    // Using loadDataWithBaseURL sets the origin without loading actual WhatsApp page
+                    // (which would interfere with our WebSocket via CSP)
+                    loadDataWithBaseURL(
+                        "https://web.whatsapp.com",
+                        "<html><body></body></html>",
+                        "text/html",
+                        "UTF-8",
+                        null
+                    )
                     loadUrl("about:blank")
                 }
                 Log.d(TAG, "WebView setup complete")
@@ -272,8 +280,16 @@ class WebViewWebSocket(
                 val clientHelloBytes = handshakeMessage.toByteArray()
                 
                 // Send with WA header and frame length prefix
-                // Header is ONLY sent with the first frame (ClientHello)
+                // Send with WA header and frame length prefix
                 val framedMessage = buildFramedMessage(clientHelloBytes, waHeader)
+                
+                // Log the exact bytes being sent for debugging
+                val framedHex = framedMessage.joinToString(" ") { "%02X".format(it) }
+                Log.d(TAG, "Sending framed message (${framedMessage.size} bytes): $framedHex")
+                Log.d(TAG, "  - WA Header: ${waHeader.joinToString(" ") { "%02X".format(it) }}")
+                Log.d(TAG, "  - Length: ${clientHelloBytes.size} (0x${clientHelloBytes.size.toString(16).uppercase()})")
+                Log.d(TAG, "  - Protobuf: ${clientHelloBytes.joinToString(" ") { "%02X".format(it) }}")
+                
                 sendRaw(framedMessage)
                 
                 Log.i(TAG, "Sent ClientHello protobuf (${clientHelloBytes.size} bytes) with WA header v3, waiting for ServerHello")
@@ -293,6 +309,9 @@ class WebViewWebSocket(
 
     private fun handleHandshakeMessage(data: ByteArray) {
         Log.i(TAG, "Received handshake response (${data.size} bytes)")
+        // Log hex dump to see what the server actually sent
+        val hex = data.joinToString(" ") { "%02X".format(it) }
+        Log.d(TAG, "Response hex: $hex")
         
         try {
             // Parse ServerHello protobuf

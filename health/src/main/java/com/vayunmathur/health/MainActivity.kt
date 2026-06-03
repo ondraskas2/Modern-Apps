@@ -1,9 +1,6 @@
 package com.vayunmathur.health
 
-import android.health.connect.HealthPermissions
-import android.os.Build
 import android.os.Bundle
-import android.os.ext.SdkExtensions
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -58,8 +55,7 @@ import com.vayunmathur.health.ui.ActivityPage
 import com.vayunmathur.health.ui.BarChartDetails
 import com.vayunmathur.health.ui.BodyPage
 import com.vayunmathur.health.ui.HealthMetricConfig
-import com.vayunmathur.health.ui.ImmunizationsPage
-import com.vayunmathur.health.ui.LabResultsPage
+
 import com.vayunmathur.health.ui.NutritionDetailsPage
 import com.vayunmathur.health.ui.NutritionPage
 import com.vayunmathur.health.ui.RecipeEditorPage
@@ -93,25 +89,9 @@ val CLASSES = setOf(
 val PERMISSIONS = CLASSES.map { HealthPermission.getReadPermission(it) }.toSet() + 
     setOf(
         HealthPermission.getWritePermission(NutritionRecord::class),
-        HealthPermission.getWritePermission(HydrationRecord::class)
-    ) + if (SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 16) {setOf(
-    HealthPermissions.READ_MEDICAL_DATA_ALLERGIES_INTOLERANCES,
-    HealthPermissions.READ_MEDICAL_DATA_CONDITIONS,
-    HealthPermissions.READ_MEDICAL_DATA_LABORATORY_RESULTS,
-    HealthPermissions.READ_MEDICAL_DATA_MEDICATIONS,
-    HealthPermissions.READ_MEDICAL_DATA_PERSONAL_DETAILS,
-    HealthPermissions.READ_MEDICAL_DATA_PRACTITIONER_DETAILS,
-    HealthPermissions.READ_MEDICAL_DATA_PREGNANCY,
-    HealthPermissions.READ_MEDICAL_DATA_PROCEDURES,
-    HealthPermissions.READ_MEDICAL_DATA_SOCIAL_HISTORY,
-    HealthPermissions.READ_MEDICAL_DATA_VACCINES,
-    HealthPermissions.READ_MEDICAL_DATA_VISITS,
-    HealthPermissions.READ_MEDICAL_DATA_VITAL_SIGNS,
-    HealthPermissions.WRITE_MEDICAL_DATA,
-    "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
-) } else {
-    setOf("android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND")
-}
+        HealthPermission.getWritePermission(HydrationRecord::class),
+        "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
+    )
 
 
 class MainActivity : ComponentActivity() {
@@ -168,12 +148,6 @@ sealed interface Route: NavKey {
 
     @Serializable
     data object Body: Route
-
-    @Serializable
-    data object Immunizations: Route
-
-    @Serializable
-    data object LabResults: Route
 
     @Serializable
     data object NutritionDetails: Route
@@ -236,12 +210,6 @@ fun Navigation(viewModel: HealthViewModel) {
         }
         entry<Route.Body> {
             BodyPage(backStack, viewModel)
-        }
-        entry<Route.Immunizations> {
-            ImmunizationsPage(backStack, viewModel)
-        }
-        entry<Route.LabResults> {
-            LabResultsPage(backStack, viewModel)
         }
         entry<Route.NutritionDetails> {
             NutritionPage(backStack, viewModel)

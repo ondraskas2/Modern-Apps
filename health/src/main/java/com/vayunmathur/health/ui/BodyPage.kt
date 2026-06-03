@@ -79,15 +79,6 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                     text = { Text(stringResource(R.string.fab_add_bp)) },
                     icon = { Icon(painterResource(R.drawable.baseline_favorite_24), null) },
                 )
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        expanded = false
-                        // TODO: wire Upload Medical PDF flow when available
-                        Log.i("BodyPage", "FAB: Upload Medical PDF tapped (flow not implemented)")
-                    },
-                    text = { Text(stringResource(R.string.fab_upload_pdf)) },
-                    icon = { Icon(painterResource(R.drawable.baseline_add_24), null) },
-                )
             }
         },
     ) { paddingValues ->
@@ -157,32 +148,6 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         leadingIconRes = R.drawable.body_24px,
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.BodyWaterMass),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.BODY_WATER_MASS)) },
-                    )
-                }
-            }
-
-            // Medical records
-            item {
-                GroupedSection(
-                    title = stringResource(R.string.section_medical_records),
-                    accentColor = HealthColors.Vitals,
-                ) {
-                    MetricRow(
-                        label = stringResource(R.string.label_immunizations),
-                        value = "",
-                        unit = "",
-                        leadingIconRes = R.drawable.baseline_add_24,
-                        leadingTint = HealthColors.Vitals,
-                        onClick = { backStack.add(Route.Immunizations) },
-                    )
-                    GroupedSectionDivider()
-                    MetricRow(
-                        label = stringResource(R.string.label_lab_results),
-                        value = "",
-                        unit = "",
-                        leadingIconRes = R.drawable.baseline_add_24,
-                        leadingTint = HealthColors.Vitals,
-                        onClick = { backStack.add(Route.LabResults) },
                     )
                 }
             }

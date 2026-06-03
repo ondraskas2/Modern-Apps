@@ -65,7 +65,6 @@
     <string name="label_deep">Deep</string>
 
     <!-- MainPage – section headers -->
-    <string name="section_medical_records">Medical Records</string>
     <string name="section_activity">Activity</string>
     <string name="section_vitals_clinical">Vitals &amp; Clinical</string>
     <string name="section_nutrition_today">Nutrition (Today)</string>
@@ -75,8 +74,6 @@
     <string name="label_active">Active</string>
     <string name="label_basal">Basal</string>
     <string name="label_patients">Patients</string>
-    <string name="label_immunizations">Immunizations</string>
-    <string name="label_lab_results">Lab Results</string>
 
     <!-- MainPage – date labels used in GenericCard -->
     <string name="label_today">Today</string>
@@ -150,23 +147,10 @@
     <string name="unit_hr">hr</string>
     <string name="label_blood_pressure_unit">mmHg</string>
 
-    <!-- MedicalRecordsPage -->
-    <string name="unknown">Unknown</string>
-    <string name="status_format">Status: %1$s</string>
-    <string name="result_format">Result: %1$s</string>
-    <string name="date_format_label">Date: %1$s</string>
-    <string name="lot_format">Lot: %1$s</string>
-    <string name="open_assistant_required">OpenAssistant Required</string>
-    <string name="open_assistant_rationale">The OpenAssistant app is required for offline, secure, medical document extraction. Please install it from GitHub.</string>
-    <string name="view_on_github">View on GitHub</string>
-
     <!-- NutritionDetailsPage -->
     <string name="label_nutrition_details">Nutrition Details</string>
     <string name="total_energy_intake">Total energy intake</string>
     <string name="nutrient_progress_format">%1$s / %2$d %3$s</string>
-    <string name="msg_upload_first_immunization">Upload your first immunization record</string>
-    <string name="msg_upload_first_lab_result">Upload your first lab result</string>
-    <string name="msg_processing_document">Processing document&#8230;</string>
 
     <!-- Bottom navigation -->
     <string name="nav_today">Today</string>
@@ -184,5 +168,4 @@
     <!-- BodyPage FAB -->
     <string name="fab_add_weight">Add weight</string>
     <string name="fab_add_bp">Add blood pressure</string>
-    <string name="fab_upload_pdf">Upload medical PDF</string>
 </resources>
