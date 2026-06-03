@@ -116,9 +116,9 @@ class SignalWebSocket(
         }
     }
 
-    fun connect(url: String) {
+    fun connect(url: String, autoReconnect: Boolean = true) {
         currentUrl = url
-        shouldReconnect = true
+        shouldReconnect = autoReconnect
         openSocket(url)
     }
 
@@ -166,18 +166,19 @@ class SignalWebSocket(
         return deferred.await()
     }
 
-    fun sendResponse(requestId: Long, status: Int) {
+    fun sendResponse(requestId: Long, status: Int, message: String = "OK") {
         val response = WebSocketResponseMessage.newBuilder()
             .setId(requestId)
             .setStatus(status)
+            .setMessage(message)
             .build()
 
-        val message = WebSocketMessage.newBuilder()
+        val msg = WebSocketMessage.newBuilder()
             .setType(WebSocketMessage.Type.RESPONSE)
             .setResponse(response)
             .build()
 
-        webSocket?.send(message.toByteArray().toByteString())
+        webSocket?.send(msg.toByteArray().toByteString())
     }
 
     private fun openSocket(url: String) {

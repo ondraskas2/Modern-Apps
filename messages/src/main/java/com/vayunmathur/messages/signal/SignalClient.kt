@@ -7,6 +7,7 @@ import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.gmessages.GMEvent
 import com.vayunmathur.messages.signal.auth.PreKeyManager
 import com.vayunmathur.messages.signal.auth.Provisioning
+import com.vayunmathur.messages.signal.contacts.ContactDiscovery
 import com.vayunmathur.messages.signal.contacts.ContactManager
 import com.vayunmathur.messages.signal.contacts.ProfileManager
 import com.vayunmathur.messages.signal.groups.GroupManager
@@ -88,6 +89,7 @@ object SignalClient {
     private var contactManager: ContactManager? = null
     private var profileManager: ProfileManager? = null
     private var groupManager: GroupManager? = null
+    private var contactDiscovery: ContactDiscovery? = null
 
     private val nameCache = ConcurrentHashMap<String, String>()
 
@@ -127,6 +129,7 @@ object SignalClient {
         webSocket = null
         messageSender = null
         contactManager = null
+        contactDiscovery = null
         profileManager = null
         groupManager = null
         nameCache.clear()
@@ -185,7 +188,7 @@ object SignalClient {
     suspend fun sendMessage(conversationId: String, body: String): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = extractAci(conversationId) ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val timestamp = System.currentTimeMillis()
         val content = ContentBuilders.textMessage(body, timestamp)
         val result = sender.sendMessage(recipientAci, content, timestamp)
@@ -203,7 +206,7 @@ object SignalClient {
         return try {
             val pointer = AttachmentManager.upload(bytes, mime, fileName) ?: return false
             val sender = messageSender ?: return false
-            val recipientAci = extractAci(conversationId) ?: return false
+            val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
             val timestamp = System.currentTimeMillis()
             val dataMessage = SignalServiceProtos.DataMessage.newBuilder()
                 .setTimestamp(timestamp)
@@ -223,7 +226,7 @@ object SignalClient {
     suspend fun markRead(conversationId: String): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = extractAci(conversationId) ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         return try {
             val content = ContentBuilders.readReceipt(listOf(System.currentTimeMillis()))
             sender.sendMessage(recipientAci, content, System.currentTimeMillis())
@@ -246,7 +249,7 @@ object SignalClient {
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = extractAci(conversationId) ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val targetTimestamp = messageId.substringAfterLast('_').toLongOrNull() ?: return false
         val content = ContentBuilders.reactionMessage(emoji, recipientAci, targetTimestamp, !add)
         val timestamp = System.currentTimeMillis()
@@ -257,7 +260,7 @@ object SignalClient {
     suspend fun sendTyping(conversationId: String): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = extractAci(conversationId) ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val content = ContentBuilders.typingMessage(true, System.currentTimeMillis())
         val result = sender.sendMessage(recipientAci, content, System.currentTimeMillis())
         return result.success
@@ -271,7 +274,7 @@ object SignalClient {
         if (recipients.isEmpty()) return null
         if (_state.value !is State.Connected) return null
         val sender = messageSender ?: return null
-        val recipientAci = recipients.first()
+        val recipientAci = resolveRecipient(recipients.first()) ?: return null
         val timestamp = System.currentTimeMillis()
         val content = ContentBuilders.textMessage(body, timestamp)
         val result = sender.sendMessage(recipientAci, content, timestamp)
@@ -289,6 +292,7 @@ object SignalClient {
     private suspend fun bootSession(auth: SignalAuthData) {
         _state.value = State.Connecting
         try {
+            SignalHttpClient.init(appContext)
             val database = SignalDatabase.getInstance(appContext)
             db = database
 
@@ -322,6 +326,7 @@ object SignalClient {
 
             val recipientStore = SignalRecipientStore(database)
             contactManager = ContactManager(recipientStore)
+            contactDiscovery = ContactDiscovery(recipientStore, auth.aci, auth.deviceId, auth.password, appContext)
             profileManager = ProfileManager(ws, recipientStore)
             groupManager = GroupManager(ws, SignalGroupStore(database))
 
@@ -463,5 +468,11 @@ object SignalClient {
 
     private fun extractAci(conversationId: String): String? {
         return conversationId.substringAfter(':', conversationId).takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun resolveRecipient(identifier: String): String? {
+        if (!identifier.startsWith("+")) return identifier
+        val discovery = contactDiscovery ?: return null
+        return discovery.resolveE164(identifier)
     }
 }

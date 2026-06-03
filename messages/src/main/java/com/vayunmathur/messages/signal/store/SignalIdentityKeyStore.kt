@@ -19,14 +19,18 @@ class SignalIdentityKeyStore(
 
     override fun getLocalRegistrationId(): Int = localRegistrationId
 
-    override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): Boolean {
+    override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): IdentityKeyStore.IdentityChange {
         val existing = runBlocking { db.identityKeyDao().get(address.name) }
         runBlocking {
             db.identityKeyDao().insert(
                 SignalIdentityKeyEntity(address.name, identityKey.serialize(), true)
             )
         }
-        return existing != null && !existing.identityKey.contentEquals(identityKey.serialize())
+        return if (existing == null || !existing.identityKey.contentEquals(identityKey.serialize())) {
+            IdentityKeyStore.IdentityChange.REPLACED_EXISTING
+        } else {
+            IdentityKeyStore.IdentityChange.NEW_OR_UNCHANGED
+        }
     }
 
     override fun isTrustedIdentity(

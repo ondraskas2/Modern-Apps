@@ -7,7 +7,9 @@ import com.vayunmathur.messages.signal.web.SignalWebSocket
 import org.json.JSONArray
 import org.json.JSONObject
 import org.signal.libsignal.protocol.IdentityKeyPair
-import org.signal.libsignal.protocol.ecc.Curve
+import org.signal.libsignal.protocol.ecc.ECKeyPair
+import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.ecc.ECPrivateKey
 import org.signal.libsignal.protocol.kem.KEMKeyPair
 import org.signal.libsignal.protocol.kem.KEMKeyType
 import java.io.IOException
@@ -64,7 +66,7 @@ object PreKeyManager {
 
         val preKeys = JSONArray().apply {
             for (i in 0 until BATCH_SIZE) {
-                val kp = Curve.generateKeyPair()
+                val kp = ECKeyPair.generate()
                 put(JSONObject().apply {
                     put("keyId", preKeyBase + i)
                     put("publicKey", Base64.encodeToString(kp.publicKey.serialize(), Base64.NO_WRAP))
@@ -72,8 +74,8 @@ object PreKeyManager {
             }
         }
 
-        val spkKeyPair = Curve.generateKeyPair()
-        val spkSignature = Curve.calculateSignature(identityKeyPair.privateKey, spkKeyPair.publicKey.serialize())
+        val spkKeyPair = ECKeyPair.generate()
+        val spkSignature = identityKeyPair.privateKey.calculateSignature(spkKeyPair.publicKey.serialize())
         val signedPreKey = JSONObject().apply {
             put("keyId", random.nextInt(Int.MAX_VALUE))
             put("publicKey", Base64.encodeToString(spkKeyPair.publicKey.serialize(), Base64.NO_WRAP))
@@ -83,7 +85,7 @@ object PreKeyManager {
         val pqPreKeys = JSONArray().apply {
             for (i in 0 until BATCH_SIZE) {
                 val kemKp = KEMKeyPair.generate(KEMKeyType.KYBER_1024)
-                val sig = Curve.calculateSignature(identityKeyPair.privateKey, kemKp.publicKey.serialize())
+                val sig = identityKeyPair.privateKey.calculateSignature(kemKp.publicKey.serialize())
                 put(JSONObject().apply {
                     put("keyId", pqKeyBase + i)
                     put("publicKey", Base64.encodeToString(kemKp.publicKey.serialize(), Base64.NO_WRAP))

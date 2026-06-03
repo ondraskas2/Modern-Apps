@@ -74,7 +74,7 @@ object EnvelopeDecryptor {
                         protocolStore, UUID.fromString(selfAci), selfAci, selfDeviceId
                     )
                     val validator = certificateValidator
-                        ?: CertificateValidator(null)
+                        ?: CertificateValidator(emptyList())
                     val result = sealedCipher.decrypt(validator, envelope.content.toByteArray(), serverTimestamp)
                     val content = SignalServiceProtos.Content.parseFrom(stripPadding(result.paddedMessage))
                     DecryptionResult(

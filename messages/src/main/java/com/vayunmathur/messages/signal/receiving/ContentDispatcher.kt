@@ -126,6 +126,12 @@ object ContentDispatcher {
             )
         }
 
+        if (sync.hasContacts()) {
+            // Contacts sync contains the contact list from primary device
+            // This is handled separately in SignalClient
+            return MessageContent.Unknown("Contacts sync")
+        }
+
         if (sync.readCount > 0) {
             val reads = sync.readList.map { it.senderAci to it.timestamp }
             return MessageContent.SyncRead(reads)

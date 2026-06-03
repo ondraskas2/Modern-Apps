@@ -93,7 +93,7 @@ class SignalPreKeyStore(private val db: SignalDatabase) : PreKeyStore, SignedPre
         runBlocking { db.kyberPreKeyDao().delete(kyberPreKeyId) }
     }
 
-    override fun markKyberPreKeyUsed(kyberPreKeyId: Int) {
+    override fun markKyberPreKeyUsed(kyberPreKeyId: Int, signedPreKeyId: Int, publicKey: org.signal.libsignal.protocol.ecc.ECPublicKey) {
         val entity = runBlocking { db.kyberPreKeyDao().get(kyberPreKeyId) } ?: return
         if (!entity.lastResort) {
             runBlocking { db.kyberPreKeyDao().delete(kyberPreKeyId) }

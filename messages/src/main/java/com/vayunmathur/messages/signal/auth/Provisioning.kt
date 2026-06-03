@@ -16,8 +16,9 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.IdentityKeyPair
-import org.signal.libsignal.protocol.ecc.Curve
+import org.signal.libsignal.protocol.ecc.ECKeyPair
 import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.ecc.ECPrivateKey
 import org.signal.libsignal.protocol.kem.KEMKeyPair
 import org.signal.libsignal.protocol.kem.KEMKeyType
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
@@ -46,7 +47,7 @@ object Provisioning {
             val requests = Channel<com.vayunmathur.messages.signal.proto.WebSocketProtos.WebSocketRequestMessage>(Channel.UNLIMITED)
             ws.incomingRequestHandler = { requests.trySend(it) }
 
-            ws.connect(WS_PROVISIONING_URL)
+            ws.connect(WS_PROVISIONING_URL, autoReconnect = false)
             ws.connectionEvents.first { it is SignalWebSocket.ConnectionEvent.Connected }
 
             // Step 1: Receive provisioning UUID via PUT /v1/address
@@ -82,13 +83,16 @@ object Provisioning {
             // Step 4: Decrypt provisioning message
             val provMsg = cipher.decrypt(envelope)
 
+            // Ensure HTTP client is initialized
+            SignalHttpClient.init(context)
+
             // Step 5: Extract identity key pairs
-            val aciPublicKey = Curve.decodePoint(byteArrayOf(0x05) + provMsg.aciIdentityKeyPublic.toByteArray(), 0)
-            val aciPrivateKey = Curve.decodePrivatePoint(provMsg.aciIdentityKeyPrivate.toByteArray())
+            val aciPublicKey = ECPublicKey(provMsg.aciIdentityKeyPublic.toByteArray())
+            val aciPrivateKey = ECPrivateKey(provMsg.aciIdentityKeyPrivate.toByteArray())
             val aciIdentityKeyPair = IdentityKeyPair(IdentityKey(aciPublicKey), aciPrivateKey)
 
-            val pniPublicKey = Curve.decodePoint(byteArrayOf(0x05) + provMsg.pniIdentityKeyPublic.toByteArray(), 0)
-            val pniPrivateKey = Curve.decodePrivatePoint(provMsg.pniIdentityKeyPrivate.toByteArray())
+            val pniPublicKey = ECPublicKey(provMsg.pniIdentityKeyPublic.toByteArray())
+            val pniPrivateKey = ECPrivateKey(provMsg.pniIdentityKeyPrivate.toByteArray())
             val pniIdentityKeyPair = IdentityKeyPair(IdentityKey(pniPublicKey), pniPrivateKey)
 
             val number = provMsg.number
@@ -167,14 +171,14 @@ object Provisioning {
     }
 
     private fun generateSignedPreKey(id: Int, identityKeyPair: IdentityKeyPair): SignedPreKeyRecord {
-        val keyPair = Curve.generateKeyPair()
-        val signature = Curve.calculateSignature(identityKeyPair.privateKey, keyPair.publicKey.serialize())
+        val keyPair = ECKeyPair.generate()
+        val signature = identityKeyPair.privateKey.calculateSignature(keyPair.publicKey.serialize())
         return SignedPreKeyRecord(id, System.currentTimeMillis(), keyPair, signature)
     }
 
     private fun generateKyberPreKey(id: Int, identityKeyPair: IdentityKeyPair): KyberPreKeyRecord {
         val keyPair = KEMKeyPair.generate(KEMKeyType.KYBER_1024)
-        val signature = Curve.calculateSignature(identityKeyPair.privateKey, keyPair.publicKey.serialize())
+        val signature = identityKeyPair.privateKey.calculateSignature(keyPair.publicKey.serialize())
         return KyberPreKeyRecord(id, System.currentTimeMillis(), keyPair, signature)
     }
 
@@ -191,8 +195,8 @@ object Provisioning {
     }
 
     private fun encryptDeviceName(name: String, identityPublicKey: ECPublicKey): String {
-        val ephemeral = Curve.generateKeyPair()
-        val masterSecret = Curve.calculateAgreement(identityPublicKey, ephemeral.privateKey)
+        val ephemeral = ECKeyPair.generate()
+        val masterSecret = ephemeral.privateKey.calculateAgreement(identityPublicKey)
 
         val syntheticIvKey = Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(masterSecret, "HmacSHA256"))

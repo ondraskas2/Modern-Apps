@@ -1,12 +1,23 @@
 package com.vayunmathur.messages.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -15,11 +26,16 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.ui.IconNavigation
+import com.vayunmathur.library.ui.IconInbox
+import com.vayunmathur.library.ui.IconMail
+import com.vayunmathur.library.ui.IconNavigationArrow
+import com.vayunmathur.library.ui.IconRestore
+import com.vayunmathur.library.ui.IconSend
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.messages.R
 import com.vayunmathur.messages.Route
@@ -47,38 +63,53 @@ fun SettingsScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
-                .padding(16.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text(
                 stringResource(R.string.settings_section_sources),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp),
             )
-            SourceSection(
+            SourceCard(
                 title = stringResource(R.string.source_messages),
+                icon = { tint -> IconMail(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.MESSAGES_WEB] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.PairMessages) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.MESSAGES_WEB) },
             )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            SourceSection(
+            Spacer(Modifier.height(8.dp))
+            SourceCard(
                 title = stringResource(R.string.source_voice),
+                icon = { tint -> IconInbox(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.VOICE] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginVoice) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.VOICE) },
             )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            SourceSection(
+            Spacer(Modifier.height(8.dp))
+            SourceCard(
                 title = stringResource(R.string.source_telegram),
+                icon = { tint -> IconSend(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.TELEGRAM] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginTelegram) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.TELEGRAM) },
             )
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Spacer(Modifier.height(8.dp))
+            SourceCard(
+                title = stringResource(R.string.source_signal),
+                icon = { tint -> IconNavigationArrow(Modifier.size(28.dp), tint) },
+                state = states[MessageSource.SIGNAL] ?: SourceConnectionState.Idle,
+                onConfigure = { backStack.add(Route.LoginSignal) },
+                onDisconnect = { MessagesSessionManager.stop(MessageSource.SIGNAL) },
+            )
+            Spacer(Modifier.height(16.dp))
             OutlinedButton(
                 onClick = { vm.forceResync() },
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                IconRestore(Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.settings_resync))
             }
         }
@@ -86,24 +117,55 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SourceSection(
+private fun SourceCard(
     title: String,
+    icon: @Composable (androidx.compose.ui.graphics.Color) -> Unit,
     state: SourceConnectionState,
     onConfigure: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    Column(Modifier.padding(vertical = 8.dp)) {
-        Text(title, fontWeight = FontWeight.SemiBold)
-        Text(
-            describe(state),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Button(onClick = onConfigure, modifier = Modifier.padding(top = 8.dp)) {
-            Text(stringResource(R.string.inbox_setup_action))
-        }
-        OutlinedButton(onClick = onDisconnect, modifier = Modifier.padding(top = 4.dp)) {
-            Text("Disconnect")
+    val isConnected = state == SourceConnectionState.Connected
+    val containerColor by animateColorAsState(
+        if (isConnected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant,
+        label = "cardColor",
+    )
+    Card(
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(16.dp),
+        ) {
+            icon(
+                if (isConnected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    describe(state),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isConnected) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (isConnected) {
+                OutlinedButton(
+                    onClick = onDisconnect,
+                    contentPadding = ButtonDefaults.ContentPadding,
+                ) {
+                    Text("Disconnect")
+                }
+            } else {
+                FilledTonalButton(onClick = onConfigure) {
+                    Text("Set up")
+                }
+            }
         }
     }
 }

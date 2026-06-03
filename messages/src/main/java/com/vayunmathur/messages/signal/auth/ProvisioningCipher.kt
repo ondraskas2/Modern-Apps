@@ -2,9 +2,9 @@ package com.vayunmathur.messages.signal.auth
 
 import com.vayunmathur.messages.signal.proto.ProvisioningProtos.ProvisionEnvelope
 import com.vayunmathur.messages.signal.proto.ProvisioningProtos.ProvisionMessage
-import org.signal.libsignal.protocol.ecc.Curve
 import org.signal.libsignal.protocol.ecc.ECKeyPair
 import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.ecc.ECPrivateKey
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -15,14 +15,14 @@ class ProvisioningCipher {
 
     fun getPublicKey(): ECPublicKey {
         if (keyPair == null) {
-            keyPair = Curve.generateKeyPair()
+            keyPair = ECKeyPair.generate()
         }
         return keyPair!!.publicKey
     }
 
     fun decrypt(envelope: ProvisionEnvelope): ProvisionMessage {
         val kp = keyPair ?: throw IllegalStateException("Key pair not initialized")
-        val masterEphemeral = Curve.decodePoint(byteArrayOf(0x05) + envelope.publicKey.toByteArray(), 0)
+        val masterEphemeral = ECPublicKey(envelope.publicKey.toByteArray())
         val body = envelope.body.toByteArray()
         require(body[0].toInt() == 1) { "Unsupported ProvisionMessage version: ${body[0]}" }
 
@@ -31,7 +31,7 @@ class ProvisioningCipher {
         val cipherText = body.copyOfRange(17, body.size - 32)
         val ivAndCipherText = body.copyOfRange(0, body.size - 32)
 
-        val agreement = Curve.calculateAgreement(masterEphemeral, kp.privateKey)
+        val agreement = kp.privateKey.calculateAgreement(masterEphemeral)
 
         val sharedSecrets = hkdfDeriveSecrets(agreement, "TextSecure Provisioning Message".toByteArray(), 64)
 

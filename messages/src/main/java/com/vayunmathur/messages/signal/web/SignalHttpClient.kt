@@ -27,11 +27,15 @@ object SignalHttpClient {
 
     private lateinit var client: OkHttpClient
 
+    private var initialized = false
+
     fun init(context: Context) {
+        if (initialized) return
         val (sslSocketFactory, trustManager) = CertPinning.createSslSocketFactory(context)
         client = OkHttpClient.Builder()
             .sslSocketFactory(sslSocketFactory, trustManager)
             .build()
+        initialized = true
     }
 
     suspend fun request(

@@ -5,10 +5,13 @@ import android.util.Log
 import com.vayunmathur.messages.signal.store.SignalProtocolStoreImpl
 import com.vayunmathur.messages.signal.web.SignalWebSocket
 import org.json.JSONObject
+import java.io.IOException
 import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.SessionBuilder
 import org.signal.libsignal.protocol.SignalProtocolAddress
-import org.signal.libsignal.protocol.ecc.Curve
+import org.signal.libsignal.protocol.ecc.ECKeyPair
+import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.ecc.ECPrivateKey
 import org.signal.libsignal.protocol.state.IdentityKeyStore
 import org.signal.libsignal.protocol.state.KyberPreKeyStore
 import org.signal.libsignal.protocol.state.PreKeyBundle
@@ -45,11 +48,17 @@ class DeviceManager(
     private suspend fun fetchDeviceIds(recipientAci: String): List<Int> {
         val response = ws.sendRequest(
             "GET",
-            "/v2/keys/$recipientAci/*",
+            "/v2/keys/$recipientAci/*?pq=true",
             null,
             mapOf("Content-Type" to "application/json")
         )
-        val json = JSONObject(String(response.body.toByteArray()))
+        val responseBody = String(response.body.toByteArray())
+        Log.d(TAG, "Keys response for $recipientAci: $responseBody")
+        val json = JSONObject(responseBody)
+        if (!json.has("devices")) {
+            Log.e(TAG, "No devices in keys response: $responseBody")
+            throw IOException("No devices found for $recipientAci")
+        }
         val devices = json.getJSONArray("devices")
         val ids = (0 until devices.length()).map { devices.getJSONObject(it).getInt("deviceId") }
         deviceCache[recipientAci] = ids
@@ -66,7 +75,7 @@ class DeviceManager(
     suspend fun fetchPreKeyBundle(recipientAci: String, deviceId: Int): PreKeyBundle {
         val response = ws.sendRequest(
             "GET",
-            "/v2/keys/$recipientAci/$deviceId",
+            "/v2/keys/$recipientAci/$deviceId?pq=true",
             null,
             mapOf("Content-Type" to "application/json")
         )
@@ -110,17 +119,64 @@ class DeviceManager(
 
         val signedPreKey = device.getJSONObject("signedPreKey")
         val signedPreKeyId = signedPreKey.getInt("keyId")
-        val signedPreKeyPublic = Curve.decodePoint(
-            Base64.decode(signedPreKey.getString("publicKey"), Base64.NO_WRAP), 0
+        val signedPreKeyPublic = ECPublicKey(
+            Base64.decode(signedPreKey.getString("publicKey"), Base64.NO_WRAP)
         )
         val signedPreKeySignature = Base64.decode(signedPreKey.getString("signature"), Base64.NO_WRAP)
 
         val preKey = device.optJSONObject("preKey")
         val preKeyId = preKey?.getInt("keyId") ?: -1
         val preKeyPublic = preKey?.let {
-            Curve.decodePoint(Base64.decode(it.getString("publicKey"), Base64.NO_WRAP), 0)
+            ECPublicKey(Base64.decode(it.getString("publicKey"), Base64.NO_WRAP))
         }
 
+        // Parse PQ (post-quantum) Kyber pre-key if present
+        val pqPreKey = device.optJSONObject("pqPreKey")
+        return if (pqPreKey != null) {
+            try {
+                val kyberPreKeyId = pqPreKey.getInt("keyId")
+                val kyberPreKeyPublic = org.signal.libsignal.protocol.kem.KEMPublicKey(
+                    Base64.decode(pqPreKey.getString("publicKey"), Base64.NO_WRAP)
+                )
+                val kyberPreKeySignature = Base64.decode(pqPreKey.getString("signature"), Base64.NO_WRAP)
+                PreKeyBundle(
+                    registrationId,
+                    deviceId,
+                    preKeyId,
+                    preKeyPublic,
+                    signedPreKeyId,
+                    signedPreKeyPublic,
+                    signedPreKeySignature,
+                    identityKey,
+                    kyberPreKeyId,
+                    kyberPreKeyPublic,
+                    kyberPreKeySignature
+                )
+            } catch (e: Exception) {
+                // Fallback to non-PQ bundle if kyber parsing fails
+                createNonPQBundle(registrationId, deviceId, preKeyId, preKeyPublic, signedPreKeyId, signedPreKeyPublic, signedPreKeySignature, identityKey)
+            }
+        } else {
+            createNonPQBundle(registrationId, deviceId, preKeyId, preKeyPublic, signedPreKeyId, signedPreKeyPublic, signedPreKeySignature, identityKey)
+        }
+    }
+
+    @Suppress("NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS")
+    private fun createNonPQBundle(
+        registrationId: Int,
+        deviceId: Int,
+        preKeyId: Int,
+        preKeyPublic: ECPublicKey?,
+        signedPreKeyId: Int,
+        signedPreKeyPublic: ECPublicKey,
+        signedPreKeySignature: ByteArray,
+        identityKey: IdentityKey
+    ): PreKeyBundle {
+        // Create a dummy Kyber key - the server will not use it since kyberPreKeyId = -1
+        // Kyber1024 public key format: 0x07 (type) + 1567 bytes of key data
+        val dummyKyberKey = org.signal.libsignal.protocol.kem.KEMPublicKey(
+            ByteArray(1568) { if (it == 0) 0x07 else 0x00 }
+        )
         return PreKeyBundle(
             registrationId,
             deviceId,
@@ -129,7 +185,10 @@ class DeviceManager(
             signedPreKeyId,
             signedPreKeyPublic,
             signedPreKeySignature,
-            identityKey
+            identityKey,
+            -1,
+            dummyKyberKey,
+            ByteArray(0)
         )
     }
 

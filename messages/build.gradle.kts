@@ -162,7 +162,7 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     // Signal protocol crypto (Double Ratchet, sealed sender, pre-keys, etc.)
-    implementation("org.signal:libsignal-android:0.68.1")
+    implementation("org.signal:libsignal-android:0.86.5")
 
     // OkHttp — WebSocket transport for Signal
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
