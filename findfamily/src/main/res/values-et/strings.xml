@@ -86,16 +86,16 @@
     <string name="permission_enable_all_the_time">2. Valikust „Luba alati“ anna nõusolek taustal töötamiseks</string>
     <string name="permission_background_explanation">Tagamaks, et asukoha tuvastamine toimib taustateenusena, vali järgmisest vaatest „Luba alati“.</string>
     <string name="user_card_status">Uuendatud %1$s\n%2$s\n%3$s</string>
-    <string name="notification_channel_uwb_request_name">Täppisotsingu päringud</string>
-    <string name="notification_channel_uwb_request_desc">Keegi kasutab sinu asukoha tuvastamiseks täppisotsingut</string>
+    <string name="notification_channel_uwb_request_name">Otsi lähedalt (UWB) päringud</string>
+    <string name="notification_channel_uwb_request_desc">Keegi kasutab sinu asukoha tuvastamiseks Otsi lähedalt (UWB)</string>
     <string name="notification_uwb_request_title">Keegi on sind leidmas</string>
-    <string name="notification_uwb_request_text">%1$s kasutab täppisotsingut. Klõpsa ja näed vahemaad ning suunda.</string>
-    <string name="uwb_action_find_precision">Otsi täpselt</string>
+    <string name="notification_uwb_request_text">%1$s kasutab Otsi lähedalt (UWB). Klõpsa ja näed vahemaad ning suunda.</string>
+    <string name="uwb_action_find_precision">Otsi lähedalt (UWB)</string>
     <string name="uwb_unknown_peer_name">Keegi</string>
-    <string name="uwb_status_starting">Täppisotsing on seadistamisel…</string>
+    <string name="uwb_status_starting">Otsi lähedalt (UWB) on seadistamisel…</string>
     <string name="uwb_status_waiting">Ootel teise seadme järgi…</string>
     <string name="uwb_status_peer_disconnected">Teine seade on kaotsis. Proovi lähemale liikuda.</string>
-    <string name="uwb_status_unsupported">Täppisotsing pole selles seadmes toetatud.</string>
+    <string name="uwb_status_unsupported">Otsi lähedalt (UWB) pole selles seadmes toetatud.</string>
     <string name="uwb_status_failed">Täppisotsing ei toiminud.</string>
     <string name="uwb_direction_unavailable_hint">Suunasignaali tuvastamiseks liiguta oma telefoni ringi</string>
 </resources>

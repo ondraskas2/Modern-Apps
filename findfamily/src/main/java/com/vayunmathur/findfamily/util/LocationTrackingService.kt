@@ -293,7 +293,7 @@ class LocationTrackingService : Service(), SensorEventListener {
                 Networking.init(userDao, DataStoreUtils.getInstance(this@LocationTrackingService))
 
                 // Hoist the UWB ranging session into this foreground service
-                // so we can auto-accept incoming Precision Finding requests
+                // so we can auto-accept incoming Find Nearby (UWB) requests
                 // (and keep the session alive) without the user having to
                 // bring the app to foreground first. See UwbSessionManager.
                 UwbSessionManager.init(this@LocationTrackingService, userDao)
@@ -418,7 +418,7 @@ class LocationTrackingService : Service(), SensorEventListener {
             description = getString(R.string.notification_channel_entry_exit_desc)
         }
 
-        // 4. UWB Precision Finding Request Channel
+        // 4. UWB Find Nearby (UWB) Request Channel
         val uwbChannel = NotificationChannel(
             UWB_REQUEST_CHANNEL_ID,
             getString(R.string.notification_channel_uwb_request_name),
@@ -472,7 +472,7 @@ class LocationTrackingService : Service(), SensorEventListener {
     }
 
     /**
-     * Notification fired when an incoming UWB Precision Finding request arrives
+     * Notification fired when an incoming UWB Find Nearby (UWB) request arrives
      * via the heartbeat. Tapping it opens MainActivity with a deep link to the
      * ranging screen for the requesting user.
      */

@@ -177,7 +177,7 @@ fun MainPage(
                     } else if (selectedUserId != null) {
                         if (selectedUserId != Networking.userid) {
                             val user by ffViewModel.userByIdState(selectedUserId!!)
-                            // UWB Precision Finding requires the public android.ranging API
+                            // UWB Find Nearby (UWB) requires the public android.ranging API
                             // (Android 15+). Hide the entry point on older devices.
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) {
                                 IconButton({

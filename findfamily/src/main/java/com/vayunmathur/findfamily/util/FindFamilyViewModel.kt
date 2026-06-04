@@ -61,7 +61,7 @@ import kotlin.time.Duration.Companion.days
  *  - cached feature-availability check (network provider + geocoder)
  *  - networking-backed writes invoked from dialogs (temporary-link creation,
  *    add/accept person)
- *  - UWB Precision Finding session state and handshake
+ *  - UWB Find Nearby (UWB) session state and handshake
  *  - one-time startup work previously triggered from composables (sync job,
  *    self-user registration, week-old location cleanup)
  */
@@ -313,7 +313,7 @@ class FindFamilyViewModel(
     }
 
     // ------------------------------------------------------------------
-    // UWB Precision Finding
+    // UWB Find Nearby (UWB)
     //
     // The session lifecycle is owned by the process-global UwbSessionManager
     // (hosted by LocationTrackingService so it can auto-accept incoming
@@ -331,7 +331,7 @@ class FindFamilyViewModel(
         UwbSessionManager.startAsInitiator(peerUserId)
     }
 
-    /** User dismissed the Precision Finding screen. */
+    /** User dismissed the Find Nearby (UWB) screen. */
     fun stopRanging() {
         UwbSessionManager.stop()
     }

@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
  *   `/api/uwb/receive` once per heartbeat tick and [emit]s each envelope here.
  *
  * Consumer: [com.vayunmathur.findfamily.util.FindFamilyViewModel] subscribes
- *   while the Precision Finding screen is open to drive the WaitingForPeer
+ *   while the Find Nearby (UWB) screen is open to drive the WaitingForPeer
  *   handshake. When the VM isn't alive (e.g. peer wakes a backgrounded app),
  *   the service itself posts a notification offering to open the screen.
  *

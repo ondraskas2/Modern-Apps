@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Hoisting the session out of the (activity-scoped) ViewModel into a
  * service-scoped singleton lets the existing foreground `LocationTrackingService`
- * auto-accept incoming Precision Finding requests from peers — i.e. range in
+ * auto-accept incoming Find Nearby (UWB) requests from peers — i.e. range in
  * the background without requiring the user to tap a notification first.
  * This works because the session is owned by the foreground service rather
  * than an Activity, so Android keeps the process eligible for ranging
@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object UwbSessionManager {
 
-    /** UI-facing state machine for the Precision Finding screen. */
+    /** UI-facing state machine for the Find Nearby (UWB) screen. */
     sealed interface UwbSessionState {
         data object Idle : UwbSessionState
         data object Starting : UwbSessionState
@@ -125,7 +125,7 @@ object UwbSessionManager {
         Log.i(TAG, "startAsInitiator(peer=$peerUserId) entered. isSupportedSdk=$isSupportedSdk initialized=${initialized.get()} state=${_state.value}")
         if (!isSupportedSdk) {
             _state.value = UwbSessionState.Unsupported(
-                "Precision Finding requires Android 15 or newer."
+                "Find Nearby (UWB) requires Android 15 or newer."
             )
             return
         }
@@ -173,7 +173,12 @@ object UwbSessionManager {
                     sessionId = info.sessionId
                 )
             )
-            val ok = Networking.publishUwbMessage(envelope, peerUserId, peerUser)
+            val ok = try {
+                Networking.publishUwbMessage(envelope, peerUserId, peerUser)
+            } catch (e: Exception) {
+                Log.e(TAG, "startAsInitiator: publishUwbMessage threw exception", e)
+                false
+            }
             Log.i(TAG, "startAsInitiator: publishUwbMessage returned $ok")
             if (!ok) {
                 _state.value = UwbSessionState.Failed("Could not reach peer")
@@ -238,7 +243,12 @@ object UwbSessionManager {
             kind = UwbEnvelopeKind.REQUEST,
             payload = UwbHandshake(accessoryConfigDataB64 = UwbBytes.b64(accessoryData))
         )
-        val ok = Networking.publishUwbMessage(envelope, peerUserId, peerUser)
+        val ok = try {
+            Networking.publishUwbMessage(envelope, peerUserId, peerUser)
+        } catch (e: Exception) {
+            Log.e(TAG, "publishUwbMessage threw exception", e)
+            false
+        }
         if (!ok) {
             _state.value = UwbSessionState.Failed("Could not reach peer")
             stopLocal()
@@ -314,8 +324,18 @@ object UwbSessionManager {
                 kind = UwbEnvelopeKind.ACK,
                 payload = UwbHandshake(addressB64 = UwbBytes.b64(localAddress))
             )
-            val peer = userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
-            val ok = Networking.publishUwbMessage(ack, request.sender.toLong(), peer)
+            val peer = try {
+                userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to lookup peer user", e)
+                null
+            }
+            val ok = try {
+                Networking.publishUwbMessage(ack, request.sender.toLong(), peer)
+            } catch (e: Exception) {
+                Log.e(TAG, "publishUwbMessage for ACK threw exception", e)
+                false
+            }
             if (!ok) {
                 _state.value = UwbSessionState.Failed("Could not reach peer")
                 stopLocal()
@@ -350,8 +370,18 @@ object UwbSessionManager {
             kind = UwbEnvelopeKind.CONFIG,
             payload = UwbHandshake(accessoryConfigDataB64 = UwbBytes.b64(accessoryData))
         )
-        val peer = userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
-        val ok = Networking.publishUwbMessage(configEnvelope, request.sender.toLong(), peer)
+        val peer = try {
+            userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to lookup peer user for CONFIG", e)
+            null
+        }
+        val ok = try {
+            Networking.publishUwbMessage(configEnvelope, request.sender.toLong(), peer)
+        } catch (e: Exception) {
+            Log.e(TAG, "publishUwbMessage for CONFIG threw exception", e)
+            false
+        }
         if (!ok) {
             _state.value = UwbSessionState.Failed("Could not reach peer")
             stopLocal()
@@ -371,6 +401,7 @@ object UwbSessionManager {
                 UwbBytes.from(shareable.payload!!.shareableConfigDataB64!!)
             )
         } catch (e: Throwable) {
+            Log.e(TAG, "Failed to parse shareable config data", e)
             _state.value = UwbSessionState.Failed(e.message ?: "Could not parse iOS config")
             stopLocal()
             return
@@ -421,7 +452,9 @@ object UwbSessionManager {
                     }
                 }
             } catch (e: Exception) {
-                _state.value = UwbSessionState.Failed(e.message ?: "Ranging failed")
+                Log.e(TAG, "Exception in startRangingStream", e)
+                _state.value = UwbSessionState.Failed("Ranging stream failed: ${e.message}")
+                stopLocal()
             }
         }
     }

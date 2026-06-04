@@ -46,7 +46,7 @@ import com.vayunmathur.library.ui.IconNavigationArrow
 import com.vayunmathur.library.util.NavBackStack
 
 /**
- * Full-screen UWB Precision Finding view. Shows distance + a directional
+ * Full-screen UWB Find Nearby view. Shows distance + a directional
  * arrow to the selected peer.
  *
  * The screen owns the UWB session lifecycle: it triggers [FindFamilyViewModel.startRanging]
@@ -114,7 +114,7 @@ fun UwbRangingScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(peer.name) },
+                title = { Text(peer?.name ?: "Unknown") },
                 navigationIcon = { IconNavigation { backStack.pop() } }
             )
         }

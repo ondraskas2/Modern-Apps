@@ -14,7 +14,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Precision Finding screen uses the public android.ranging API
+    <!-- Find Nearby (UWB) screen uses the public android.ranging API
          introduced in Android 15. We do not depend on androidx.core.uwb
          (its only backend is GMS, which is broken on GrapheneOS), and
          consequently do not declare UWB_RANGING. -->

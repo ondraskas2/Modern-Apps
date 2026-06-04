@@ -236,7 +236,7 @@ sealed interface Route: NavKey {
     @Serializable
     data object MissingFeaturesDialog: Route
 
-    /** UWB Precision Finding screen for the given peer. Full screen (no DialogPage metadata). */
+    /** UWB Find Nearby (UWB) screen for the given peer. Full screen (no DialogPage metadata). */
     @Serializable
     data class UwbRangingPage(val userId: Long): Route
 }

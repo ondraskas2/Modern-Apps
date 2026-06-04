@@ -86,16 +86,16 @@
     <string name="me_label">我</string>
     <string name="missing_features_title">所需功能已禁用</string>
     <string name="missing_features_explanation">FindFamily 需要网络定位和地理编码器才能正常运行。您必须启用它们才能继续。</string>
-    <string name="notification_channel_uwb_request_name">精确查找请求</string>
-    <string name="notification_channel_uwb_request_desc">有人正在使用精确查找来定位您</string>
+    <string name="notification_channel_uwb_request_name">附近查找 (UWB) 请求</string>
+    <string name="notification_channel_uwb_request_desc">有人正在使用附近查找 (UWB) 来定位您</string>
     <string name="notification_uwb_request_title">有人正在查找您</string>
-    <string name="notification_uwb_request_text">%1$s 正在使用精确查找。点按即可查看距离和方向。</string>
-    <string name="uwb_action_find_precision">精准查找</string>
+    <string name="notification_uwb_request_text">%1$s 正在使用附近查找 (UWB)。点按即可查看距离和方向。</string>
+    <string name="uwb_action_find_precision">附近查找 (UWB)</string>
     <string name="uwb_unknown_peer_name">某人</string>
-    <string name="uwb_status_starting">正在设置精确查找…</string>
+    <string name="uwb_status_starting">正在设置附近查找 (UWB)…</string>
     <string name="uwb_status_waiting">正在等待对方设备…</string>
     <string name="uwb_status_peer_disconnected">与对方设备失去连接。请靠近一些。</string>
-    <string name="uwb_status_unsupported">此设备不支持精确查找。</string>
+    <string name="uwb_status_unsupported">此设备不支持附近查找 (UWB)。</string>
     <string name="uwb_status_failed">精确查找失败。</string>
     <string name="uwb_direction_unavailable_hint">请移动您的手机以寻找方向信号</string>
 </resources>

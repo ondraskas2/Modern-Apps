@@ -86,16 +86,16 @@
     <string name="section_saved_places">Luoghi salvati</string>
     <string name="contact_findfamily_id">ID FindFamily del contatto</string>
     <string name="missing_features_explanation">FindFamily richiede la geolocalizzazione di rete e un geocoder per funzionare correttamente. Devi attivarli per continuare.</string>
-    <string name="notification_channel_uwb_request_name">Richiesta di Posizione precisa</string>
-    <string name="notification_channel_uwb_request_desc">Qualcuno sta utilizzando Posizione precisa per cercarti</string>
+    <string name="notification_channel_uwb_request_name">Richieste Trova nelle vicinanze (UWB)</string>
+    <string name="notification_channel_uwb_request_desc">Qualcuno sta utilizzando Trova nelle vicinanze (UWB) per cercarti</string>
     <string name="notification_uwb_request_title">Qualcuno ti sta cercando</string>
-    <string name="notification_uwb_request_text">%1$s sta usando Posizione precisa. Tocca per vedere distanza e direzione.</string>
-    <string name="uwb_action_find_precision">Trova con precisione</string>
+    <string name="notification_uwb_request_text">%1$s sta usando Trova nelle vicinanze (UWB). Tocca per vedere distanza e direzione.</string>
+    <string name="uwb_action_find_precision">Trova nelle vicinanze (UWB)</string>
     <string name="uwb_unknown_peer_name">Qualcuno</string>
-    <string name="uwb_status_starting">Configurazione di Posizione precisa…</string>
+    <string name="uwb_status_starting">Configurazione di Trova nelle vicinanze (UWB)…</string>
     <string name="uwb_status_waiting">In attesa dell\'altro dispositivo…</string>
     <string name="uwb_status_peer_disconnected">Connessione con l\'altro dispositivo persa. Avvicinati.</string>
-    <string name="uwb_status_unsupported">Posizione precisa non è supportata su questo dispositivo.</string>
+    <string name="uwb_status_unsupported">Trova nelle vicinanze (UWB) non è supportata su questo dispositivo.</string>
     <string name="uwb_status_failed">Ricerca con Posizione precisa fallita.</string>
     <string name="uwb_direction_unavailable_hint">Muovi il telefono per trovare il segnale della direzione</string>
 </resources>

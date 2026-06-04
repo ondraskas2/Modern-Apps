@@ -157,11 +157,37 @@ class UwbController(context: Context) {
             return@callbackFlow
         }
 
+        val localUwbAddress = try {
+            UwbAddress.fromBytes(localAddress)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create UwbAddress from localAddress", e)
+            trySend(
+                RangingSample(
+                    null, null, null, System.nanoTime(),
+                    peerDisconnected = true
+                )
+            )
+            close(IllegalStateException("Invalid local UWB address", e))
+            return@callbackFlow
+        }
+        val peerUwbAddress = try {
+            UwbAddress.fromBytes(peerAddress)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create UwbAddress from peerAddress", e)
+            trySend(
+                RangingSample(
+                    null, null, null, System.nanoTime(),
+                    peerDisconnected = true
+                )
+            )
+            close(IllegalStateException("Invalid peer UWB address", e))
+            return@callbackFlow
+        }
         val uwbParams = UwbRangingParams.Builder(
             /* sessionId = */ sessionId,
             /* configId = */ UwbRangingParams.CONFIG_UNICAST_DS_TWR,
-            /* deviceAddress = */ UwbAddress.fromBytes(localAddress),
-            /* peerAddress = */ UwbAddress.fromBytes(peerAddress)
+            /* deviceAddress = */ localUwbAddress,
+            /* peerAddress = */ peerUwbAddress
         )
             .setComplexChannel(
                 UwbComplexChannel.Builder()
@@ -189,7 +215,7 @@ class UwbController(context: Context) {
 
         // Try the richest SessionConfig that the device hasn't rejected.
         // Tier 2 = AoA + DIRECTIONAL antenna + IMU sensor fusion (best AoA — this
-        //         is what Find My / Apple Precision Finding use to disambiguate
+        //         is what Find My / Apple Find Nearby uses to disambiguate
         //         the front/back hemisphere and stabilise the arrow).
         // Tier 1 = AoA + IMU sensor fusion only (drop the antenna mode flag).
         // Tier 0 = AoA only (Pixel 7 Pro et al. only accept this).
@@ -212,11 +238,27 @@ class UwbController(context: Context) {
                     currentTier -= 1
                     Log.w(TAG, "Retrying at tier=$currentTier")
                     runCatching { session?.close() }
-                    val newConfig = preferenceForTier(currentTier, role, rawDevice)
-                    val newSession = mgr.createRangingSession(executor, this)
-                    if (newSession != null) {
-                        session = newSession
-                        newSession.start(newConfig)
+                    val newConfig = try {
+                        preferenceForTier(currentTier, role, rawDevice)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to create preference for tier $currentTier", e)
+                        null
+                    }
+                    if (newConfig != null) {
+                        val newSession = try {
+                            mgr.createRangingSession(executor, this)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to create RangingSession during retry", e)
+                            null
+                        }
+                        if (newSession != null) {
+                            session = newSession
+                            try {
+                                newSession.start(newConfig)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to start RangingSession during retry", e)
+                            }
+                        }
                     }
                     return
                 }
@@ -247,51 +289,61 @@ class UwbController(context: Context) {
                 close()
             }
             override fun onResults(peer: RangingDevice, data: RangingData) {
-                val d = data.distance
-                val az = data.azimuth
-                val el = data.elevation
-                // RangingMeasurement.measurement is in RADIANS on android.ranging.
-                val rawAzDeg = az?.measurement?.let { Math.toDegrees(it).toFloat() }
-                // 2-antenna AoA (Pixel 9 Pro XL etc.) has an inherent
-                // front/back ambiguity — for a peer at azimuth α the radio
-                // CAN'T distinguish it from a peer at (180° − α). So the
-                // reading oscillates between e.g. 0° and 180°. Fold every
-                // sample into the front hemisphere [-90°, +90°]; we assume
-                // the user is pointing the phone at the peer (otherwise why
-                // open the Find screen?). 3-antenna arrays (Pixel 7 Pro)
-                // already give values inside [-90°, +90°] so the fold is a
-                // no-op there.
-                val foldedAzDeg = rawAzDeg?.let { v ->
-                    when {
-                        v > 90f -> 180f - v
-                        v < -90f -> -180f - v
-                        else -> v
+                try {
+                    val d = data.distance
+                    val az = data.azimuth
+                    val el = data.elevation
+                    // RangingMeasurement.measurement is in RADIANS on android.ranging.
+                    val rawAzDeg = az?.measurement?.let { Math.toDegrees(it).toFloat() }
+                    // 2-antenna AoA (Pixel 9 Pro XL etc.) has an inherent
+                    // front/back ambiguity — for a peer at azimuth α the radio
+                    // CAN'T distinguish it from a peer at (180° − α). So the
+                    // reading oscillates between e.g. 0° and 180°. Fold every
+                    // sample into the front hemisphere [-90°, +90°]; we assume
+                    // the user is pointing the phone at the peer (otherwise why
+                    // open the Find screen?). 3-antenna arrays (Pixel 7 Pro)
+                    // already give values inside [-90°, +90°] so the fold is a
+                    // no-op there.
+                    val foldedAzDeg = rawAzDeg?.let { v ->
+                        when {
+                            v > 90f -> 180f - v
+                            v < -90f -> -180f - v
+                            else -> v
+                        }
                     }
-                }
-                // Filter out low-confidence individual measurements per-axis.
-                // CONFIDENCE_LOW=0, CONFIDENCE_MEDIUM=1, CONFIDENCE_HIGH=2.
-                // We keep MEDIUM and HIGH; drop LOW (the radio's own "this
-                // is junk" signal). Each axis is filtered independently so
-                // we can show distance even when the angles are noisy.
-                val distOk = (d?.confidence ?: 0) >= 1
-                val azOk = (az?.confidence ?: 0) >= 1
-                val elOk = (el?.confidence ?: 0) >= 1
-                Log.i(
-                    TAG,
-                    "onResults: dist=${d?.measurement} (conf=${d?.confidence})  raw_az=$rawAzDeg (conf=${az?.confidence})  folded_az=$foldedAzDeg  el=${el?.measurement} (conf=${el?.confidence})  rssi=${runCatching { data.rssi }.getOrNull()}"
-                )
-                trySend(
-                    RangingSample(
-                        distanceMeters = if (distOk) d?.measurement?.toFloat() else null,
-                        azimuthDeg = if (azOk) foldedAzDeg else null,
-                        elevationDeg = if (elOk) el?.measurement?.let { Math.toDegrees(it).toFloat() } else null,
-                        timestampNanos = System.nanoTime()
+                    // Filter out low-confidence individual measurements per-axis.
+                    // CONFIDENCE_LOW=0, CONFIDENCE_MEDIUM=1, CONFIDENCE_HIGH=2.
+                    // We keep MEDIUM and HIGH; drop LOW (the radio's own "this
+                    // is junk" signal). Each axis is filtered independently so
+                    // we can show distance even when the angles are noisy.
+                    val distOk = (d?.confidence ?: 0) >= 1
+                    val azOk = (az?.confidence ?: 0) >= 1
+                    val elOk = (el?.confidence ?: 0) >= 1
+                    Log.i(
+                        TAG,
+                        "onResults: dist=${d?.measurement} (conf=${d?.confidence})  raw_az=$rawAzDeg (conf=${az?.confidence})  folded_az=$foldedAzDeg  el=${el?.measurement} (conf=${el?.confidence})  rssi=${runCatching { data.rssi }.getOrNull()}"
                     )
-                )
+                    trySend(
+                        RangingSample(
+                            distanceMeters = if (distOk) d?.measurement?.toFloat() else null,
+                            azimuthDeg = if (azOk) foldedAzDeg else null,
+                            elevationDeg = if (elOk) el?.measurement?.let { Math.toDegrees(it).toFloat() } else null,
+                            timestampNanos = System.nanoTime()
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing RangingData in onResults", e)
+                    // Continue processing - don't crash on malformed data
+                }
             }
         }
 
-        val newSession = mgr.createRangingSession(executor, callback)
+        val newSession = try {
+            mgr.createRangingSession(executor, callback)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create RangingSession", e)
+            null
+        }
         if (newSession == null) {
             trySend(
                 RangingSample(
@@ -299,11 +351,23 @@ class UwbController(context: Context) {
                     peerDisconnected = true
                 )
             )
-            close(IllegalStateException("RangingManager.createRangingSession returned null"))
+            close(IllegalStateException("RangingManager.createRangingSession returned null or threw exception"))
             return@callbackFlow
         }
         session = newSession
-        newSession.start(preferenceForTier(startTier, role, rawDevice))
+        try {
+            newSession.start(preferenceForTier(startTier, role, rawDevice))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start RangingSession", e)
+            trySend(
+                RangingSample(
+                    null, null, null, System.nanoTime(),
+                    peerDisconnected = true
+                )
+            )
+            close(IllegalStateException("Failed to start RangingSession", e))
+            return@callbackFlow
+        }
 
         awaitClose {
             runCatching { session?.stop() }
