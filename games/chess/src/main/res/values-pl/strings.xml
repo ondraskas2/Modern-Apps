@@ -1,3 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Chess</string>
+    <string name="start_new_game">Startuj nową grę</string>
+    <string name="play_as">"Graj jako    "</string>
+    <string name="color_white">Biały</string>
+    <string name="color_black">Czarny</string>
+    <string name="difficulty_easy">Łatwy</string>
+    <string name="difficulty_medium">Średni</string>
+    <string name="difficulty_hard">Cięki</string>
+    <string name="difficulty_master">Mistrz</string>
+    <string name="start_game">Rozpocznij partię</string>
+    <string name="new_game">Rozpocznij nową partię</string>
+    <string name="two_player_local">2-Graczy lokalnie</string>
+    <string name="human_vs_ai">Człowiek vs AI</string>
+    <string name="promote_pawn">Promuj pionka</string>
+    <string name="check">Szach!</string>
+    <string name="checkmate_wins">Szachmat! %1$s wygrał.</string>
+    <string name="white_wins">Szachmat! Biały wygrał.</string>
+    <string name="black_wins">Szachmat! Czarny wygrał.</string>
+    <string name="piece_white_king">Biały król</string>
+    <string name="piece_white_queen">Biały hetman</string>
+    <string name="piece_white_rook">Biała wieża</string>
+    <string name="piece_white_bishop">Biały goniec</string>
+    <string name="piece_white_knight">Biały skoczek</string>
+    <string name="piece_white_pawn">Biały pionek</string>
+    <string name="piece_black_king">Czarny król</string>
+    <string name="piece_black_queen">Czarny hetman</string>
+    <string name="piece_black_rook">Czarna wieża</string>
+    <string name="piece_black_bishop">Czarny goniec</string>
+    <string name="piece_black_knight">Czarny skoczek</string>
+    <string name="piece_black_pawn">Czarny pionek</string>
 </resources>
