@@ -1,3 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Scacchi</string>
+    <string name="start_new_game">Nuova partita</string>
+    <string name="play_as">"Gioca come    "</string>
+    <string name="color_white">Bianco</string>
+    <string name="color_black">Nero</string>
+    <string name="difficulty_easy">Facile</string>
+    <string name="difficulty_medium">Intermedio</string>
+    <string name="difficulty_hard">Difficile</string>
+    <string name="difficulty_master">Maestro</string>
+    <string name="start_game">Inizia partita</string>
+    <string name="new_game">Nuova partita</string>
+    <string name="two_player_local">2 giocatori locale</string>
+    <string name="human_vs_ai">Umano vs AI</string>
+    <string name="promote_pawn">Promuovi pedone</string>
+    <string name="check">Scacco!</string>
+    <string name="checkmate_wins">Scacco matto! %1$s vince.</string>
+    <string name="white_wins">Scacco matto! Vince il Bianco.</string>
+    <string name="black_wins">Scacco matto! Vince il Nero.</string>
+    <string name="piece_white_king">Re Bianco</string>
+    <string name="piece_white_queen">Regina Bianca</string>
+    <string name="piece_white_rook">Torre Bianca</string>
+    <string name="piece_white_bishop">Alfiere Bianco</string>
+    <string name="piece_white_knight">Cavallo Bianco</string>
+    <string name="piece_white_pawn">Pedone Bianco</string>
+    <string name="piece_black_king">Re Nero</string>
+    <string name="piece_black_queen">Regina Nera</string>
+    <string name="piece_black_rook">Torre Nera</string>
+    <string name="piece_black_bishop">Alfiere Nero</string>
+    <string name="piece_black_knight">Cavallo Nero</string>
+    <string name="piece_black_pawn">Pedone Nero</string>
 </resources>
