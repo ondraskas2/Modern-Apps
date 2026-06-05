@@ -15,9 +15,12 @@ import androidx.credentials.provider.BeginCreateCredentialResponse
 import androidx.credentials.provider.BeginCreatePublicKeyCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialRequest
 import androidx.credentials.provider.BeginGetCredentialResponse
+import androidx.credentials.provider.BeginGetPasswordOption
 import androidx.credentials.provider.BeginGetPublicKeyCredentialOption
 import androidx.credentials.provider.CreateEntry
+import androidx.credentials.provider.CredentialEntry
 import androidx.credentials.provider.CredentialProviderService
+import androidx.credentials.provider.PasswordCredentialEntry
 import androidx.credentials.provider.ProviderClearCredentialStateRequest
 import androidx.credentials.provider.PublicKeyCredentialEntry
 import com.vayunmathur.library.util.buildDatabase
@@ -33,6 +36,7 @@ class PasskeyCredentialService : CredentialProviderService() {
         applicationContext.buildDatabase<PasswordDatabase>()
     }
     private val passkeyDao by lazy { db.passkeyDao() }
+    private val passwordDao by lazy { db.passwordDao() }
 
     override fun onBeginGetCredentialRequest(
         request: BeginGetCredentialRequest,
@@ -44,30 +48,55 @@ class PasskeyCredentialService : CredentialProviderService() {
                 val responseBuilder = BeginGetCredentialResponse.Builder()
 
                 for (option in request.beginGetCredentialOptions) {
-                    if (option is BeginGetPublicKeyCredentialOption) {
-                        val json = JSONObject(option.requestJson)
-                        val rpId = json.optString("rpId", "")
-                        if (rpId.isBlank()) continue
+                    when (option) {
+                        is BeginGetPublicKeyCredentialOption -> {
+                            val json = JSONObject(option.requestJson)
+                            val rpId = json.optString("rpId", "")
+                            if (rpId.isBlank()) continue
 
-                        val passkeys = passkeyDao.getByRpId(rpId)
-                        for (passkey in passkeys) {
-                            val intent = Intent(applicationContext, PasskeyAuthActivity::class.java).apply {
-                                putExtra(PasskeyAuthActivity.EXTRA_FLOW, PasskeyAuthActivity.FLOW_GET)
-                                putExtra(PasskeyAuthActivity.EXTRA_CREDENTIAL_ID, passkey.credentialId)
+                            val passkeys = passkeyDao.getByRpId(rpId)
+                            for (passkey in passkeys) {
+                                val intent = Intent(applicationContext, PasskeyAuthActivity::class.java).apply {
+                                    putExtra(PasskeyAuthActivity.EXTRA_FLOW, PasskeyAuthActivity.FLOW_GET)
+                                    putExtra(PasskeyAuthActivity.EXTRA_CREDENTIAL_ID, passkey.credentialId)
+                                }
+                                val pendingIntent = PendingIntent.getActivity(
+                                    applicationContext,
+                                    passkey.id.toInt(),
+                                    intent,
+                                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                                )
+                                val entry = PublicKeyCredentialEntry.Builder(
+                                    applicationContext,
+                                    passkey.userName,
+                                    pendingIntent,
+                                    option,
+                                ).build()
+                                responseBuilder.addCredentialEntry(entry)
                             }
-                            val pendingIntent = PendingIntent.getActivity(
-                                applicationContext,
-                                passkey.id.toInt(),
-                                intent,
-                                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                            )
-                            val entry = PublicKeyCredentialEntry.Builder(
-                                applicationContext,
-                                passkey.userName,
-                                pendingIntent,
-                                option,
-                            ).build()
-                            responseBuilder.addCredentialEntry(entry)
+                        }
+                        is BeginGetPasswordOption -> {
+                            val allPasswords = passwordDao.getAll()
+                            for (pass in allPasswords) {
+                                val intent = Intent(applicationContext, PasskeyAuthActivity::class.java).apply {
+                                    putExtra(PasskeyAuthActivity.EXTRA_FLOW, PasskeyAuthActivity.FLOW_PASSWORD)
+                                    putExtra(EXTRA_PASSWORD_ID, pass.id)
+                                }
+                                val pendingIntent = PendingIntent.getActivity(
+                                    applicationContext,
+                                    (pass.id + 100000).toInt(),
+                                    intent,
+                                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                                )
+                                val entry = PasswordCredentialEntry.Builder(
+                                    applicationContext,
+                                    pass.userId,
+                                    pendingIntent,
+                                    option,
+                                ).setDisplayName(pass.name.ifBlank { null })
+                                    .build()
+                                responseBuilder.addCredentialEntry(entry)
+                            }
                         }
                     }
                 }
@@ -124,5 +153,6 @@ class PasskeyCredentialService : CredentialProviderService() {
 
     companion object {
         private const val TAG = "PasskeyCredService"
+        const val EXTRA_PASSWORD_ID = "password_id"
     }
 }

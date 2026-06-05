@@ -15,4 +15,5 @@ dependencies {
     implementRoom(libs)
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.credentials.lib)
+    implementation(libs.androidx.autofill)
 }

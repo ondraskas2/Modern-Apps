@@ -23,6 +23,9 @@ interface PasswordDao {
     @Query("SELECT * FROM Password WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<Password?>
 
+    @Query("SELECT * FROM Password WHERE id = :id")
+    suspend fun getById(id: Long): Password?
+
     @Upsert
     suspend fun upsert(value: Password): Long
 

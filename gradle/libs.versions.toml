@@ -43,6 +43,7 @@ okio = "3.17.0"
 kotlinxSerializationJson = "1.11.0"
 kotlinxDatetime = "0.8.0"
 room = "2.8.4"
+autofill = "1.1.0"
 credentials = "1.6.0"
 googleid = "1.2.0"
 
@@ -149,6 +150,7 @@ libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", vers
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 jakarta-mail = { module = "com.sun.mail:android-mail", version = "1.6.7" }
 jakarta-activation = { module = "com.sun.mail:android-activation", version = "1.6.7" }
+androidx-autofill = { group = "androidx.autofill", name = "autofill", version.ref = "autofill" }
 androidx-credentials-lib = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }

@@ -13,6 +13,7 @@ import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.passwords.data.Passkey
 import com.vayunmathur.passwords.data.PasswordDatabase
 import com.vayunmathur.passwords.util.Cbor
+import com.vayunmathur.passwords.util.PasskeyCredentialService
 import com.vayunmathur.passwords.util.PasskeyUtils
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -41,6 +42,7 @@ class PasskeyAuthActivity : FragmentActivity() {
             when (flow) {
                 FLOW_CREATE -> handleCreate()
                 FLOW_GET -> handleGet()
+                FLOW_PASSWORD -> handlePassword()
                 else -> {
                     Log.e(TAG, "Unknown flow: $flow")
                     setResult(RESULT_CANCELED)
@@ -303,11 +305,34 @@ class PasskeyAuthActivity : FragmentActivity() {
         }
     }
 
+    private fun handlePassword() {
+        val passwordId = intent.getLongExtra(PasskeyCredentialService.EXTRA_PASSWORD_ID, -1)
+        if (passwordId == -1L) {
+            Log.e(TAG, "No password ID in intent")
+            setResult(RESULT_CANCELED)
+            return
+        }
+        val password = runBlocking { db.passwordDao().getById(passwordId) }
+        if (password == null) {
+            Log.e(TAG, "Password not found for id=$passwordId")
+            setResult(RESULT_CANCELED)
+            return
+        }
+        val credentialResponse = androidx.credentials.PasswordCredential(password.userId, password.password)
+        val result = Intent()
+        PendingIntentHandler.setGetCredentialResponse(
+            result,
+            androidx.credentials.GetCredentialResponse(credentialResponse),
+        )
+        setResult(RESULT_OK, result)
+    }
+
     companion object {
         const val EXTRA_FLOW = "flow"
         const val EXTRA_CREDENTIAL_ID = "credential_id"
         const val FLOW_CREATE = "create"
         const val FLOW_GET = "get"
+        const val FLOW_PASSWORD = "password"
         private const val TAG = "PasskeyAuthActivity"
         private val AAGUID = uuidToBytes(UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890"))
 
