@@ -22,7 +22,40 @@ open class DatabaseHelper(val context: Context) {
     fun isKeyGenerated(): Boolean {
         val keyStore = KeyStore.getInstance("AndroidKeyStore")
         keyStore.load(null)
-        return keyStore.containsAlias(keyStoreAlias)
+        val keyExists = keyStore.containsAlias(keyStoreAlias)
+        if (!keyExists) return false
+        
+        // Also check if IV exists in SharedPreferences
+        // If key exists but IV doesn't, the data is corrupted (e.g., user cleared app data)
+        // In that case, we need to regenerate the key
+        val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
+        val ivExists = prefs.contains(ivKey)
+        if (!ivExists) {
+            // Key exists but IV doesn't - clean up the orphaned key
+            try {
+                keyStore.deleteEntry(keyStoreAlias)
+            } catch (e: Exception) {
+                // Ignore errors when deleting key
+            }
+            return false
+        }
+        return true
+    }
+    
+    fun deleteKey() {
+        try {
+            val keyStore = KeyStore.getInstance("AndroidKeyStore")
+            keyStore.load(null)
+            keyStore.deleteEntry(keyStoreAlias)
+        } catch (e: Exception) {
+            // Ignore errors when deleting key
+        }
+        // Also clear the SharedPreferences
+        val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
+        prefs.edit {
+            remove(passphraseKey)
+            remove(ivKey)
+        }
     }
 
     open fun generateKey() {
