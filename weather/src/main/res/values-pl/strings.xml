@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pogoda</string>
+    <string name="search_location">Wyszukaj lokalizację</string>
+    <string name="confirm_delete">Potwierdź usunięcie</string>
+    <string name="city_name_hint">Nazwa miasta</string>
+    <string name="weather_title">Pogoda</string>
+    <string name="add_location">Dodaj lokalizację</string>
 </resources>
