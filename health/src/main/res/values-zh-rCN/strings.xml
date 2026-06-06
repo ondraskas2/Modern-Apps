@@ -27,7 +27,7 @@
     <string name="metric_distance">距离</string>
     <string name="metric_elevation_gained">海拔上升</string>
     <string name="metric_floors_climbed">爬楼层数</string>
-    <string name="metric_hydration">水分摄入</string>
+    <string name="metric_hydration">饮水量</string>
     <string name="metric_blood_pressure">血压</string>
     <string name="metric_blood_glucose">血糖</string>
     <string name="metric_vo2_max">最大摄氧量</string>
@@ -75,7 +75,7 @@
     <string name="label_distance">距离</string>
     <string name="label_heart_rate">心率</string>
     <string name="label_sleep">睡眠</string>
-    <string name="label_hydration">水分摄入</string>
+    <string name="label_hydration">饮水量</string>
     <string name="label_nutrition">营养</string>
     <string name="label_blood_pressure">血压</string>
     <string name="label_blood_glucose">血糖</string>
@@ -127,4 +127,21 @@
     <string name="section_quick_stats">快速统计</string>
     <string name="section_today_activity">今日</string>
     <string name="section_this_week">本周</string>
+    <string name="search">搜索</string>
+    <string name="nutrition_breakdown">营养明细</string>
+    <string name="recipes">食谱</string>
+    <string name="ingredients">配料</string>
+    <string name="rename_ingredient">重命名配料</string>
+    <string name="custom_name">自定义名称</string>
+    <string name="save">保存</string>
+    <string name="recipe_name">食谱名称</string>
+    <string name="add">添加</string>
+    <string name="save_recipe">保存食谱</string>
+    <string name="set_quantity_for_format">为 %1$s 设置数量</string>
+    <string name="quantity">数量</string>
+    <string name="unit">单位</string>
+    <string name="confirm">确认</string>
+    <string name="search_ingredient">搜索配料</string>
+    <string name="log_hydration">记录饮水量</string>
+    <string name="log_meal">记录用餐</string>
 </resources>
