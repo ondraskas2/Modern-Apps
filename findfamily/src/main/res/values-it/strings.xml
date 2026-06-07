@@ -96,6 +96,6 @@
     <string name="uwb_status_waiting">In attesa dell\'altro dispositivo…</string>
     <string name="uwb_status_peer_disconnected">Connessione con l\'altro dispositivo persa. Avvicinati.</string>
     <string name="uwb_status_unsupported">Trova nelle vicinanze (UWB) non è supportata su questo dispositivo.</string>
-    <string name="uwb_status_failed">Ricerca con Posizione precisa fallita.</string>
+    <string name="uwb_status_failed">Ricerca nelle vicinanze (UWB) non riuscita.</string>
     <string name="uwb_direction_unavailable_hint">Muovi il telefono per trovare il segnale della direzione</string>
 </resources>
