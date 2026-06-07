@@ -8,4 +8,10 @@
     <string name="new_conversation">Nuova conversazione</string>
     <string name="perm_desc_inference">Consente ad altre app di accedere al servizio di inferenza AI sul dispositivo per estrarre dati strutturati.</string>
     <string name="error_prefix">Errore: %1$s</string>
+    <string name="inference_service">Servizio di inferenza</string>
+    <string name="processing_ai_inference">Elaborazione infereza IA…</string>
+    <string name="error_request_expired">Richiesta scaduta in coda</string>
+    <string name="error_inference_timeout">Tempo scaduto per l\'inferenza</string>
+    <string name="error_ai_engine_failed">Errore del motore IA</string>
+    <string name="error_ai_json_schema_mismatch">L\'IA non è riuscita a restituire un JSON valido corrispondente allo schema.</string>
 </resources>
