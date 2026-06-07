@@ -55,4 +55,11 @@
     <string name="date_time_range_format">%1$s • %2$s - %3$s</string>
     <string name="full_date_time_range_format">%1$s, %2$s - %3$s, %4$s</string>
     <string name="count">Fois</string>
+    <string name="import_button">Importer</string>
+    <string name="delete_this_event">Supprimer l\'événement</string>
+    <string name="delete_all_events">Supprimer tous les événements</string>
+    <string name="by_month_day_label">Par jour du mois (1-31, de -1 à -31)</string>
+    <string name="by_month_day_placeholder">p. ex. 1,15,-1</string>
+    <string name="by_month_label">Par mois (1-12)</string>
+    <string name="by_month_placeholder">p. ex. 1,6,12</string>
 </resources>
