@@ -40,11 +40,6 @@ fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expa
         list
     }
 
-    // When on Groups page, back should navigate to Contacts page
-    androidx.activity.compose.BackHandler {
-        backStack.setLast(Route.ContactsList)
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(

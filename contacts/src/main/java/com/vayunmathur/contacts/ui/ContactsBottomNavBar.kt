@@ -17,19 +17,29 @@ fun ContactsBottomNavBar(backStack: NavBackStack<Route>) {
             icon = { Icon(painterResource(R.drawable.person_24px), contentDescription = null) },
             label = { Text(stringResource(R.string.contacts)) },
             selected = currentRoute is Route.ContactsList,
-            onClick = { if (currentRoute !is Route.ContactsList) backStack.setLast(Route.ContactsList) }
+            onClick = { if (currentRoute !is Route.ContactsList) backStack.pop() }
         )
         NavigationBarItem(
             icon = { Icon(painterResource(R.drawable.baseline_group_24), contentDescription = null) },
             label = { Text(stringResource(R.string.groups)) },
             selected = currentRoute is Route.GroupsList,
-            onClick = { if (currentRoute !is Route.GroupsList) backStack.setLast(Route.GroupsList()) }
+            onClick = {
+                if (currentRoute !is Route.GroupsList) {
+                    if (currentRoute is Route.Settings) backStack.pop()
+                    backStack.add(Route.GroupsList())
+                }
+            }
         )
         NavigationBarItem(
             icon = { IconSettings() },
             label = { Text(stringResource(R.string.settings)) },
             selected = currentRoute is Route.Settings,
-            onClick = { if (currentRoute !is Route.Settings) backStack.setLast(Route.Settings) }
+            onClick = {
+                if (currentRoute !is Route.Settings) {
+                    if (currentRoute is Route.GroupsList) backStack.pop()
+                    backStack.add(Route.Settings)
+                }
+            }
         )
     }
 }
