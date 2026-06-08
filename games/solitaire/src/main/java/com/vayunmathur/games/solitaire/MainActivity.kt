@@ -375,7 +375,8 @@ fun GameScreen(backStack: NavBackStack<Route>, viewModel: SolitaireViewModel, mo
                     elapsedSeconds = elapsed,
                     moveCount = moveCount,
                     onNewGame = {
-                        viewModel.selectMode(mode)
+                        val drawMode = uiState.klondike?.drawMode ?: DrawMode.DRAW_ONE
+                        viewModel.selectMode(mode, drawMode)
                     },
                     onBack = { backStack.pop() }
                 )

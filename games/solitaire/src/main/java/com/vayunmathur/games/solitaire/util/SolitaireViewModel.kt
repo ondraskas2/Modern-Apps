@@ -94,6 +94,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
     fun drawFromStock() {
         val state = _uiState.value.klondike ?: return
         if (state.isWon) return
+        if (state.stock.isEmpty() && state.waste.isEmpty()) return
         saveHistory()
         if (state.stock.isEmpty()) {
             _uiState.update {
@@ -105,7 +106,7 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
             }
         } else {
             val drawCount = if (state.drawMode == DrawMode.DRAW_THREE) 3 else 1
-            val drawn = state.stock.takeLast(drawCount)
+            val drawn = state.stock.takeLast(drawCount).reversed()
             _uiState.update {
                 it.copy(klondike = state.copy(
                     stock = state.stock.dropLast(drawCount),
@@ -207,54 +208,64 @@ class SolitaireViewModel(application: Application) : AndroidViewModel(applicatio
         val state = _uiState.value.klondike ?: return
         if (state.isWon) return
         if (state.tableauPiles.any { it.faceDown.isNotEmpty() }) return
+        saveHistory()
         var current = state
-        var moved = true
-        while (moved) {
-            moved = false
-            // If stock has cards, draw them to waste first
-            if (current.stock.isNotEmpty()) {
-                val drawn = current.stock.last()
-                current = current.copy(
-                    stock = current.stock.dropLast(1),
-                    waste = current.waste + drawn
-                )
-            }
-            val sources = mutableListOf<Card>()
-            val sourceInfo = mutableListOf<String>()
-            if (current.waste.isNotEmpty()) {
-                sources.add(current.waste.last())
-                sourceInfo.add("waste")
-            }
-            for (i in current.tableauPiles.indices) {
-                if (current.tableauPiles[i].faceUp.isNotEmpty()) {
-                    sources.add(current.tableauPiles[i].faceUp.last())
-                    sourceInfo.add("tableau_$i")
-                }
-            }
-            for (si in sources.indices) {
-                val card = sources[si]
-                for (fi in current.foundations.indices) {
-                    if (canPlaceOnFoundation(card, current.foundations[fi])) {
-                        val newFoundations = current.foundations.toMutableList()
-                        newFoundations[fi] = newFoundations[fi] + card
-                        val newPiles = current.tableauPiles.toMutableList()
-                        val newWaste = if (sourceInfo[si] == "waste") current.waste.dropLast(1) else current.waste
-                        if (sourceInfo[si].startsWith("tableau_")) {
-                            val idx = sourceInfo[si].removePrefix("tableau_").toInt()
-                            val pile = newPiles[idx]
-                            newPiles[idx] = autoFlip(pile.copy(faceUp = pile.faceUp.dropLast(1)))
+        var madeProgress = true
+        while (madeProgress) {
+            madeProgress = false
+            // Move as many waste/tableau cards to foundations as possible
+            var moved = true
+            while (moved) {
+                moved = false
+                if (current.waste.isNotEmpty()) {
+                    val card = current.waste.last()
+                    for (fi in current.foundations.indices) {
+                        if (canPlaceOnFoundation(card, current.foundations[fi])) {
+                            val newFoundations = current.foundations.toMutableList()
+                            newFoundations[fi] = newFoundations[fi] + card
+                            current = current.copy(
+                                waste = current.waste.dropLast(1),
+                                foundations = newFoundations,
+                                moveCount = current.moveCount + 1
+                            )
+                            moved = true
+                            madeProgress = true
+                            break
                         }
-                        current = current.copy(
-                            waste = newWaste,
-                            tableauPiles = newPiles,
-                            foundations = newFoundations,
-                            moveCount = current.moveCount + 1
-                        )
-                        moved = true
-                        break
+                    }
+                    if (moved) continue
+                }
+                for (i in current.tableauPiles.indices) {
+                    val pile = current.tableauPiles[i]
+                    if (pile.faceUp.isNotEmpty()) {
+                        val card = pile.faceUp.last()
+                        for (fi in current.foundations.indices) {
+                            if (canPlaceOnFoundation(card, current.foundations[fi])) {
+                                val newFoundations = current.foundations.toMutableList()
+                                newFoundations[fi] = newFoundations[fi] + card
+                                val newPiles = current.tableauPiles.toMutableList()
+                                newPiles[i] = autoFlip(pile.copy(faceUp = pile.faceUp.dropLast(1)))
+                                current = current.copy(
+                                    tableauPiles = newPiles,
+                                    foundations = newFoundations,
+                                    moveCount = current.moveCount + 1
+                                )
+                                moved = true
+                                madeProgress = true
+                                break
+                            }
+                        }
+                        if (moved) break
                     }
                 }
-                if (moved) break
+            }
+            // Draw one stock card and try again
+            if (current.stock.isNotEmpty()) {
+                current = current.copy(
+                    stock = current.stock.dropLast(1),
+                    waste = current.waste + current.stock.last()
+                )
+                madeProgress = true
             }
         }
         _uiState.update { it.copy(klondike = current) }
