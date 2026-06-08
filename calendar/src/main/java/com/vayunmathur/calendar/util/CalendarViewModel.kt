@@ -44,12 +44,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     private val _calendarVisibility = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
     val calendarVisibility: StateFlow<Map<Long, Boolean>> = _calendarVisibility.asStateFlow()
 
-    // persist the last viewed date for the calendar (used to restore viewed week across restarts)
-    private val _lastViewedDate = MutableStateFlow<LocalDate?>(
-        dataStore.getString("last_viewed_date")?.let {
-            try { LocalDate.parse(it) } catch (e: Exception) { null }
-        }
-    )
+    private val _lastViewedDate = MutableStateFlow<LocalDate?>(null)
     val lastViewedDate: StateFlow<LocalDate?> = _lastViewedDate.asStateFlow()
 
     enum class CalendarLayout(val shortName: String, val prettyName: String) {
@@ -78,20 +73,14 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
 
     fun setLastViewedDate(d: LocalDate?) {
         _lastViewedDate.value = d
-        viewModelScope.launch {
-            if (d != null) {
-                dataStore.setString("last_viewed_date", d.toString())
-            }
-        }
     }
 
-    // Currently selected/viewed date in the calendar UI. Initialized from the
-    // persisted [lastViewedDate] (if present) so the user returns to where they
-    // left off; otherwise today. This is in-memory; persistence to DataStore is
-    // performed explicitly via [setLastViewedDate] at navigation transitions.
+    // Currently selected/viewed date in the calendar UI. Always starts at today
+    // so the user sees the current week on launch. Navigation within the app
+    // updates this in-memory; persistence to DataStore is performed explicitly
+    // via [setLastViewedDate] at navigation transitions.
     private val _selectedDate = MutableStateFlow<LocalDate>(
-        _lastViewedDate.value
-            ?: Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
+        Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
     )
     val selectedDate: StateFlow<LocalDate> = _selectedDate.asStateFlow()
 
@@ -219,14 +208,6 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
             dataStore.stringFlow("default_calendar_layout").collect { saved ->
                 try {
                     _currentLayout.value = CalendarLayout.valueOf(saved)
-                } catch (e: Exception) {
-                }
-            }
-        }
-        viewModelScope.launch {
-            dataStore.stringFlow("last_viewed_date").collect { saved ->
-                try {
-                    _lastViewedDate.value = LocalDate.parse(saved)
                 } catch (e: Exception) {
                 }
             }

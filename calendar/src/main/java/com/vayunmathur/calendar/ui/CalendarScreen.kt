@@ -129,8 +129,9 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
     // last_viewed_date in DataStore, or today when absent).
     val dateViewing by viewModel.selectedDate.collectAsState()
 
-    // We use a stable anchor for pagers/scrollers so they don't shift bases.
-    val anchorDate = remember { dateViewing }
+    // Stable anchor for pagers/scrollers — always use today so the initial
+    // page offset is correct regardless of any stale persisted date.
+    val anchorDate = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
 
     // shared vertical scroll so hour labels and grid scroll together
     val verticalState = rememberScrollState()
@@ -247,8 +248,11 @@ fun CalendarPagerView(
                     currentLayout == CalendarViewModel.CalendarLayout.FullWeekSummary
     
     val pagerState = rememberPagerState(initialPage = 5000) { 10000 }
-    
+    // Track whether the pager is being programmatically scrolled to avoid feedback loops
+    var programmaticScroll by remember { mutableStateOf(false) }
+
     LaunchedEffect(pagerState.currentPage, currentLayout) {
+        if (programmaticScroll) return@LaunchedEffect
         val delta = pagerState.currentPage - 5000
         val currentStart = if (daysToShow == 1) {
             anchorDate.plus(DatePeriod(days = delta))
@@ -267,7 +271,9 @@ fun CalendarPagerView(
             }
             val targetPage = 5000 + delta.toInt()
             if (pagerState.currentPage != targetPage) {
+                programmaticScroll = true
                 pagerState.scrollToPage(targetPage)
+                programmaticScroll = false
             }
         }
     }
@@ -459,8 +465,10 @@ fun MonthView(
     onDateViewingChanged: (LocalDate) -> Unit
 ) {
     val pagerState = rememberPagerState(initialPage = 5000) { 10000 }
-    
+    var programmaticScroll by remember { mutableStateOf(false) }
+
     LaunchedEffect(pagerState.currentPage) {
+        if (programmaticScroll) return@LaunchedEffect
         val monthDate = anchorDate.plus(DatePeriod(months = pagerState.currentPage - 5000))
         onDateViewingChanged(monthDate)
     }
@@ -470,7 +478,9 @@ fun MonthView(
             val monthsDiff = (dateViewing.year * 12 + dateViewing.month.number) - (anchorDate.year * 12 + anchorDate.month.number)
             val targetPage = 5000 + monthsDiff
             if (pagerState.currentPage != targetPage) {
+                programmaticScroll = true
                 pagerState.scrollToPage(targetPage)
+                programmaticScroll = false
             }
         }
     }
