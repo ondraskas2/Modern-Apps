@@ -88,6 +88,8 @@
     <string name="system_default">Domyślne systemowe</string>
     <string name="signal">Signal</string>
     <string name="whatsapp">WhatsApp</string>
+    <string name="telegram">Telegram</string>
+    <string name="google_meet">Google Meet</string>
     <string name="import_button">Importuj</string>
     <string name="remove_from_group">Usuń z grupy</string>
     <string name="copied_to_clipboard">Skopiowano do schowka</string>

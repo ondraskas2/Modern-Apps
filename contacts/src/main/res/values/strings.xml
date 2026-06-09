@@ -78,6 +78,8 @@
     <string name="system_default">System Default</string>
     <string name="signal">Signal</string>
     <string name="whatsapp">WhatsApp</string>
+    <string name="telegram">Telegram</string>
+    <string name="google_meet">Google Meet</string>
     <string name="contacts">Contacts</string>
     <string name="groups">Groups</string>
     <string name="select_group_hint">Select a group to view contacts</string>

@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         handleIntent(intent)
         setContent {
-            val permissions = arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
+            val permissions = arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE)
             var hasPermissions by remember { mutableStateOf(permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) }
             DynamicTheme {
                 if (!hasPermissions) {

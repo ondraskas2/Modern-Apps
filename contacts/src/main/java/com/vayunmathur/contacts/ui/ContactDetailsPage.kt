@@ -1,7 +1,15 @@
 package com.vayunmathur.contacts.ui
 
+import android.Manifest
+import android.content.ContentUris
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.ContactsContract
+import android.os.Bundle
+import android.telecom.PhoneAccount
+import android.telecom.TelecomManager
+import android.telecom.VideoProfile
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -57,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import com.google.i18n.phonenumbers.NumberParseException
@@ -64,6 +73,7 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil
 import com.vayunmathur.contacts.data.CDKEvent
 import com.vayunmathur.contacts.data.Contact
 import com.vayunmathur.contacts.data.formatDisplay
+import com.vayunmathur.contacts.util.ContactPlatforms
 import com.vayunmathur.contacts.util.ContactViewModel
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.util.PackageUtils
@@ -103,8 +113,10 @@ fun ContactDetailsPage(
         return
     }
     val context = LocalContext.current
-    val isSignalInstalled = remember { PackageUtils.isSignalInstalled(context) }
-    val isWhatsAppInstalled = remember { PackageUtils.isWhatsAppInstalled(context) }
+    val platforms = remember(contactId, details) {
+        PackageUtils.getContactPlatforms(context, contactId)
+    }
+    val isGoogleMeetInstalled = remember { PackageUtils.isGoogleMeetInstalled(context) }
 
     val scope = rememberCoroutineScope()
     val shareContactLabel = stringResource(R.string.share_contact)
@@ -145,7 +157,6 @@ fun ContactDetailsPage(
                         IconShare()
                     }
                     IconButton(onClick = {
-                        // Instead of deleting immediately, open the confirmation dialog via the onDelete callback
                         onDelete()
                     }) {
                         IconDelete()
@@ -180,8 +191,8 @@ fun ContactDetailsPage(
                 ActionButtonsRow(
                     details.phoneNumbers.firstOrNull()?.number,
                     details.emails.firstOrNull()?.address,
-                    isSignalInstalled,
-                    isWhatsAppInstalled
+                    platforms,
+                    isGoogleMeetInstalled
                 )
             }
 
@@ -191,7 +202,6 @@ fun ContactDetailsPage(
                         details.phoneNumbers.forEachIndexed { index, phone ->
                             var showCallDropdown by remember(phone.id) { mutableStateOf(false) }
                             var showSmsDropdown by remember(phone.id) { mutableStateOf(false) }
-                            val hasAlternativeApps = isSignalInstalled || isWhatsAppInstalled
 
                             DetailItem(
                                 icon = painterResource(R.drawable.outline_call_24),
@@ -199,7 +209,7 @@ fun ContactDetailsPage(
                                 label = phone.typeString(context),
                                 trailingIcon = painterResource(R.drawable.outline_chat_24),
                                 onTrailingIconClick = {
-                                    if (hasAlternativeApps) {
+                                    if (platforms.hasAnyPlatform) {
                                         showSmsDropdown = true
                                     } else {
                                         val intent = Intent(Intent.ACTION_SENDTO)
@@ -208,12 +218,10 @@ fun ContactDetailsPage(
                                     }
                                 },
                                 onClick = {
-                                    if (hasAlternativeApps) {
+                    if (platforms.hasAnyPlatform) {
                                         showCallDropdown = true
                                     } else {
-                                        val intent = Intent(Intent.ACTION_DIAL)
-                                        intent.data = "tel:${phone.number}".toUri()
-                                        context.startActivity(intent)
+                                        placeCall(context, phone.number)
                                     }
                                 },
                                 dropdownContent = {
@@ -222,8 +230,7 @@ fun ContactDetailsPage(
                                         onDismiss = { showCallDropdown = false },
                                         number = phone.number,
                                         type = CommunicationType.CALL,
-                                        isSignalInstalled = isSignalInstalled,
-                                        isWhatsAppInstalled = isWhatsAppInstalled
+                                        platforms = platforms
                                     )
                                 },
                                 trailingDropdownContent = {
@@ -232,8 +239,7 @@ fun ContactDetailsPage(
                                         onDismiss = { showSmsDropdown = false },
                                         number = phone.number,
                                         type = CommunicationType.SMS,
-                                        isSignalInstalled = isSignalInstalled,
-                                        isWhatsAppInstalled = isWhatsAppInstalled
+                                        platforms = platforms
                                     )
                                 },
                                 shape = groupShape(index, details.phoneNumbers.size),
@@ -381,7 +387,6 @@ fun ProfileHeader(contact: Contact, viewModel: ContactViewModel) {
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             contact.photo?.let {
-                // Decode once via the VM cache, not on every recomposition.
                 val bitmap = remember(it.photo) { viewModel.decodePhoto(it.photo) }
                 if (bitmap != null) {
                     Image(
@@ -429,8 +434,8 @@ fun ProfileHeader(contact: Contact, viewModel: ContactViewModel) {
 fun ActionButtonsRow(
     number: String?,
     email: String?,
-    isSignalInstalled: Boolean,
-    isWhatsAppInstalled: Boolean
+    platforms: ContactPlatforms,
+    isGoogleMeetInstalled: Boolean
 ) {
     val context = LocalContext.current
     Row(
@@ -440,58 +445,147 @@ fun ActionButtonsRow(
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         if (number != null) {
-            val hasAlternativeApps = isSignalInstalled || isWhatsAppInstalled
             var showCallDropdown by remember { mutableStateOf(false) }
             var showSmsDropdown by remember { mutableStateOf(false) }
+            var showVideoDropdown by remember { mutableStateOf(false) }
 
             ActionButton(
                 icon = painterResource(R.drawable.outline_call_24),
                 label = stringResource(R.string.action_call),
                 action = {
-                    if (hasAlternativeApps) {
+                    if (platforms.hasAnyPlatform) {
                         showCallDropdown = true
                     } else {
-                        val intent = Intent(Intent.ACTION_DIAL)
-                        intent.data = "tel:$number".toUri()
-                        context.startActivity(intent)
+                        placeCall(context, number)
                     }
                 },
                 dropdownContent = {
-                    CommunicationDropdown(
-                        expanded = showCallDropdown,
-                        onDismiss = { showCallDropdown = false },
-                        number = number,
-                        type = CommunicationType.CALL,
-                        isSignalInstalled = isSignalInstalled,
-                        isWhatsAppInstalled = isWhatsAppInstalled
-                    )
+                    DropdownMenu(expanded = showCallDropdown, onDismissRequest = { showCallDropdown = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.system_default)) },
+                            onClick = {
+                                placeCall(context, number)
+                                showCallDropdown = false
+                            }
+                        )
+                        platforms.signalCallId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.signal)) },
+                                onClick = { placePlatformCall(context, number, PackageUtils.SIGNAL_PACKAGE, fallbackDataRowId = id); showCallDropdown = false }
+                            )
+                        }
+                        platforms.whatsAppCallId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.whatsapp)) },
+                                onClick = { placePlatformCall(context, number, PackageUtils.WHATSAPP_PACKAGE, fallbackDataRowId = id); showCallDropdown = false }
+                            )
+                        }
+                        platforms.telegramCallId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.telegram)) },
+                                onClick = { placePlatformCall(context, number, PackageUtils.TELEGRAM_PACKAGE, fallbackDataRowId = id); showCallDropdown = false }
+                            )
+                        }
+                    }
                 }
             )
             ActionButton(
                 icon = painterResource(R.drawable.outline_sms_24),
                 label = stringResource(R.string.action_message),
                 action = {
-                    if (hasAlternativeApps) {
+                    if (platforms.hasAnyPlatform) {
                         showSmsDropdown = true
                     } else {
-                        val intent = Intent(Intent.ACTION_SENDTO)
-                        intent.data = "sms:$number".toUri()
-                        context.startActivity(intent)
+                        context.startActivity(Intent(Intent.ACTION_SENDTO, "sms:$number".toUri()))
                     }
                 },
                 dropdownContent = {
-                    CommunicationDropdown(
-                        expanded = showSmsDropdown,
-                        onDismiss = { showSmsDropdown = false },
-                        number = number,
-                        type = CommunicationType.SMS,
-                        isSignalInstalled = isSignalInstalled,
-                        isWhatsAppInstalled = isWhatsAppInstalled
-                    )
+                    DropdownMenu(expanded = showSmsDropdown, onDismissRequest = { showSmsDropdown = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.system_default)) },
+                            onClick = {
+                                context.startActivity(Intent(Intent.ACTION_SENDTO, "sms:$number".toUri()))
+                                showSmsDropdown = false
+                            }
+                        )
+                        platforms.signalMessageId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.signal)) },
+                                onClick = { launchPlatformAction(context, id); showSmsDropdown = false }
+                            )
+                        }
+                        platforms.whatsAppMessageId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.whatsapp)) },
+                                onClick = { launchPlatformAction(context, id); showSmsDropdown = false }
+                            )
+                        }
+                        platforms.telegramMessageId?.let { id ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.telegram)) },
+                                onClick = { launchPlatformAction(context, id); showSmsDropdown = false }
+                            )
+                        }
+                    }
                 }
             )
-            ActionButton(icon = painterResource(R.drawable.outline_videocam_24), label = stringResource(R.string.action_video)) {
 
+            val hasVideoOptions = platforms.whatsAppVideoId != null ||
+                    platforms.signalVideoId != null ||
+                    platforms.telegramVideoId != null ||
+                    isGoogleMeetInstalled
+            if (hasVideoOptions) {
+                val videoOptionCount = listOf(
+                    isGoogleMeetInstalled,
+                    platforms.whatsAppVideoId != null,
+                    platforms.signalVideoId != null,
+                    platforms.telegramVideoId != null
+                ).count { it }
+
+                ActionButton(
+                    icon = painterResource(R.drawable.outline_videocam_24),
+                    label = stringResource(R.string.action_video),
+                    action = {
+                        if (videoOptionCount == 1) {
+                            when {
+                                isGoogleMeetInstalled -> launchGoogleMeet(context, number)
+                                platforms.whatsAppVideoId != null -> placePlatformCall(context, number, PackageUtils.WHATSAPP_PACKAGE, isVideo = true, fallbackDataRowId = platforms.whatsAppVideoId)
+                                platforms.signalVideoId != null -> placePlatformCall(context, number, PackageUtils.SIGNAL_PACKAGE, isVideo = true, fallbackDataRowId = platforms.signalVideoId)
+                                platforms.telegramVideoId != null -> placePlatformCall(context, number, PackageUtils.TELEGRAM_PACKAGE, isVideo = true, fallbackDataRowId = platforms.telegramVideoId)
+                            }
+                        } else {
+                            showVideoDropdown = true
+                        }
+                    },
+                    dropdownContent = {
+                        DropdownMenu(expanded = showVideoDropdown, onDismissRequest = { showVideoDropdown = false }) {
+                            if (isGoogleMeetInstalled) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.google_meet)) },
+                                    onClick = { launchGoogleMeet(context, number); showVideoDropdown = false }
+                                )
+                            }
+                            platforms.whatsAppVideoId?.let { id ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.whatsapp)) },
+                                    onClick = { placePlatformCall(context, number, PackageUtils.WHATSAPP_PACKAGE, isVideo = true, fallbackDataRowId = id); showVideoDropdown = false }
+                                )
+                            }
+                            platforms.signalVideoId?.let { id ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.signal)) },
+                                    onClick = { placePlatformCall(context, number, PackageUtils.SIGNAL_PACKAGE, isVideo = true, fallbackDataRowId = id); showVideoDropdown = false }
+                                )
+                            }
+                            platforms.telegramVideoId?.let { id ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.telegram)) },
+                                    onClick = { placePlatformCall(context, number, PackageUtils.TELEGRAM_PACKAGE, isVideo = true, fallbackDataRowId = id); showVideoDropdown = false }
+                                )
+                            }
+                        }
+                    }
+                )
             }
         }
         if (email != null) {
@@ -610,14 +704,7 @@ enum class CommunicationType { CALL, SMS }
 
 /**
  * Outer shape for a card that sits at a given [index] inside a vertically
- * stacked sibling group of [size] items. Outer corners (top of first item,
- * bottom of last item) stay rounded at [outerRadius]; inner corners are
- * flattened to [innerRadius] (≈ a small right-angle) so each card reads as a
- * distinct row but the whole group still feels like one section.
- *
- * Pass [flatTop] / [flatBottom] when the group is visually attached to
- * another card above/below — e.g. an expanded group header that bleeds into
- * its contacts list — so the boundary corners between them stay flat.
+ * stacked sibling group of [size] items.
  */
 fun groupShape(
     index: Int,
@@ -643,8 +730,7 @@ fun CommunicationDropdown(
     onDismiss: () -> Unit,
     number: String,
     type: CommunicationType,
-    isSignalInstalled: Boolean,
-    isWhatsAppInstalled: Boolean
+    platforms: ContactPlatforms
 ) {
     val context = LocalContext.current
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -655,7 +741,7 @@ fun CommunicationDropdown(
                 onDismiss()
             }
         )
-        if (isSignalInstalled) {
+        if (platforms.hasSignal) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.signal)) },
                 onClick = {
@@ -664,11 +750,20 @@ fun CommunicationDropdown(
                 }
             )
         }
-        if (isWhatsAppInstalled) {
+        if (platforms.hasWhatsApp) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.whatsapp)) },
                 onClick = {
                     handleCommunication(context, number, type, PackageUtils.WHATSAPP_PACKAGE)
+                    onDismiss()
+                }
+            )
+        }
+        if (platforms.hasTelegram) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.telegram)) },
+                onClick = {
+                    handleCommunication(context, number, type, PackageUtils.TELEGRAM_PACKAGE)
                     onDismiss()
                 }
             )
@@ -682,38 +777,111 @@ private fun handleCommunication(
     type: CommunicationType,
     packageName: String?
 ) {
+    if (type == CommunicationType.CALL) {
+        if (packageName != null) {
+            placePlatformCall(context, number, packageName)
+        } else {
+            placeCall(context, number)
+        }
+        return
+    }
     val intent = when (packageName) {
         PackageUtils.SIGNAL_PACKAGE -> {
-            if (type == CommunicationType.CALL) {
-                Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
-                    setPackage(PackageUtils.SIGNAL_PACKAGE)
-                }
-            } else {
-                Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply {
-                    setPackage(PackageUtils.SIGNAL_PACKAGE)
-                }
+            Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply {
+                setPackage(PackageUtils.SIGNAL_PACKAGE)
             }
         }
         PackageUtils.WHATSAPP_PACKAGE -> {
             val formattedNumber = number.filter { it.isDigit() }
             Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$formattedNumber"))
         }
-        else -> {
-            if (type == CommunicationType.CALL) {
-                Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
-            } else {
-                Intent(Intent.ACTION_SENDTO, Uri.parse("sms:$number"))
-            }
+        PackageUtils.TELEGRAM_PACKAGE -> {
+            val formattedNumber = number.filter { it.isDigit() || it == '+' }
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/+$formattedNumber"))
         }
+        else -> Intent(Intent.ACTION_SENDTO, Uri.parse("sms:$number"))
     }
     try {
         context.startActivity(intent)
     } catch (e: Exception) {
-        // Fallback to default if specific package fails
         if (packageName != null) {
-            handleCommunication(context, number, type, null)
+            handleCommunication(context, number, CommunicationType.SMS, null)
         }
     }
+}
+
+private fun placeCall(context: android.content.Context, number: String) {
+    val uri = Uri.fromParts("tel", number, null)
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE)
+        == PackageManager.PERMISSION_GRANTED
+    ) {
+        try {
+            val telecomManager = context.getSystemService(TelecomManager::class.java)
+            val extras = Bundle()
+            telecomManager.getDefaultOutgoingPhoneAccount(PhoneAccount.SCHEME_TEL)?.let {
+                extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, it)
+            }
+            telecomManager.placeCall(uri, extras)
+        } catch (_: Exception) {
+            context.startActivity(Intent(Intent.ACTION_DIAL, uri))
+        }
+    } else {
+        context.startActivity(Intent(Intent.ACTION_DIAL, uri))
+    }
+}
+
+private fun placePlatformCall(
+    context: android.content.Context,
+    number: String,
+    packageName: String,
+    isVideo: Boolean = false,
+    fallbackDataRowId: Long? = null
+) {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE)
+        != PackageManager.PERMISSION_GRANTED
+    ) {
+        if (fallbackDataRowId != null) launchPlatformAction(context, fallbackDataRowId)
+        return
+    }
+    try {
+        val telecomManager = context.getSystemService(TelecomManager::class.java)
+        val handle = telecomManager.callCapablePhoneAccounts.firstOrNull {
+            it.componentName.packageName == packageName
+        }
+        if (handle != null) {
+            val uri = Uri.fromParts("tel", number, null)
+            val extras = Bundle()
+            extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
+            if (isVideo) {
+                extras.putInt(
+                    TelecomManager.EXTRA_START_CALL_WITH_VIDEO_STATE,
+                    VideoProfile.STATE_BIDIRECTIONAL
+                )
+            }
+            telecomManager.placeCall(uri, extras)
+        } else if (fallbackDataRowId != null) {
+            launchPlatformAction(context, fallbackDataRowId)
+        }
+    } catch (_: Exception) {
+        if (fallbackDataRowId != null) launchPlatformAction(context, fallbackDataRowId)
+    }
+}
+
+private fun launchPlatformAction(context: android.content.Context, dataRowId: Long) {
+    try {
+        val uri = ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, dataRowId)
+        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+    } catch (_: Exception) {}
+}
+
+private fun launchGoogleMeet(context: android.content.Context, number: String) {
+    try {
+        val intent = Intent("com.google.android.apps.tachyon.action.CALL").apply {
+            data = Uri.parse("tel:$number")
+            setPackage(PackageUtils.GOOGLE_MEET_PACKAGE)
+        }
+        context.startActivity(intent)
+    } catch (_: Exception) {}
 }
 
 @Composable

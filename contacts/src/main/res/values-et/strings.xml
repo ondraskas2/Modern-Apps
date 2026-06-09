@@ -79,6 +79,8 @@
     <string name="system_default">Süsteemi vaikeseadistus</string>
     <string name="signal">Signal</string>
     <string name="whatsapp">WhatsApp</string>
+    <string name="telegram">Telegram</string>
+    <string name="google_meet">Google Meet</string>
     <string name="contacts">Kontaktid</string>
     <string name="groups">Grupid</string>
     <string name="select_group_hint">Kontaktide vaatamiseks vali grupp</string>
