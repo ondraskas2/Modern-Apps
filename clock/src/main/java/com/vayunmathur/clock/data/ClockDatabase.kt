@@ -68,10 +68,10 @@ interface TimerDao {
 
 @Dao
 interface AlarmDao {
-    @Query("SELECT * FROM Alarm")
+    @Query("SELECT * FROM Alarm ORDER BY time")
     fun getAllFlow(): Flow<List<Alarm>>
 
-    @Query("SELECT * FROM Alarm")
+    @Query("SELECT * FROM Alarm ORDER BY time")
     suspend fun getAll(): List<Alarm>
 
     @Query("SELECT * FROM Alarm WHERE id = :id")
