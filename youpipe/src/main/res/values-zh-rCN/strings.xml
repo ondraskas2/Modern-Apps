@@ -35,7 +35,7 @@
     <string name="label_description">描述</string>
     <string name="label_loading_subscriptions">正在加载最新订阅</string>
     <string name="title_settings">设置</string>
-    <string name="label_sponsorblock">启用 SponsorBlock</string>
+    <string name="label_sponsorblock">SponsorBlock 类别</string>
     <string name="label_sponsorblock_description">从下面的列表中选择在视频中跳过的部分</string>
     <string name="label_backup_restore">备份和恢复</string>
     <string name="label_restore_youpipe">从 YouPipe 恢复</string>
@@ -46,4 +46,6 @@
     <string name="video_quality_fps_codec">%1$s（%2$dfps）%3$s</string>
     <string name="audio_bitrate_codec">%1$dkbps（%2$s）</string>
     <string name="empty_recommendations">观看一些视频以获得个性化推荐</string>
+    <string name="label_dearrow">启用 DeArrow</string>
+    <string name="label_dearrow_description">用社区提交的替代内容替换标题党标题和缩略图</string>
 </resources>
