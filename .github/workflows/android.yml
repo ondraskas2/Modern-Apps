@@ -94,9 +94,12 @@ jobs:
               cp "$icon_source" "$target_path/graphics/icon/icon.png"
             fi
           
-            screenshot_source="metadata_data/photos/${module_key}.png"
-            if [ -f "$screenshot_source" ]; then
-              cp "$screenshot_source" "$target_path/graphics/phone-screenshots/1.png"
+            screenshot_dir="metadata_data/photos/${module_key}"
+            screenshot_file="metadata_data/photos/${module_key}.png"
+            if [ -d "$screenshot_dir" ]; then
+              cp "$screenshot_dir"/*.png "$target_path/graphics/phone-screenshots/"
+            elif [ -f "$screenshot_file" ]; then
+              cp "$screenshot_file" "$target_path/graphics/phone-screenshots/1.png"
             fi
           
             metadata_src="metadata_data/${module_key}.md"
