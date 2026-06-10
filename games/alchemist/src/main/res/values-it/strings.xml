@@ -8,4 +8,5 @@
     <string name="recipes">Ricette (%1$d)</string>
     <string name="used_in">Usato in (%1$d)</string>
     <string name="locked">+ %1$d ricette bloccate.</string>
+    <string name="locked_description">Sblocca tutti i risultati di queste ricette per vederli.</string>
 </resources>
