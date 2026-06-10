@@ -214,13 +214,28 @@ class InferenceService : Service() {
 
             runInferenceLoop(job.conversationId, job.userText, job.imagePaths, job.audioPath)
         } catch (e: Exception) {
-            Log.e("InferenceService", "Error during standard inference", e)
-            upsertMessageToDb(Message(
-                conversationId = job.conversationId,
-                text = getString(R.string.error_prefix, e.localizedMessage ?: ""),
-                role = "assistant",
-                timestamp = Clock.System.now().toEpochMilliseconds()
-            ))
+            Log.e("InferenceService", "Inference failed, resetting engine for retry", e)
+            currentConversation?.close()
+            currentConversation = null
+            currentConversationId = -1L
+            engine?.close()
+            engine = null
+
+            try {
+                ensureEngineInitialized()
+                val history = fetchHistoryFromDb(job.conversationId)
+                    .filter { it.text != job.userText || it.timestamp < Clock.System.now().toEpochMilliseconds() - 1000 }
+                setupConversation(job.conversationId, history)
+                runInferenceLoop(job.conversationId, job.userText, job.imagePaths, job.audioPath)
+            } catch (retryError: Exception) {
+                Log.e("InferenceService", "Retry also failed", retryError)
+                upsertMessageToDb(Message(
+                    conversationId = job.conversationId,
+                    text = getString(R.string.error_prefix, retryError.localizedMessage ?: ""),
+                    role = "assistant",
+                    timestamp = Clock.System.now().toEpochMilliseconds()
+                ))
+            }
         }
     }
 
@@ -346,10 +361,17 @@ class InferenceService : Service() {
             You are a helpful Android assistant.
             On the first request the user sends to you, you MUST define a title for the conversation. You may optionally change the title if the topic of conversation changes sufficiently.
             
-            You have a memory feature. Use it to provide a personalized and consistent experience:
-            - Whenever the user shares information that might be useful in future conversations (e.g., their name, preferences, family details, or important facts), use 'add_to_memory' to store it.
-            - Whenever the user asks a question or makes a request where past context might be relevant, use 'get_memories' to retrieve stored information.
+            TOOL USE GUIDELINES:
+            - Only use a tool when the user's request clearly and directly relates to that tool's purpose. Do NOT guess or speculatively call tools on short or ambiguous prompts.
+            - If the user asks a general knowledge question (e.g. "what is...", "how does...", "tell me about..."), answer from your own knowledge. Do not invoke app tools unless the user explicitly asks to interact with an app.
+            - If a tool call fails because the required app is not installed, do NOT stop. Continue helping the user by answering from your own knowledge or suggesting alternatives.
+            
+            MEMORY:
+            You have a memory feature. Use it aggressively to provide a personalized and consistent experience:
+            - Whenever the user shares ANY information that might conceivably be useful in future conversations (e.g., their name, preferences, family details, interests, opinions, routines, or important facts), use 'add_to_memory' to store it immediately.
+            - At the start of every conversation and whenever the user asks a question or makes a request where past context could even remotely be relevant, use 'get_memories' to retrieve stored information.
             - If a stored memory is no longer accurate or requested to be forgotten, use 'remove_memory'.
+            - When in doubt about whether to use memory, USE IT.
             """.trimIndent()
 
         val initialMessages = history.map { msg ->
@@ -399,7 +421,8 @@ class InferenceService : Service() {
                 halt = false
                 messageDao.deleteById(aiMsgId)
             } else {
-                updateMessageInDb(aiMsgId, getString(R.string.error_prefix, e.message ?: ""))
+                messageDao.deleteById(aiMsgId)
+                throw e
             }
         }.collect { chunk ->
             if (halt) {

@@ -215,19 +215,7 @@ class AssistantToolSet(
 
     private suspend fun handleMissingApp(packageName: String): String {
         Log.d("AssistantToolSet", "Handling missing app: $packageName")
-        InferenceService.halt = true
-        if (messageDao != null && conversationId != -1L) {
-            Log.d("AssistantToolSet", "Inserting tool error message for $packageName")
-            messageDao.upsert(com.vayunmathur.openassistant.data.Message(
-                conversationId = conversationId,
-                text = getMissingAppMessage(packageName),
-                role = "tool",
-                timestamp = Clock.System.now().toEpochMilliseconds()
-            ))
-            Log.d("AssistantToolSet", "Throwing StopInferenceException")
-            throw StopInferenceException()
-        }
-        return getMissingAppMessage(packageName)
+        return getMissingAppMessage(packageName) + " Try to help the user with your own knowledge instead."
     }
 
     @Tool(description = "Get a list of all notes")
