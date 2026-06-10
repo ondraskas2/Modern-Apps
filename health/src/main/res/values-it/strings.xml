@@ -49,10 +49,10 @@
     <string name="label_core">Sonno leggero</string>
     <string name="label_deep">Sonno profondo</string>
     <string name="section_activity">Attività</string>
-    <string name="section_vitals_clinical">Vitali e clinici</string>
+    <string name="section_vitals_clinical">Parametri vitali e clinici</string>
     <string name="section_nutrition_today">Alimentazione (Oggi)</string>
     <string name="section_body_composition">Composizione corporea</string>
-    <string name="label_active">Attività</string>
+    <string name="label_active">Attivo</string>
     <string name="label_basal">Basale</string>
     <string name="label_patients">Pazienti</string>
     <string name="label_today">Oggi</string>
@@ -143,4 +143,5 @@
     <string name="search_ingredient">Cerca ingredienti</string>
     <string name="log_hydration">Registra idratazione</string>
     <string name="log_meal">Registra pasto</string>
+    <string name="unit_fl">fl</string>
 </resources>
