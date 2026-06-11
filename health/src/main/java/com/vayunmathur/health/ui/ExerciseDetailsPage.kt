@@ -38,7 +38,7 @@ private val dateFormatter = DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExerciseDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
-    val records by viewModel.getAllRecordsOfType(RecordType.Exercise).collectAsState(emptyList())
+    val records by remember { viewModel.getAllRecordsOfType(RecordType.Exercise) }.collectAsState(emptyList())
 
     Scaffold(
         topBar = {

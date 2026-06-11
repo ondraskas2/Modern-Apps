@@ -133,7 +133,7 @@ interface HealthDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(records: List<Record>)
 
-    @Query("DELETE FROM Record WHERE primaryKey IN (:ids)")
+    @Query("DELETE FROM Record WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
     @Query("SELECT * FROM Record WHERE type = :type ORDER BY startTime DESC")
