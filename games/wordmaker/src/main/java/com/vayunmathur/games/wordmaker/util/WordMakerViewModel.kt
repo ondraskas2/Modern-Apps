@@ -44,6 +44,15 @@ class WordMakerViewModel(application: Application) : AndroidViewModel(applicatio
     val bonusWords: StateFlow<Set<String>> = levelDataStore.bonusWords
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
+    val tapToSpell: StateFlow<Boolean> = levelDataStore.tapToSpell
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val revealedHints: StateFlow<Set<Pair<Int, Int>>> = levelDataStore.revealedHints
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    private val _hintCooldownEnd = MutableStateFlow(System.currentTimeMillis() + 30_000L)
+    val hintCooldownEnd: StateFlow<Long> = _hintCooldownEnd.asStateFlow()
+
     private val _crosswordData = MutableStateFlow<CrosswordData?>(null)
     val crosswordData: StateFlow<CrosswordData?> = _crosswordData.asStateFlow()
 
@@ -92,4 +101,28 @@ class WordMakerViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Suspending so callers (e.g. compose animation coroutines) can sequence achievement updates. */
     suspend fun addBonusWord(word: String): Int = levelDataStore.addBonusWord(word)
+
+    fun setTapToSpell(enabled: Boolean) {
+        viewModelScope.launch { levelDataStore.setTapToSpell(enabled) }
+    }
+
+    fun revealHint(crosswordData: CrosswordData, foundWords: Set<String>, revealedHints: Set<Pair<Int, Int>>) {
+        val revealedPositions = mutableSetOf<Pair<Int, Int>>()
+        crosswordData.letterPositions.forEach { (word, positions) ->
+            if (word in foundWords) {
+                revealedPositions.addAll(positions)
+            }
+        }
+        revealedPositions.addAll(revealedHints)
+
+        val allCellPositions = mutableSetOf<Pair<Int, Int>>()
+        crosswordData.letterPositions.values.forEach { allCellPositions.addAll(it) }
+
+        val unrevealed = allCellPositions - revealedPositions
+        if (unrevealed.isEmpty()) return
+
+        val target = unrevealed.random()
+        _hintCooldownEnd.value = System.currentTimeMillis() + 30_000L
+        viewModelScope.launch { levelDataStore.addRevealedHint(target.first, target.second) }
+    }
 }

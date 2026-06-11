@@ -49,6 +49,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -76,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vayunmathur.games.wordmaker.data.CrosswordData
 import com.vayunmathur.games.wordmaker.data.LevelDataStore
+import com.vayunmathur.games.wordmaker.ui.SettingsPage
 import com.vayunmathur.games.wordmaker.util.AppBackupAgent
 import com.vayunmathur.games.wordmaker.util.WordMakerViewModel
 import com.vayunmathur.library.ui.AchievementNotification
@@ -104,6 +106,8 @@ sealed interface Route : NavKey {
     data object Game : Route
     @Serializable
     data object GameCenter : Route
+    @Serializable
+    data object Settings : Route
 }
 
 data class ChooserLetter(val id: Int, val char: Char)
@@ -130,6 +134,9 @@ class MainActivity : ComponentActivity() {
                                 onBack = { backStack.pop() }
                             )
                         }
+                    }
+                    entry<Route.Settings> {
+                        SettingsPage(viewModel = viewModel, onBack = { backStack.pop() })
                     }
                 }
             }
@@ -182,7 +189,8 @@ fun WordMakerGameLoader(backStack: NavBackStack<Route>, viewModel: WordMakerView
                     currentLevel = currentLevel,
                     viewModel = viewModel,
                     achievementsManager = achievementsManager,
-                    onOpenGameCenter = { backStack.add(Route.GameCenter) }
+                    onOpenGameCenter = { backStack.add(Route.GameCenter) },
+                    onOpenSettings = { backStack.add(Route.Settings) }
                 )
             }
 
@@ -215,11 +223,17 @@ fun WordGameScreen(
     currentLevel: Int,
     viewModel: WordMakerViewModel,
     achievementsManager: AchievementsManager,
-    onOpenGameCenter: () -> Unit
+    onOpenGameCenter: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val foundWords by viewModel.foundWords.collectAsState()
     val bonusWords by viewModel.bonusWords.collectAsState()
+    val tapToSpell by viewModel.tapToSpell.collectAsState()
+    val revealedHints by viewModel.revealedHints.collectAsState()
+    val hintCooldownEnd by viewModel.hintCooldownEnd.collectAsState()
     var showBonusWordsDialog by remember(currentLevel) { mutableStateOf(false) }
+    var showHintDialog by remember(currentLevel) { mutableStateOf(false) }
+    var remainingCooldown by remember { mutableLongStateOf(0L) }
     val density = LocalDensity.current
     var rootOffset by remember { mutableStateOf(Offset.Zero) }
     var wordWithDefinition by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
@@ -303,6 +317,14 @@ fun WordGameScreen(
         }
     }
 
+    LaunchedEffect(hintCooldownEnd) {
+        while (true) {
+            remainingCooldown = (hintCooldownEnd - System.currentTimeMillis()).coerceAtLeast(0)
+            if (remainingCooldown <= 0) break
+            delay(100)
+        }
+    }
+
     Scaffold(
         Modifier.fillMaxSize(),
         topBar = {
@@ -312,9 +334,9 @@ fun WordGameScreen(
                     IconButton(onClick = onOpenGameCenter) {
                         Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
                     }
-                    com.vayunmathur.library.ui.BackupButtons(
-                        datastoreNames = listOf("settings")
-                    )
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(painterResource(id = android.R.drawable.ic_menu_preferences), "Settings")
+                    }
                 }
             )
         }
@@ -337,6 +359,7 @@ fun WordGameScreen(
                 ) {
                     CrosswordBoard(
                         foundWords = foundWords,
+                        revealedHints = revealedHints,
                         crosswordData = crosswordData,
                         wordToAnimate = wordToAnimate?.word,
                         onCellPositioned = { position, offset ->
@@ -373,6 +396,7 @@ fun WordGameScreen(
                     } else {
                         LetterChooser(
                             letters = shuffledLetters,
+                            tapToSpell = tapToSpell,
                             onShuffle = {
                                 var nextLetters = shuffledLetters.shuffled()
                                 while (nextLetters == shuffledLetters && shuffledLetters.size > 1) {
@@ -458,6 +482,54 @@ fun WordGameScreen(
                 Icon(painterResource(R.drawable.outline_book_2_24), null)
             }
 
+            if (!isWon) {
+                val hintEnabled = remainingCooldown <= 0L
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .padding(bottom = 32.dp)
+                ) {
+                    FilledIconButton(
+                        onClick = { showHintDialog = true },
+                        enabled = hintEnabled
+                    ) {
+                        Icon(
+                            painterResource(android.R.drawable.ic_menu_help),
+                            contentDescription = "Hint",
+                            modifier = Modifier.graphicsLayer { alpha = if (hintEnabled) 1f else 0.5f }
+                        )
+                    }
+                    if (!hintEnabled) {
+                        CircularProgressIndicator(
+                            progress = { 1f - (remainingCooldown / 30_000f) },
+                            modifier = Modifier.size(48.dp).align(Alignment.Center),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                }
+            }
+
+            if (showHintDialog) {
+                AlertDialog(
+                    onDismissRequest = { showHintDialog = false },
+                    title = { Text(stringResource(R.string.hint_confirmation)) },
+                    confirmButton = {
+                        Button(onClick = {
+                            viewModel.revealHint(crosswordData, foundWords, revealedHints)
+                            showHintDialog = false
+                        }) {
+                            Text(stringResource(R.string.yes))
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = { showHintDialog = false }) {
+                            Text(stringResource(R.string.no))
+                        }
+                    }
+                )
+            }
+
             if (showBonusWordsDialog) {
                 BonusWordsDialog(bonusWords = bonusWords, getDefinition = viewModel::getDefinition) {
                     showBonusWordsDialog = false
@@ -496,8 +568,9 @@ fun WordGameScreen(
 
                 SurfaceText(Modifier.offset { IntOffset(offset.x.toInt(), offset.y.toInt()) },
                     RoundedCornerShape(4.dp * scale),
-                    colorScheme.primaryContainer, letter.char.toString(),
-                    Modifier, FontWeight.Bold, fontSize, size)
+                    colorScheme.primary, letter.char.toString(),
+                    Modifier, FontWeight.Bold, fontSize, size,
+                    textColor = colorScheme.onPrimary)
             }
         }
     }
@@ -557,11 +630,11 @@ fun BonusWordsDialog(
 }
 
 @Composable
-fun SurfaceText(modifier: Modifier, surfaceShape: Shape, surfaceColor: Color, text: String, textModifier: Modifier, fontWeight: FontWeight? = null, fontSize: TextUnit = TextUnit.Unspecified, surfaceSize: Dp?) {
+fun SurfaceText(modifier: Modifier, surfaceShape: Shape, surfaceColor: Color, text: String, textModifier: Modifier, fontWeight: FontWeight? = null, fontSize: TextUnit = TextUnit.Unspecified, surfaceSize: Dp?, textColor: Color = Color.Unspecified) {
     val modifier2 = if(surfaceSize != null) modifier.size(surfaceSize) else modifier
     Surface(modifier2, surfaceShape, surfaceColor) {
         Box(if(surfaceSize == null) Modifier else Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text, textModifier, fontWeight = fontWeight, fontSize = fontSize)
+            Text(text, textModifier, color = textColor, fontWeight = fontWeight, fontSize = fontSize)
         }
     }
 }
@@ -569,6 +642,7 @@ fun SurfaceText(modifier: Modifier, surfaceShape: Shape, surfaceColor: Color, te
 @Composable
 fun CrosswordBoard(
     foundWords: Set<String>,
+    revealedHints: Set<Pair<Int, Int>>,
     crosswordData: CrosswordData,
     wordToAnimate: String?,
     onCellPositioned: (position: Pair<Int, Int>, offset: Offset) -> Unit,
@@ -580,6 +654,15 @@ fun CrosswordBoard(
         if (word in foundWords && word != wordToAnimate) {
             word.forEachIndexed { index, char ->
                 allCharPositions[positions[index]] = char
+            }
+        }
+    }
+    // Also reveal hint cells
+    crosswordData.letterPositions.forEach { (word, positions) ->
+        word.forEachIndexed { index, char ->
+            val pos = positions[index]
+            if (pos in revealedHints && pos !in allCharPositions) {
+                allCharPositions[pos] = char
             }
         }
     }
@@ -644,8 +727,11 @@ fun CrosswordBoard(
                                             onCellClicked(y, x)
                                         },
                                     RoundedCornerShape(4.dp),
-                                    if (letter != null) colorScheme.primaryContainer else colorScheme.secondaryContainer,
-                                    letter?.toString() ?: " ", Modifier, FontWeight.Bold, fontSize, size
+                                    if (letter != null) colorScheme.primary else colorScheme.surfaceVariant,
+                                    letter?.toString() ?: " ",
+                                    Modifier,
+                                    FontWeight.Bold, fontSize, size,
+                                    textColor = if (letter != null) colorScheme.onPrimary else Color.Unspecified
                                 )
                             } else {
                                 Box(Modifier.padding(1.dp).size(size))
@@ -661,6 +747,7 @@ fun CrosswordBoard(
 @Composable
 fun LetterChooser(
     letters: List<ChooserLetter>,
+    tapToSpell: Boolean,
     onShuffle: () -> Unit,
     onWordSubmitted: suspend CoroutineScope.(String, List<Int>) -> Unit,
     onWordBoxPositioned: (Offset) -> Unit,
@@ -819,9 +906,16 @@ fun LetterChooser(
                             .offset(x, y)
                             .onGloballyPositioned { coordinates ->
                                 onLetterPositioned(chooserLetter.id, coordinates.localToRoot(Offset.Zero))
-                            },
+                            }
+                            .then(if (tapToSpell) Modifier.clickable {
+                                if (selectedLettersIndices.lastOrNull() == index) {
+                                    selectedLettersIndices = selectedLettersIndices.dropLast(1)
+                                } else if (index !in selectedLettersIndices) {
+                                    selectedLettersIndices = selectedLettersIndices + index
+                                }
+                            } else Modifier),
                             CircleShape,
-                            if (index in selectedLettersIndices) colorScheme.primary else colorScheme.secondary,
+                            if (index in selectedLettersIndices) colorScheme.primary else colorScheme.surfaceVariant,
                             chooserLetter.char.toString(),
                             Modifier.padding(1.dp),
                             FontWeight.Bold,
@@ -833,6 +927,28 @@ fun LetterChooser(
             }
             FilledIconButton(onClick = onShuffle) {
                 Icon(painterResource(R.drawable.ic_shuffle), contentDescription = "Shuffle")
+            }
+        }
+        if (tapToSpell && selectedLettersIndices.isNotEmpty()) {
+            Row(modifier = Modifier.padding(top = 8.dp)) {
+                FilledIconButton(onClick = {
+                    selectedLettersIndices = selectedLettersIndices.dropLast(1)
+                }) {
+                    Icon(painterResource(android.R.drawable.ic_input_delete), contentDescription = "Backspace")
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                FilledIconButton(onClick = {
+                    if (selectedLettersIndices.isNotEmpty()) {
+                        val word = selectedLettersIndices.map { letters[it].char }.joinToString("")
+                        val ids = selectedLettersIndices.map { letters[it].id }
+                        coroutineScope.launch {
+                            onWordSubmitted(word, ids)
+                            selectedLettersIndices = emptyList()
+                        }
+                    }
+                }) {
+                    Icon(painterResource(android.R.drawable.ic_menu_send), contentDescription = "Submit")
+                }
             }
         }
     }
