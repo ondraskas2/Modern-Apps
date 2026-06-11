@@ -18,5 +18,6 @@
     <string name="share_pdf">Share PDF</string>
     <string name="crop_image">Crop Image</string>
     <string name="continue_label">Continue</string>
+    <string name="auto_detect">Auto Detect</string>
     <string name="unsupported_version">This app requires either Android 15 or Google Play Services to be fully updated. If you are unable to do either of these, your device is unfortunately unsupported.</string>
 </resources>

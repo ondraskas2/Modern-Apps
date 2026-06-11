@@ -24,7 +24,7 @@ class GameHubProvider : ContentProvider() {
         }
     }
 
-    private val db by lazy { buildDatabase<GameHubDatabase>(context!!) }
+    private val db by lazy { context!!.buildDatabase<GameHubDatabase>() }
     private val achievementDao by lazy { db.achievementDao() }
     private val scoreDao by lazy { db.scoreDao() }
 
@@ -40,7 +40,7 @@ class GameHubProvider : ContentProvider() {
                 val entities = runBlocking { achievementDao.getByGame(gameId) }
                 val cursor = MatrixCursor(arrayOf("achievement_id", "game_id", "name", "description", "icon_res_name", "unlocked", "unlocked_at"))
                 for (e in entities) {
-                    cursor.addRow(arrayOf(e.achievementId, e.gameId, e.name, e.description, e.iconResName, if (e.unlocked) 1 else 0, e.unlockedAt ?: 0L))
+                    cursor.addRow(arrayOf<Any?>(e.achievementId, e.gameId, e.name, e.description, e.iconResName, if (e.unlocked) 1 else 0, e.unlockedAt ?: 0L))
                 }
                 cursor
             }
@@ -56,7 +56,7 @@ class GameHubProvider : ContentProvider() {
                 }
                 val cursor = MatrixCursor(arrayOf("game_id", "category", "score", "timestamp"))
                 for (e in entities) {
-                    cursor.addRow(arrayOf(e.gameId, e.category, e.score, e.timestamp))
+                    cursor.addRow(arrayOf<Any>(e.gameId, e.category, e.score, e.timestamp))
                 }
                 cursor
             }

@@ -177,7 +177,7 @@ fun AchievementsView(modifier: Modifier = Modifier) {
 
     LaunchedEffect(selectedGame) {
         withContext(Dispatchers.IO) {
-            val db = buildDatabase<GameHubDatabase>(context)
+            val db = context.buildDatabase<GameHubDatabase>()
             achievements = if (selectedGame != null) {
                 db.achievementDao().getByGame(selectedGame!!)
             } else {
@@ -261,7 +261,7 @@ fun StatsView(modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            val db = buildDatabase<GameHubDatabase>(context)
+            val db = context.buildDatabase<GameHubDatabase>()
             val all = db.achievementDao().getAll()
             totalAchievements = all.size
             unlockedAchievements = all.count { it.unlocked }

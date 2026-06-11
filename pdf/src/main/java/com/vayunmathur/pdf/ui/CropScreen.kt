@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -27,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,7 +54,9 @@ import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.pdf.R
 import com.vayunmathur.pdf.model.Quadrilateral
+import com.vayunmathur.pdf.util.AutoFrameDetector
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
@@ -70,18 +74,28 @@ fun CropScreen(
     }
     var originalSize by remember { mutableStateOf<IntSize?>(null) }
     var decodedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(uri) {
-        withContext(Dispatchers.IO) {
+        val bitmap = withContext(Dispatchers.IO) {
             try {
                 val source = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
-                val bitmap = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
                     decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
                     decoder.isMutableRequired = false
                 }
-                originalSize = IntSize(bitmap.width, bitmap.height)
-                decodedBitmap = bitmap
-            } catch (e: Exception) {
+            } catch (_: Exception) { null }
+        }
+        if (bitmap != null) {
+            originalSize = IntSize(bitmap.width, bitmap.height)
+            decodedBitmap = bitmap
+            if (initialQuadrilateral == null) {
+                withContext(Dispatchers.Default) {
+                    AutoFrameDetector.detect(bitmap)
+                }?.let { quadrilateral = it }
+            }
+        } else {
+            withContext(Dispatchers.IO) {
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 context.contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
@@ -101,6 +115,22 @@ fun CropScreen(
                 title = { Text(stringResource(R.string.crop_image)) },
                 navigationIcon = {
                     IconNavigation(navBack = onBack)
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            decodedBitmap?.let { bmp ->
+                                scope.launch {
+                                    withContext(Dispatchers.Default) {
+                                        AutoFrameDetector.detect(bmp)
+                                    }?.let { quadrilateral = it }
+                                }
+                            }
+                        },
+                        enabled = decodedBitmap != null
+                    ) {
+                        Text(stringResource(R.string.auto_detect))
+                    }
                 }
             )
         },
