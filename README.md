@@ -91,3 +91,5 @@ Also supports tool calling, which enables interactions with other apps in this e
 
 ## YouPipe
 A YouTube frontend using Material 3 You - based on the NewPipe Extractor library. Supports downloading videos, and and importing data directly from NewPipe or Youtube (via Google Takeout).
+
+Also includes a simple (will be improved as time goes on) algorithm to suggest videos you might like. The algorithm runs 100% on-device, and is based solely on watch history, subscriptions, and (eventually) explicit user input.
