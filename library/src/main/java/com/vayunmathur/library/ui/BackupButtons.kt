@@ -126,7 +126,7 @@ fun BackupButtons(format: BackupFormat) {
     IconButton(onClick = { exportLauncher.launch(format.defaultFileName) }) {
         IconBackup()
     }
-    IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+    IconButton(onClick = { importLauncher.launch(arrayOf(format.mimeType)) }) {
         IconRestore()
     }
 }

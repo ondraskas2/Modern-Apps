@@ -26,10 +26,6 @@ class KdbxBackupFormat(
         val db = DomDatabaseWrapper()
 
         val root = db.rootGroup
-        val passwordsGroup = db.newGroup("Passwords")
-        val passkeysGroup = db.newGroup("Passkeys")
-        root.addGroup(passwordsGroup)
-        root.addGroup(passkeysGroup)
 
         for (pw in passwordDao.getAll()) {
             val entry = db.newEntry()
@@ -45,7 +41,8 @@ class KdbxBackupFormat(
             pw.totpSecret?.let { secret ->
                 entry.setProperty("otp", "otpauth://totp/?secret=$secret")
             }
-            passwordsGroup.addEntry(entry)
+            entry.setProperty("_Type", "password")
+            root.addEntry(entry)
         }
 
         for (pk in passkeyDao.getAll()) {
@@ -53,12 +50,13 @@ class KdbxBackupFormat(
             entry.title = pk.rpName
             entry.username = pk.userName
             entry.url = pk.rpId
+            entry.setProperty("_Type", "passkey")
             entry.setProperty("KPEX_PASSKEY_USERNAME", pk.userName)
             entry.setProperty("KPEX_PASSKEY_PRIVATE_KEY_PEM", Base64.encodeToString(pk.privateKeyBytes, Base64.NO_WRAP))
             entry.setProperty("KPEX_PASSKEY_CREDENTIAL_ID", pk.credentialId)
             entry.setProperty("KPEX_PASSKEY_USER_HANDLE", pk.userId)
             entry.setProperty("KPEX_PASSKEY_RELYING_PARTY", pk.rpId)
-            passkeysGroup.addEntry(entry)
+            root.addEntry(entry)
         }
 
         db.save(creds, outputStream)
