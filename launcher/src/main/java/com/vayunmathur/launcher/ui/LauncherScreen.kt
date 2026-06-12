@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import com.vayunmathur.launcher.LauncherViewModel
 import com.vayunmathur.launcher.MainActivity
+import com.vayunmathur.launcher.util.NotificationListener
 import com.vayunmathur.launcher.widget.WidgetPicker
 
 @Composable
@@ -41,6 +42,10 @@ fun LauncherScreen(
     val contextMenuApp by viewModel.contextMenuApp.collectAsState()
     val contextMenuDockApp by viewModel.contextMenuDockApp.collectAsState()
     val openFolder by viewModel.openFolder.collectAsState()
+    val isDragging by viewModel.isDragging.collectAsState()
+    val dragSource by viewModel.dragSource.collectAsState()
+    val dragOffset by viewModel.dragOffset.collectAsState()
+    val badgeCounts by NotificationListener.badgeCounts.collectAsState()
 
     val context = LocalContext.current
     val view = LocalView.current
@@ -60,7 +65,9 @@ fun LauncherScreen(
                         try {
                             @Suppress("DEPRECATION")
                             val sbService = context.getSystemService("statusbar")
-                            sbService?.javaClass?.getMethod("expandNotificationsPanel")?.invoke(sbService)
+                            sbService?.javaClass
+                                ?.getMethod("expandNotificationsPanel")
+                                ?.invoke(sbService)
                         } catch (_: Exception) {}
                     }
                 )
@@ -89,6 +96,17 @@ fun LauncherScreen(
                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     viewModel.showHomeContextMenu()
                 },
+                onDragStart = { source, offset ->
+                    viewModel.startDrag(source, offset)
+                },
+                onDrag = { offset ->
+                    viewModel.updateDragPosition(offset)
+                },
+                onDragEnd = { page, row, col ->
+                    viewModel.endDrag()
+                },
+                isDragging = isDragging,
+                dragSource = dragSource,
                 modifier = Modifier.weight(1f)
             )
 
@@ -109,6 +127,22 @@ fun LauncherScreen(
             )
         }
 
+        // Drag overlay
+        if (isDragging && dragSource != null) {
+            val dragIcon = when (val src = dragSource) {
+                is com.vayunmathur.launcher.DragSource.Home ->
+                    viewModel.getIcon(src.item.packageName)
+                is com.vayunmathur.launcher.DragSource.Dock ->
+                    viewModel.getIcon(src.item.packageName)
+                is com.vayunmathur.launcher.DragSource.Drawer ->
+                    src.appInfo.icon
+                else -> null
+            }
+            if (dragIcon != null) {
+                DragOverlay(icon = dragIcon, offset = dragOffset)
+            }
+        }
+
         if (isDrawerOpen) {
             AppDrawer(
                 apps = apps,
@@ -122,6 +156,9 @@ fun LauncherScreen(
                     context.packageManager.getLaunchIntentForPackage(app.packageName)?.let {
                         context.startActivity(it)
                     }
+                },
+                onAppLongClick = { app ->
+                    viewModel.addToHomeFromDrawer(app, pagerState.currentPage, 0, 0)
                 },
                 focusSearch = focusSearch
             )

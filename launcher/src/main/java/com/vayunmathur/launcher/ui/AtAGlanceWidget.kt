@@ -50,9 +50,9 @@ fun AtAGlanceWidget(modifier: Modifier = Modifier) {
 
     val shadowStyle = TextStyle(
         shadow = Shadow(
-            color = Color.Black.copy(alpha = 0.6f),
-            offset = Offset(1f, 1f),
-            blurRadius = 4f
+            color = Color.Black.copy(alpha = 0.8f),
+            offset = Offset(1f, 1.5f),
+            blurRadius = 6f
         )
     )
 
@@ -61,13 +61,14 @@ fun AtAGlanceWidget(modifier: Modifier = Modifier) {
             text = dateString,
             style = MaterialTheme.typography.headlineSmall.merge(shadowStyle),
             color = Color.White,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Bold
         )
         nextEvent?.let {
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodyMedium.merge(shadowStyle),
                 color = Color.White.copy(alpha = 0.9f),
+                fontWeight = FontWeight.Medium,
                 maxLines = 1
             )
         }

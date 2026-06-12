@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.graphics.drawable.Drawable
+import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.launcher.data.DockItem
@@ -33,6 +34,12 @@ data class AppInfo(
     val activityName: String = "",
     val icon: Drawable
 )
+
+sealed class DragSource {
+    data class Home(val item: HomeScreenItem) : DragSource()
+    data class Dock(val item: DockItem) : DragSource()
+    data class Drawer(val appInfo: AppInfo) : DragSource()
+}
 
 @OptIn(FlowPreview::class)
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
@@ -72,6 +79,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _openFolder = MutableStateFlow<FolderInfo?>(null)
     val openFolder: StateFlow<FolderInfo?> = _openFolder.asStateFlow()
+
+    // Drag & Drop state
+    private val _dragSource = MutableStateFlow<DragSource?>(null)
+    val dragSource: StateFlow<DragSource?> = _dragSource.asStateFlow()
+
+    private val _dragOffset = MutableStateFlow(Offset.Zero)
+    val dragOffset: StateFlow<Offset> = _dragOffset.asStateFlow()
+
+    private val _isDragging = MutableStateFlow(false)
+    val isDragging: StateFlow<Boolean> = _isDragging.asStateFlow()
 
     val homeItems: StateFlow<List<HomeScreenItem>> = db.homeScreenDao().getAllItems()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -117,20 +134,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private fun loadApps() {
         val pm = getApplication<Application>().packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
-        _apps.value = resolveInfos
+        val launcherApps = getApplication<Application>()
+            .getSystemService(android.content.Context.LAUNCHER_APPS_SERVICE) as android.content.pm.LauncherApps
+
+        val userHandle = android.os.Process.myUserHandle()
+        val activities = launcherApps.getActivityList(null, userHandle)
+
+        _apps.value = activities
             .mapNotNull { info ->
-                val label = info.loadLabel(pm).toString()
-                val icon = info.loadIcon(pm)
-                iconCache[info.activityInfo.packageName] = icon
+                val label = info.label.toString()
+                val icon = info.getBadgedIcon(0)
+                val pkg = info.applicationInfo.packageName
+                iconCache[pkg] = icon
                 AppInfo(
                     name = label,
-                    packageName = info.activityInfo.packageName,
-                    activityName = info.activityInfo.name,
+                    packageName = pkg,
+                    activityName = info.componentName.className,
                     icon = icon
                 )
             }
+            .distinctBy { it.packageName }
             .sortedBy { it.name.lowercase() }
     }
 
@@ -216,6 +239,52 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun openFolder(folder: FolderInfo) { _openFolder.value = folder }
     fun closeFolder() { _openFolder.value = null }
+
+    // Drag & Drop operations
+    fun startDrag(source: DragSource, position: Offset) {
+        _dragSource.value = source
+        _dragOffset.value = position
+        _isDragging.value = true
+    }
+
+    fun updateDragPosition(position: Offset) {
+        _dragOffset.value = position
+    }
+
+    fun endDrag() {
+        _dragSource.value = null
+        _isDragging.value = false
+    }
+
+    fun moveItem(item: HomeScreenItem, newPage: Int, newRow: Int, newCol: Int) {
+        viewModelScope.launch {
+            db.homeScreenDao().upsert(item.copy(pageIndex = newPage, row = newRow, col = newCol))
+        }
+    }
+
+    fun moveDockItem(from: Int, to: Int) {
+        viewModelScope.launch {
+            val items = dockItems.value.toMutableList()
+            if (from in items.indices && to in items.indices) {
+                val moved = items.removeAt(from)
+                items.add(to, moved)
+                items.forEachIndexed { index, item ->
+                    db.dockDao().upsert(item.copy(position = index))
+                }
+            }
+        }
+    }
+
+    fun addToHomeFromDrawer(appInfo: AppInfo, page: Int, row: Int, col: Int) {
+        viewModelScope.launch {
+            db.homeScreenDao().upsert(
+                HomeScreenItem(
+                    pageIndex = page, row = row, col = col,
+                    packageName = appInfo.packageName, activityName = appInfo.activityName
+                )
+            )
+        }
+    }
 
     fun addToDock(packageName: String, activityName: String, position: Int) {
         viewModelScope.launch {

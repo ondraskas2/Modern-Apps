@@ -2,7 +2,10 @@ package com.vayunmathur.launcher.widget
 
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Process
+import android.os.UserManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,25 +14,31 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import android.graphics.Bitmap
 
 data class WidgetOption(
     val info: AppWidgetProviderInfo,
@@ -46,25 +55,48 @@ fun WidgetPicker(
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var filterQuery by remember { mutableStateOf("") }
 
-    val widgets = remember {
+    val densityDpi = context.resources.displayMetrics.densityDpi
+
+    val allWidgets = remember {
         val manager = AppWidgetManager.getInstance(context)
         val pm = context.packageManager
-        manager.installedProviders
+        val userManager = context.getSystemService(UserManager::class.java)
+        val profiles = userManager?.userProfiles ?: listOf(Process.myUserHandle())
+
+        profiles.flatMap { profile ->
+            manager.getInstalledProvidersForProfile(profile)
+        }
+            .distinctBy { it.provider.flattenToString() }
             .map { info ->
                 WidgetOption(
                     info = info,
                     label = info.loadLabel(pm),
-                    icon = info.loadPreviewImage(context, 0) ?: info.loadIcon(context, 0),
+                    icon = info.loadPreviewImage(context, densityDpi)
+                        ?: info.loadIcon(context, densityDpi),
                     appName = info.provider.packageName.let { pkg ->
                         try {
-                            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                            pm.getApplicationLabel(
+                                pm.getApplicationInfo(pkg, 0)
+                            ).toString()
                         } catch (_: Exception) { pkg }
                     }
                 )
             }
             .sortedBy { it.appName }
-            .groupBy { it.appName }
+    }
+
+    val filteredWidgets = remember(allWidgets, filterQuery) {
+        if (filterQuery.isBlank()) {
+            allWidgets.groupBy { it.appName }
+        } else {
+            val q = filterQuery.lowercase()
+            allWidgets.filter {
+                it.appName.lowercase().contains(q) ||
+                it.label.lowercase().contains(q)
+            }.groupBy { it.appName }
+        }
     }
 
     ModalBottomSheet(
@@ -77,10 +109,22 @@ fun WidgetPicker(
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
         )
 
+        OutlinedTextField(
+            value = filterQuery,
+            onValueChange = { filterQuery = it },
+            placeholder = { Text("Search widgets…") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 4.dp)
+        )
+
         LazyColumn(
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
-            widgets.forEach { (appName, options) ->
+            filteredWidgets.forEach { (appName, options) ->
                 item {
                     Text(
                         appName,
