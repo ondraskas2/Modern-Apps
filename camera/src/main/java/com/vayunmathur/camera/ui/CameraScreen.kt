@@ -100,33 +100,59 @@ import com.vayunmathur.camera.util.FlashMode
 import com.vayunmathur.camera.util.QrAnalyzer
 import com.vayunmathur.camera.util.TimerDuration
 import com.vayunmathur.library.util.NavBackStack
+import kotlinx.coroutines.delay
 
-private val ZOOM_LEVELS = listOf(".5" to 0.5f, "1x" to 1f, "2" to 2f, "5" to 5f)
 
 private const val BOKEH_SHADER = """
     uniform shader cameraInput;
     uniform shader alphaMask;
-    
+
     half4 main(float2 fragCoord) {
         float maskAlpha = alphaMask.eval(fragCoord).a;
-        
-        if (maskAlpha > 0.5) {
-            return cameraInput.eval(fragCoord);
-        }
-        
-        half4 blur = half4(0.0);
-        float samples = 0.0;
-        
-        for (float x = -16.0; x <= 16.0; x += 2.0) {
-            for (float y = -16.0; y <= 16.0; y += 2.0) {
-                blur += cameraInput.eval(fragCoord + float2(x, y));
-                samples += 1.0;
-            }
-        }
-        
         half4 sharp = cameraInput.eval(fragCoord);
-        half4 blurred = blur / samples;
-        return mix(blurred, sharp, maskAlpha);
+
+        // 3-pass separable bokeh: blur along 0°, 120°, 240° axes then average.
+        // Each pass samples 13 taps along its direction (radius ~36px).
+        float2 dir0 = float2(1.0, 0.0);
+        float2 dir1 = float2(-0.5, 0.866);
+        float2 dir2 = float2(-0.5, -0.866);
+
+        // 1D Gaussian-ish weights for 13 taps (symmetric, sum ≈ 1)
+        float w0 = 0.14;
+        float w1 = 0.13;
+        float w2 = 0.11;
+        float w3 = 0.09;
+        float w4 = 0.06;
+        float w5 = 0.04;
+        float w6 = 0.02;
+
+        half4 pass0 = cameraInput.eval(fragCoord) * w0;
+        half4 pass1 = cameraInput.eval(fragCoord) * w0;
+        half4 pass2 = cameraInput.eval(fragCoord) * w0;
+
+        for (float i = 1.0; i <= 6.0; i += 1.0) {
+            float w;
+            if (i < 1.5) w = w1;
+            else if (i < 2.5) w = w2;
+            else if (i < 3.5) w = w3;
+            else if (i < 4.5) w = w4;
+            else if (i < 5.5) w = w5;
+            else w = w6;
+
+            float2 off0 = dir0 * i * 6.0;
+            float2 off1 = dir1 * i * 6.0;
+            float2 off2 = dir2 * i * 6.0;
+
+            pass0 += cameraInput.eval(fragCoord + off0) * w;
+            pass0 += cameraInput.eval(fragCoord - off0) * w;
+            pass1 += cameraInput.eval(fragCoord + off1) * w;
+            pass1 += cameraInput.eval(fragCoord - off1) * w;
+            pass2 += cameraInput.eval(fragCoord + off2) * w;
+            pass2 += cameraInput.eval(fragCoord - off2) * w;
+        }
+
+        half4 blur = (pass0 + pass1 + pass2) / 3.0;
+        return mix(blur, sharp, maskAlpha);
     }
 """
 
@@ -139,6 +165,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     val lensFacing by viewModel.lensFacing.collectAsState()
     val flashMode by viewModel.flashMode.collectAsState()
     val isRecording by viewModel.isRecording.collectAsState()
+    val recordingDuration by viewModel.recordingDurationSec.collectAsState()
     val timerCountdown by viewModel.timerCountdown.collectAsState()
     val qrResult by viewModel.qrResult.collectAsState()
     val aspectRatio by viewModel.aspectRatio.collectAsState()
@@ -153,17 +180,15 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
 
     var maskBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val isPhotoType = cameraMode in listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.PANORAMA)
+    val isSloMo = cameraMode == CameraMode.SLOW_MO
+    val highSpeedActive by viewModel.highSpeedActive.collectAsState()
+    val availableZoomLevels by viewModel.availableZoomLevels.collectAsState()
     val bokehShader = remember { lazy { RuntimeShader(BOKEH_SHADER) } }
 
     val panoSweeping by viewModel.panoramaEngine.isSweeping.collectAsState()
     val panoStitching by viewModel.panoramaEngine.isStitching.collectAsState()
     val panoFrameCount by viewModel.panoramaEngine.frameCount.collectAsState()
     val panoAngle by viewModel.panoramaEngine.sweepAngle.collectAsState()
-
-    val animatedZoom by animateFloatAsState(
-        targetValue = zoomRatio,
-        animationSpec = tween(durationMillis = 300)
-    )
 
     // Orientation tracking
     var deviceRotation by remember { mutableIntStateOf(0) }
@@ -206,22 +231,42 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
             .build()
     }
 
+    LaunchedEffect(lensFacing, isSloMo) {
+        if (isSloMo) return@LaunchedEffect
+        delay(500)
+        viewModel.updateZoomLevels(lensFacing)
+    }
+
     LaunchedEffect(Unit) {
         viewModel.updateLocation()
-        controller.isPinchToZoomEnabled = false
+        controller.isPinchToZoomEnabled = true
+    }
+
+    // Sync controller's zoom state back to ViewModel (for pinch-to-zoom)
+    DisposableEffect(controller, lifecycleOwner) {
+        val observer = androidx.lifecycle.Observer<androidx.camera.core.ZoomState> { state ->
+            if (state != null) {
+                viewModel.setZoomRatio(state.zoomRatio)
+            }
+        }
+        controller.zoomState.observe(lifecycleOwner, observer)
+        onDispose { controller.zoomState.removeObserver(observer) }
     }
 
     LaunchedEffect(flashMode) {
         controller.imageCaptureFlashMode = viewModel.getImageCaptureFlashMode()
     }
 
-    LaunchedEffect(animatedZoom) {
+    LaunchedEffect(zoomRatio) {
         val zoomState = controller.zoomState.value
-        if (zoomState != null) {
-            val clamped = animatedZoom.coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
-            controller.setZoomRatio(clamped)
-        } else {
-            controller.setZoomRatio(animatedZoom)
+        val currentZoom = zoomState?.zoomRatio ?: 0f
+        if (kotlin.math.abs(currentZoom - zoomRatio) > 0.05f) {
+            if (zoomState != null) {
+                val clamped = zoomRatio.coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
+                controller.setZoomRatio(clamped)
+            } else {
+                controller.setZoomRatio(zoomRatio)
+            }
         }
     }
 
@@ -236,7 +281,11 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     }
 
     LaunchedEffect(cameraMode) {
-        if (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT || cameraMode == CameraMode.PANORAMA) {
+        if (cameraMode == CameraMode.SLOW_MO) {
+            maskBitmap = null
+            controller.clearImageAnalysisAnalyzer()
+            viewModel.setQrResult(null)
+        } else if (cameraMode == CameraMode.PHOTO || cameraMode == CameraMode.PORTRAIT || cameraMode == CameraMode.PANORAMA) {
             controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
             when (cameraMode) {
                 CameraMode.PORTRAIT -> {
@@ -270,10 +319,53 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
         }
     }
 
-    DisposableEffect(Unit) {
-        controller.bindToLifecycle(lifecycleOwner)
-        onDispose { }
+    // Manage camera binding: controller for normal modes, high-speed session for slo-mo
+    val highSpeedPreviewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
     }
+
+    LaunchedEffect(isSloMo, lensFacing) {
+        if (isSloMo) {
+            controller.unbind()
+            val success = viewModel.setupHighSpeedSession(
+                lifecycleOwner,
+                highSpeedPreviewView.surfaceProvider
+            )
+            if (!success) {
+                android.util.Log.d("SloMo", "High-speed not available, falling back to CameraX")
+                controller.bindToLifecycle(lifecycleOwner)
+                val cameraControl = controller.cameraControl ?: return@LaunchedEffect
+                val cam2Control = androidx.camera.camera2.interop.Camera2CameraControl.from(cameraControl)
+                val cameraInfo = controller.cameraInfo ?: return@LaunchedEffect
+                val cam2Info = androidx.camera.camera2.interop.Camera2CameraInfo.from(cameraInfo)
+                val normalRanges = cam2Info.getCameraCharacteristic(
+                    android.hardware.camera2.CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
+                )
+                val bestRange = normalRanges?.toList()?.filter { it.upper > 30 }?.maxByOrNull { it.upper }
+                    ?: android.util.Range(30, 30)
+                viewModel.setSloMoFps(bestRange.upper)
+                controller.videoCaptureQualitySelector =
+                    androidx.camera.video.QualitySelector.from(androidx.camera.video.Quality.HD)
+                cam2Control.setCaptureRequestOptions(
+                    androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+                        .setCaptureRequestOption(
+                            android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                            bestRange
+                        )
+                        .build()
+                )
+                android.util.Log.d("SloMo", "Fallback: using ${bestRange.upper}fps via CameraX")
+            }
+        } else {
+            viewModel.teardownHighSpeedSession()
+            delay(200)
+            controller.bindToLifecycle(lifecycleOwner)
+        }
+    }
+
 
     val previewAspectRatio = when (aspectRatio) {
         AspectRatioOption.RATIO_16_9 -> 9f / 16f
@@ -308,33 +400,25 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                     contentAlignment = Alignment.Center
                 ) {
                     @OptIn(ExperimentalComposeUiApi::class)
-                    AndroidView(
-                        factory = { ctx ->
-                            PreviewView(ctx).apply {
-                                this.controller = controller
-                                scaleType = PreviewView.ScaleType.FIT_CENTER
-                                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(previewAspectRatio)
-                            .clip(RoundedCornerShape(12.dp))
-                            .then(
-                                run {
-                                    val hasColorAdj = warmth != 0f || shadows != 0f
-                                    val hasBokeh = cameraMode == CameraMode.PORTRAIT && maskBitmap != null
-                                    if (hasBokeh || hasColorAdj) {
-                                        Modifier.graphicsLayer {
-                                            var effect: RenderEffect? = null
+                    val previewModifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(previewAspectRatio)
+                        .clip(RoundedCornerShape(12.dp))
+                        .then(
+                            run {
+                                val hasColorAdj = warmth != 0f || shadows != 0f
+                                val hasBokeh = cameraMode == CameraMode.PORTRAIT && maskBitmap != null
+                                if (hasBokeh || hasColorAdj) {
+                                    Modifier.graphicsLayer {
+                                        var effect: RenderEffect? = null
 
-                                            if (hasBokeh) {
-                                                val mask = maskBitmap!!
-                                                val shader = bokehShader.value
-                                                val maskShader = BitmapShader(mask, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-                                                val matrix = Matrix()
-                                                matrix.setScale(size.width / mask.width, size.height / mask.height)
-                                                maskShader.setLocalMatrix(matrix)
+                                        if (hasBokeh) {
+                                            val mask = maskBitmap!!
+                                            val shader = bokehShader.value
+                                            val maskShader = BitmapShader(mask, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+                                            val matrix = Matrix()
+                                            matrix.setScale(size.width / mask.width, size.height / mask.height)
+                                            maskShader.setLocalMatrix(matrix)
                                                 shader.setInputShader("alphaMask", maskShader)
                                                 effect = RenderEffect.createRuntimeShaderEffect(shader, "cameraInput")
                                             }
@@ -364,18 +448,6 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                     }
                                 }
                             )
-                            .pointerInput(Unit) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    val newZoom = (viewModel.zoomRatio.value * zoom)
-                                    val zoomState = controller.zoomState.value
-                                    val clamped = if (zoomState != null) {
-                                        newZoom.coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
-                                    } else {
-                                        newZoom.coerceIn(0.5f, 10f)
-                                    }
-                                    viewModel.setZoomRatio(clamped)
-                                }
-                            }
                             .pointerInteropFilter { event ->
                                 if (event.action == MotionEvent.ACTION_UP) {
                                     val factory = SurfaceOrientedMeteringPointFactory(
@@ -387,7 +459,24 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                 }
                                 false
                             }
-                    )
+
+                    if (isSloMo) {
+                        AndroidView(
+                            factory = { highSpeedPreviewView },
+                            modifier = previewModifier
+                        )
+                    } else {
+                        AndroidView(
+                            factory = { ctx ->
+                                PreviewView(ctx).apply {
+                                    this.controller = controller
+                                    scaleType = PreviewView.ScaleType.FIT_CENTER
+                                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                                }
+                            },
+                            modifier = previewModifier
+                        )
+                    }
 
                     if (gridEnabled) {
                         GridOverlay(
@@ -421,6 +510,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
 
                     ZoomBar(
                         currentZoom = zoomRatio,
+                        zoomLevels = availableZoomLevels,
                         onZoomSelected = { viewModel.setZoomRatio(it) },
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
                     )
@@ -437,6 +527,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                 if (panoSweeping) viewModel.stopPanorama()
                                 else viewModel.startPanorama()
                             }
+                            isSloMo && highSpeedActive -> viewModel.toggleHighSpeedRecording()
                             isPhotoType -> viewModel.takePhoto(controller)
                             else -> viewModel.toggleRecording(controller)
                         }
@@ -460,6 +551,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                     cameraMode = cameraMode,
                     isPhotoType = isPhotoType,
                     timerDuration = timerDuration,
+                    iconRotation = animatedRotation,
                     onPickerChanged = { photo ->
                         if (photo) {
                             viewModel.setCameraMode(CameraMode.PHOTO)
@@ -497,6 +589,13 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                     isStitching = panoStitching,
                     frameCount = panoFrameCount,
                     sweepAngle = panoAngle,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 60.dp)
+                )
+            }
+
+            if (isRecording) {
+                RecordingIndicator(
+                    durationSec = recordingDuration,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 60.dp)
                 )
             }
@@ -685,7 +784,12 @@ private fun VerticalSlider(
 }
 
 @Composable
-private fun ZoomBar(currentZoom: Float, onZoomSelected: (Float) -> Unit, modifier: Modifier = Modifier) {
+private fun ZoomBar(
+    currentZoom: Float,
+    zoomLevels: List<Pair<String, Float>>,
+    onZoomSelected: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
     Row(
         modifier = modifier
             .background(Color(0x99000000), RoundedCornerShape(24.dp))
@@ -693,8 +797,8 @@ private fun ZoomBar(currentZoom: Float, onZoomSelected: (Float) -> Unit, modifie
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ZOOM_LEVELS.forEach { (label, ratio) ->
-            val isSelected = currentZoom == ratio
+        zoomLevels.forEach { (label, ratio) ->
+            val isSelected = kotlin.math.abs(currentZoom - ratio) < 0.05f
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -732,6 +836,10 @@ private fun ShutterRow(
         targetValue = if (isCapturing) 0.8f else 1f,
         animationSpec = spring(dampingRatio = 0.4f, stiffness = 800f)
     )
+    val recordingCornerRadius by animateFloatAsState(
+        targetValue = if (isRecording) 8f else 38f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f)
+    )
 
     Row(
         modifier = Modifier
@@ -765,19 +873,27 @@ private fun ShutterRow(
             }
         }
 
+        val animatedSize by animateFloatAsState(
+            targetValue = if (isRecording) 36f else 66f,
+            animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f)
+        )
         Box(
             modifier = Modifier
-                .size((76 * shutterScale).dp)
-                .border(3.dp, Color.White, CircleShape)
-                .padding(5.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isRecording) Color.Red
-                    else if (cameraMode in listOf(CameraMode.VIDEO, CameraMode.SLOW_MO, CameraMode.TIMELAPSE)) Color.Red
-                    else Color.White
-                )
-                .clickable(onClick = onCapture)
-        )
+                .size(76.dp)
+                .border(3.dp, Color.White, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(animatedSize.dp)
+                    .clip(RoundedCornerShape(recordingCornerRadius.dp))
+                    .background(
+                        if (cameraMode in listOf(CameraMode.VIDEO, CameraMode.SLOW_MO, CameraMode.TIMELAPSE)) Color.Red
+                        else Color.White
+                    )
+                    .clickable(onClick = onCapture)
+            )
+        }
 
         Box(
             modifier = Modifier
@@ -844,6 +960,7 @@ private fun BottomBar(
     cameraMode: CameraMode,
     isPhotoType: Boolean,
     timerDuration: TimerDuration,
+    iconRotation: Float,
     onPickerChanged: (Boolean) -> Unit,
     onSettingsClick: () -> Unit,
     onTimerCycle: () -> Unit
@@ -866,7 +983,7 @@ private fun BottomBar(
                 painterResource(com.vayunmathur.library.R.drawable.settings_24px),
                 contentDescription = stringResource(R.string.settings),
                 tint = Color.White,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(22.dp).rotate(iconRotation)
             )
         }
 
@@ -890,7 +1007,7 @@ private fun BottomBar(
                     painterResource(R.drawable.photo_camera_24px),
                     contentDescription = stringResource(R.string.mode_photo),
                     tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(20.dp).rotate(iconRotation)
                 )
             }
             Box(
@@ -907,7 +1024,7 @@ private fun BottomBar(
                     painterResource(R.drawable.video_camera_back_24px),
                     contentDescription = stringResource(R.string.mode_video),
                     tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(20.dp).rotate(iconRotation)
                 )
             }
         }
@@ -932,7 +1049,7 @@ private fun BottomBar(
                         painterResource(R.drawable.ic_timer),
                         contentDescription = stringResource(R.string.settings_timer),
                         tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(22.dp).rotate(iconRotation)
                     )
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -940,7 +1057,7 @@ private fun BottomBar(
                             painterResource(R.drawable.ic_timer),
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(14.dp).rotate(iconRotation)
                         )
                         Text(timerLabel, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = 10.sp)
                     }
@@ -994,6 +1111,39 @@ private fun QrResultOverlay(text: String, onDismiss: () -> Unit, context: Contex
                 Text(stringResource(android.R.string.cancel))
             }
         }
+    }
+}
+
+@Composable
+private fun RecordingIndicator(durationSec: Long, modifier: Modifier = Modifier) {
+    val dotAlpha by animateFloatAsState(
+        targetValue = if ((durationSec % 2) == 0L) 1f else 0.3f,
+        animationSpec = tween(500)
+    )
+
+    val minutes = durationSec / 60
+    val seconds = durationSec % 60
+    val timeText = "%d:%02d".format(minutes, seconds)
+
+    Row(
+        modifier = modifier
+            .background(Color(0xCC000000), RoundedCornerShape(20.dp))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .graphicsLayer { alpha = dotAlpha }
+                .background(Color.Red, CircleShape)
+        )
+        Text(
+            text = timeText,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
