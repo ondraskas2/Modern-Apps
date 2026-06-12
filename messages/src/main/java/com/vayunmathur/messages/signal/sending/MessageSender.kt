@@ -137,9 +137,6 @@ class MessageSender(
             contentWithProfileKey.receiptMessage.type == SignalServiceProtos.ReceiptMessage.Type.READ &&
             accountRecord != null && !accountRecord.readReceipts) {
             Log.d(TAG, "Not sending read receipt as read receipts are disabled")
-            if (contentWithProfileKey.hasReceiptMessage()) {
-                sendSyncMessage(recipientAci, contentWithProfileKey, timestamp)
-            }
             return SendResult(success = true)
         }
 
@@ -338,10 +335,14 @@ class MessageSender(
         val deviceIds = deviceManager.getDeviceIds(recipientAci)
         val messages = JSONArray()
 
+        // Determine sealed sender eligibility: need unauthed WS, profile key, and not self
+        val profileKey = recipientStore?.getRecipient(recipientAci)?.profileKey
+        val useSealed = useSealedSender && unauthedWs != null && recipientAci != selfAci && profileKey != null
+
         for (deviceId in deviceIds) {
             deviceManager.ensureSession(recipientAci, deviceId)
             val address = SignalProtocolAddress(recipientAci, deviceId)
-            val encrypted = encryptFor(address, paddedContent, sealedSender = useSealedSender && unauthedWs != null && recipientAci != selfAci)
+            val encrypted = encryptFor(address, paddedContent, sealedSender = useSealed)
             messages.put(JSONObject().apply {
                 put("type", encrypted.first)
                 put("destinationDeviceId", deviceId)
@@ -358,28 +359,18 @@ class MessageSender(
         }
 
         var sentUnidentified = false
-        val response = if (useSealedSender && unauthedWs != null && recipientAci != selfAci) {
-            val profileKey = recipientStore?.getRecipient(recipientAci)?.profileKey
-            if (profileKey != null) {
-                sentUnidentified = true
-                val accessKey = deriveAccessKey(profileKey)
-                unauthedWs!!.sendRequest(
-                    "PUT",
-                    "/v1/messages/$recipientAci",
-                    payload.toString().toByteArray(),
-                    mapOf(
-                        "Content-Type" to "application/json",
-                        "Unidentified-Access-Key" to Base64.encodeToString(accessKey, Base64.NO_WRAP),
-                    )
+        val response = if (useSealed) {
+            sentUnidentified = true
+            val accessKey = deriveAccessKey(profileKey!!)
+            unauthedWs!!.sendRequest(
+                "PUT",
+                "/v1/messages/$recipientAci",
+                payload.toString().toByteArray(),
+                mapOf(
+                    "Content-Type" to "application/json",
+                    "Unidentified-Access-Key" to Base64.encodeToString(accessKey, Base64.NO_WRAP),
                 )
-            } else {
-                ws.sendRequest(
-                    "PUT",
-                    "/v1/messages/$recipientAci",
-                    payload.toString().toByteArray(),
-                    mapOf("Content-Type" to "application/json")
-                )
-            }
+            )
         } else {
             ws.sendRequest(
                 "PUT",
@@ -436,8 +427,6 @@ class MessageSender(
         paddedContent: ByteArray,
         sealedSender: Boolean = false,
     ): Triple<Int, Int, String> {
-        val cipher = SessionCipher(protocolStore, address)
-        val ciphertext = cipher.encrypt(paddedContent)
         val regId = protocolStore.loadSession(address).remoteRegistrationId
 
         if (sealedSender) {
@@ -445,9 +434,12 @@ class MessageSender(
             val sealedCipher = SealedSessionCipher(
                 protocolStore, UUID.fromString(selfAci), selfAci, selfDeviceId
             )
-            val sealedPayload = sealedCipher.encrypt(address, cert, ciphertext.serialize())
+            val sealedPayload = sealedCipher.encrypt(address, cert, paddedContent)
             return Triple(6, regId, Base64.encodeToString(sealedPayload, Base64.NO_WRAP))
         }
+
+        val cipher = SessionCipher(protocolStore, address)
+        val ciphertext = cipher.encrypt(paddedContent)
 
         val type = when (ciphertext.type) {
             CiphertextMessage.PREKEY_TYPE -> 3

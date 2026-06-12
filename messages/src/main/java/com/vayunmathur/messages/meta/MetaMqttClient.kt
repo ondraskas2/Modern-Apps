@@ -35,6 +35,7 @@ class MetaMqttClient(
         const val MAX_RECONNECT_DELAY_MS = 60000L
         const val MAX_RECONNECT_ATTEMPTS = 10
         const val ACK_TIMEOUT_MS = 30000L
+        const val ERROR_24_COOLDOWN_MS = 10 * 60 * 1000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,6 +49,8 @@ class MetaMqttClient(
     private var pingJob: Job? = null
     private var pongTimeoutJob: Job? = null
     private var reconnectAttempts = 0
+    private var lastFullReconnectTime = 0L
+    private var lastError24ReconnectTime = 0L
 
     private val packetsSent = AtomicInteger(0)
     private val sessionId = MetaProtocol.generateSessionId()
@@ -218,13 +221,47 @@ class MetaMqttClient(
     private fun handleConnAck(connAck: MqttFraming.MqttResponse.ConnAck) {
         if (connAck.connectionCode != MetaProtocol.CONNECTION_ACCEPTED) {
             Log.e(TAG, "Connection refused: code=${connAck.connectionCode}")
-            // Issue #4: Detect authentication and consent errors for specific recovery
             val reason = when (connAck.connectionCode) {
-                4, 5 -> "TokenExpired"    // 4=bad credentials, 5=not authorized
+                MetaProtocol.CONNECTION_REFUSED_BAD_USERNAME_OR_PASSWORD,
+                MetaProtocol.CONNECTION_REFUSED_UNAUTHORIZED -> "TokenExpired"
+                MetaProtocol.CONNECTION_REFUSED_SERVER_UNAVAILABLE -> "ServerUnavailable"
+                MetaProtocol.CONNECTION_REFUSED_IDENTIFIER_REJECTED -> "IdentifierRejected"
+                MetaProtocol.CONNECTION_REFUSED_UNKNOWN_24 -> "UnknownError24"
                 else -> "Connection refused: ${connAck.connectionCode}"
             }
             scope.launch {
                 _connectionState.emit(ConnectionState.Disconnected(reason))
+            }
+            when (connAck.connectionCode) {
+                MetaProtocol.CONNECTION_REFUSED_BAD_USERNAME_OR_PASSWORD,
+                MetaProtocol.CONNECTION_REFUSED_UNAUTHORIZED -> {
+                    // Bad credentials — don't reconnect
+                }
+                MetaProtocol.CONNECTION_REFUSED_SERVER_UNAVAILABLE -> {
+                    // Go bridge: attempt full reconnect; for IG fall back to challenge required
+                    val now = System.currentTimeMillis()
+                    if (now - lastFullReconnectTime > 60_000) {
+                        lastFullReconnectTime = now
+                        scheduleReconnect()
+                    } else if (authData.platform == MetaAuthData.Platform.INSTAGRAM) {
+                        scope.launch {
+                            _connectionState.emit(ConnectionState.Disconnected("IGChallengeRequiredMaybe"))
+                        }
+                    } else {
+                        scheduleReconnect()
+                    }
+                }
+                MetaProtocol.CONNECTION_REFUSED_UNKNOWN_24 -> {
+                    // Go bridge: attempt full reconnect with 10-minute cooldown
+                    val now = System.currentTimeMillis()
+                    if (now - lastError24ReconnectTime > ERROR_24_COOLDOWN_MS) {
+                        lastError24ReconnectTime = now
+                        scheduleReconnect()
+                    } else {
+                        Log.w(TAG, "Last reconnect for code 24 was too recent, not reconnecting")
+                    }
+                }
+                else -> scheduleReconnect()
             }
             return
         }
@@ -385,10 +422,13 @@ class MetaMqttClient(
             return null
         }
 
-        // PUBLISH type doesn't expect a response
+        // STATELESS type doesn't expect a response — return a synthetic success
         if (type == MetaProtocol.LS_REQUEST_TYPE_STATELESS) {
             requestChannels.remove(packetId)
-            return null
+            return MetaProtocol.MqttMessage(
+                topic = MetaProtocol.TOPIC_LS_RESP,
+                payload = ByteArray(0),
+            )
         }
 
         return try {

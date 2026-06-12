@@ -63,6 +63,7 @@ class LongPoll(
 
     private suspend fun loop() {
         var backoffMs = 0L
+        var errorCount = 0
         while (true) {
             if (backoffMs > 0) {
                 Log.i(TAG, "reconnecting in ${backoffMs / 1000}s")
@@ -78,10 +79,20 @@ class LongPoll(
                 return
             } catch (t: Throwable) {
                 Log.w(TAG, "long-poll error: ${t.message}")
+                onEvent(LongPollEvent.TemporaryError(t.message ?: "unknown error"))
                 false
             }
             if (!kotlin.coroutines.coroutineContext.isActive) return
-            backoffMs = if (ok) 0L else (if (backoffMs == 0L) 5_000L else minOf(60_000L, backoffMs * 2))
+            if (ok) {
+                if (errorCount > 0) {
+                    errorCount = 0
+                    onEvent(LongPollEvent.Recovered)
+                }
+                backoffMs = 0L
+            } else {
+                errorCount++
+                backoffMs = if (backoffMs == 0L) 5_000L else minOf(60_000L, backoffMs * 2)
+            }
         }
     }
 
@@ -119,10 +130,15 @@ class LongPoll(
             }
             if (status !in 200..299) {
                 Log.e(TAG, "long-poll HTTP $status")
+                onEvent(LongPollEvent.TemporaryError("long-poll HTTP $status"))
                 return@openLongPoll false
             }
             Log.i(TAG, "long-poll open (HTTP $status)")
-            consumeBody(response.bodyAsChannel())
+            val sawEvents = consumeBody(response.bodyAsChannel())
+            if (!sawEvents) {
+                onEvent(LongPollEvent.NoDataReceived)
+            }
+            sawEvents
         }
     }
 
@@ -360,6 +376,15 @@ sealed interface LongPollEvent {
 
     /** Fatal error — long-poll should NOT retry (e.g. HTTP 401/403). */
     data class FatalError(val reason: String) : LongPollEvent
+
+    /** Long-poll cycle completed without any data events (2.7). */
+    data object NoDataReceived : LongPollEvent
+
+    /** Temporary long-poll error — will retry (2.1). */
+    data class TemporaryError(val error: String) : LongPollEvent
+
+    /** Recovered from a temporary error (2.1). */
+    data object Recovered : LongPollEvent
 }
 
 /** Thrown when the long-poll encounters a non-retryable error (HTTP 401/403). */

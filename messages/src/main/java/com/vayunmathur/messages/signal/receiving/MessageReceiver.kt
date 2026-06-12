@@ -32,6 +32,7 @@ class MessageReceiver(
     private val recipientStore: com.vayunmathur.messages.signal.store.SignalRecipientStore? = null,
     private val messageSender: MessageSender? = null,
     private val sendWsResponse: ((Long, Int, String?) -> Unit)? = null,
+    var onDecryptionError: ((senderAci: String, senderDeviceId: Int, timestamp: Long, errorMessage: String?) -> Unit)? = null,
 ) {
     private data class SendCacheKey(
         val recipientAci: String,
@@ -82,6 +83,7 @@ class MessageReceiver(
                 Log.d(TAG, "Decryption error is retriable for ${result.senderAci}, sending retry request")
                 sendRetryRequest(result, envelope.clientTimestamp)
             }
+            onDecryptionError?.invoke(result.senderAci, result.senderDeviceId, envelope.clientTimestamp, result.error?.message)
             sendWsResponse?.invoke(request.id, 200, "OK")
             return
         }

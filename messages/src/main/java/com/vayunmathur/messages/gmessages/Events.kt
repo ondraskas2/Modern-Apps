@@ -87,6 +87,7 @@ sealed interface GMEvent {
         val senderId: String? = null,
         val timestampMs: Long = 0L,
         val timestamp: Long = 0L,
+        val isDelivery: Boolean = false,
     ) : GMEvent
 
     /** A conversation was deleted on the remote side. */
@@ -146,5 +147,37 @@ sealed interface GMEvent {
         override val source: MessageSource,
         val conversationId: String,
         val participantId: String,
+    ) : GMEvent
+
+    /** A conversation's mute setting changed. */
+    data class MuteSettingChanged(
+        override val source: MessageSource,
+        val conversationId: String,
+        val muteExpireTimeMs: Long,
+    ) : GMEvent
+
+    /** A message request was received for a conversation. */
+    data class MessageRequestReceived(
+        override val source: MessageSource,
+        val conversationId: String,
+    ) : GMEvent
+
+    /** A message send failed with a detailed error. */
+    data class SendFailed(
+        override val source: MessageSource,
+        val conversationId: String,
+        val messageId: String? = null,
+        val tmpId: String? = null,
+        val errorMessage: String,
+    ) : GMEvent
+
+    /** A decryption error occurred (matching Go: DecryptionError event). */
+    data class DecryptionError(
+        override val source: MessageSource,
+        val conversationId: String,
+        val senderAci: String,
+        val senderDeviceId: Int,
+        val timestamp: Long,
+        val errorMessage: String? = null,
     ) : GMEvent
 }

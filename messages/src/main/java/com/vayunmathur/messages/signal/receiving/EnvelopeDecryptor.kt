@@ -6,7 +6,7 @@ import com.vayunmathur.messages.signal.proto.SignalServiceProtos
 import com.vayunmathur.messages.signal.store.SignalProtocolStoreImpl
 import org.signal.libsignal.protocol.SignalProtocolAddress
 import org.signal.libsignal.protocol.SessionCipher
-import org.signal.libsignal.protocol.ecc.Curve
+import org.signal.libsignal.protocol.ecc.ECPublicKey
 import org.signal.libsignal.protocol.message.CiphertextMessage
 import org.signal.libsignal.protocol.message.SignalMessage
 import org.signal.libsignal.protocol.message.PreKeySignalMessage
@@ -113,7 +113,7 @@ object EnvelopeDecryptor {
                     val sealedCipher = SealedSessionCipher(
                         protocolStore, UUID.fromString(selfAci), selfAci, selfDeviceId
                     )
-                    val trustRoot = Curve.decodePoint(SIGNAL_SERVER_TRUST_ROOT, 0)
+                    val trustRoot = ECPublicKey(SIGNAL_SERVER_TRUST_ROOT)
                     val validator = certificateValidator
                         ?: CertificateValidator(listOf(trustRoot))
                     val result = sealedCipher.decrypt(validator, envelope.content.toByteArray(), serverTimestamp)
@@ -126,7 +126,7 @@ object EnvelopeDecryptor {
                         serverTimestamp = serverTimestamp,
                         senderE164 = result.senderE164.orElse(null),
                         unidentified = true,
-                        contentHint = result.contentHint,
+                        contentHint = 0,
                         groupId = result.groupId.orElse(null),
                     )
                 }
@@ -156,20 +156,15 @@ object EnvelopeDecryptor {
             val resolvedSender = senderAci
             val resolvedDeviceId = senderDeviceId
             if (envelope.type == SignalServiceProtos.Envelope.Type.UNIDENTIFIED_SENDER) {
-                try {
-                    val header = org.signal.libsignal.metadata.SealedSessionCipher.parseMessageHeader(
-                        envelope.content.toByteArray()
-                    )
-                    return DecryptionResult(
-                        senderAci = header?.senderUuid ?: resolvedSender,
-                        senderDeviceId = header?.deviceId ?: resolvedDeviceId,
-                        content = null, timestamp = timestamp, serverTimestamp = serverTimestamp,
-                        error = e,
-                        retriable = (header?.contentHint ?: 0) == CONTENT_HINT_RESENDABLE,
-                        ciphertext = envelope.content.toByteArray(),
-                        ciphertextType = CiphertextMessage.SENDERKEY_TYPE,
-                    )
-                } catch (_: Exception) { }
+                return DecryptionResult(
+                    senderAci = resolvedSender,
+                    senderDeviceId = resolvedDeviceId,
+                    content = null, timestamp = timestamp, serverTimestamp = serverTimestamp,
+                    error = e,
+                    retriable = false,
+                    ciphertext = envelope.content.toByteArray(),
+                    ciphertextType = CiphertextMessage.SENDERKEY_TYPE,
+                )
             }
             DecryptionResult(resolvedSender, resolvedDeviceId, null, timestamp, serverTimestamp, error = e)
         }

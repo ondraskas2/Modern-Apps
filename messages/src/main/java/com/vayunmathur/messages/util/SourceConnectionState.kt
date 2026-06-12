@@ -43,6 +43,8 @@ fun GVoiceClient.State.toUnified(): SourceConnectionState = when (this) {
     GVoiceClient.State.Connecting -> SourceConnectionState.Connecting
     GVoiceClient.State.Connected -> SourceConnectionState.Connected
     is GVoiceClient.State.Disconnected -> SourceConnectionState.Disconnected(reason)
+    is GVoiceClient.State.BadCredentials -> SourceConnectionState.Disconnected(reason)
+    is GVoiceClient.State.ConnectError -> SourceConnectionState.Disconnected(reason)
 }
 
 fun TelegramClient.State.toUnified(): SourceConnectionState = when (this) {

@@ -32,6 +32,11 @@ class StorageServiceManager(
         private const val STORAGE_SERVICE_ITEM_KEY_LEN = 32
     }
 
+    enum class PhoneNumberSharingMode { EVERYBODY, CONTACTS_ONLY, NOBODY }
+
+    var phoneNumberSharingMode: PhoneNumberSharingMode = PhoneNumberSharingMode.NOBODY
+        private set
+
     private var storageAuth: Pair<String, String>? = null
     private var storageAuthTimestamp = 0L
 
@@ -120,6 +125,7 @@ class StorageServiceManager(
                 else if (r.hasGroupV2()) processGroup(r.groupV2)
                 else if (r.hasAccount()) {
                     Log.d(TAG, "Found account record, saving")
+                    processAccountRecord(r.account)
                     try {
                         onAccountRecord?.invoke(r.account)
                     } catch (e: Exception) {
@@ -130,6 +136,15 @@ class StorageServiceManager(
                 Log.w(TAG, "Failed to process record", e)
             }
         }
+    }
+
+    private fun processAccountRecord(account: com.vayunmathur.messages.signal.proto.AccountRecord) {
+        phoneNumberSharingMode = when (account.phoneNumberSharingMode) {
+            com.vayunmathur.messages.signal.proto.AccountRecord.PhoneNumberSharingMode.EVERYBODY ->
+                PhoneNumberSharingMode.EVERYBODY
+            else -> PhoneNumberSharingMode.NOBODY
+        }
+        Log.d(TAG, "PhoneNumberSharingMode: $phoneNumberSharingMode")
     }
 
     private suspend fun processContact(c: ContactRecord) {

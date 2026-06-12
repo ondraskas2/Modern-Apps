@@ -26,7 +26,7 @@ object SignalHttpClient {
 
     val CDN_HOSTS = listOf(CDN1_HOST, CDN1_HOST, CDN2_HOST, CDN3_HOST)
 
-    val USER_AGENT = "signalmeow/0.1.0 libsignal/${org.signal.libsignal.protocol.util.LibSignalVersion.VERSION} android/${android.os.Build.VERSION.SDK_INT}"
+    val USER_AGENT = "signalmeow/0.1.0 android/${android.os.Build.VERSION.SDK_INT}"
     const val SIGNAL_AGENT = "MAU"
 
     const val CONTENT_TYPE_JSON = "application/json"

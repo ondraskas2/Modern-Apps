@@ -28,15 +28,17 @@ object ContentBuilders {
         remove: Boolean = false,
         timestamp: Long = System.currentTimeMillis(),
     ): SignalServiceProtos.Content {
+        val authorAciBytes = MessageSender.uuidToBytes(targetAuthorAci)
         val reaction = SignalServiceProtos.DataMessage.Reaction.newBuilder()
             .setEmoji(emoji)
-            .setTargetAuthorAci(targetAuthorAci)
+            .setTargetAuthorAciBinary(ByteString.copyFrom(authorAciBytes))
             .setTargetSentTimestamp(targetTimestamp)
             .setRemove(remove)
 
         val dm = SignalServiceProtos.DataMessage.newBuilder()
             .setReaction(reaction.build())
             .setTimestamp(timestamp)
+            .setRequiredProtocolVersion(SignalServiceProtos.DataMessage.ProtocolVersion.REACTIONS_VALUE)
 
         return SignalServiceProtos.Content.newBuilder()
             .setDataMessage(dm.build())
@@ -172,11 +174,13 @@ object ContentBuilders {
     fun disappearingTimerMessage(
         expirationSeconds: Int,
         timestamp: Long,
+        expireTimerVersion: Int = 1,
     ): SignalServiceProtos.Content {
         val dm = SignalServiceProtos.DataMessage.newBuilder()
             .setTimestamp(timestamp)
             .setFlags(SignalServiceProtos.DataMessage.Flags.EXPIRATION_TIMER_UPDATE_VALUE)
             .setExpireTimer(expirationSeconds)
+            .setExpireTimerVersion(expireTimerVersion)
 
         return SignalServiceProtos.Content.newBuilder()
             .setDataMessage(dm.build())
@@ -197,6 +201,7 @@ object ContentBuilders {
         val dm = SignalServiceProtos.DataMessage.newBuilder()
             .setPollCreate(pollCreate.build())
             .setTimestamp(timestamp)
+            .setRequiredProtocolVersion(SignalServiceProtos.DataMessage.ProtocolVersion.POLLS_VALUE)
 
         return SignalServiceProtos.Content.newBuilder()
             .setDataMessage(dm.build())
@@ -218,6 +223,7 @@ object ContentBuilders {
         val dm = SignalServiceProtos.DataMessage.newBuilder()
             .setPollVote(pollVote.build())
             .setTimestamp(timestamp)
+            .setRequiredProtocolVersion(0)
 
         return SignalServiceProtos.Content.newBuilder()
             .setDataMessage(dm.build())
@@ -242,6 +248,10 @@ object ContentBuilders {
             .setDeleteForMe(deleteForMe.build())
 
         return wrapSyncMessage(sync.build())
+    }
+
+    fun viewedReceipt(timestamps: List<Long>): SignalServiceProtos.Content {
+        return receiptMessage(SignalServiceProtos.ReceiptMessage.Type.VIEWED, timestamps)
     }
 
     fun messageRequestResponseSync(

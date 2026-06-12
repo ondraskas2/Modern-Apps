@@ -39,7 +39,7 @@ object AttachmentManager {
                 path = path,
             )
             if (response.code == 404) throw AttachmentNotFoundException()
-            if (response.code > 400) return null
+            if (response.code !in 200..299) return null
             val body = response.body?.bytes() ?: return null
 
             if (!plaintextDigest) {

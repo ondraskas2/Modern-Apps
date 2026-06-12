@@ -106,6 +106,18 @@ interface WhatsAppConversationDao {
 
     @Query("DELETE FROM whatsapp_history_sync_conversation")
     suspend fun deleteAll()
+
+    @Query("UPDATE whatsapp_history_sync_conversation SET muteEndTime = :muteEndTime WHERE chatJid = :chatJid")
+    suspend fun updateMuteEndTime(chatJid: String, muteEndTime: Long)
+
+    @Query("UPDATE whatsapp_history_sync_conversation SET pinned = :pinned WHERE chatJid = :chatJid")
+    suspend fun updatePinned(chatJid: String, pinned: Boolean)
+
+    @Query("UPDATE whatsapp_history_sync_conversation SET archived = :archived WHERE chatJid = :chatJid")
+    suspend fun updateArchived(chatJid: String, archived: Boolean)
+
+    @Query("UPDATE whatsapp_history_sync_conversation SET markedAsUnread = :unread WHERE chatJid = :chatJid")
+    suspend fun updateMarkedAsUnread(chatJid: String, unread: Boolean)
 }
 
 /**

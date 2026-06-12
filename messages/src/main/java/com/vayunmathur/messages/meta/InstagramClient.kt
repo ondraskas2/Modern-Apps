@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 // TODO: E2EE support — see MetaClient.kt for details
@@ -51,6 +52,8 @@ object InstagramClient {
     private var mqttClient: MetaMqttClient? = null
     private var db: MetaDatabase? = null
     private var backfillJob: Job? = null
+
+    private val pendingMessages = ConcurrentHashMap<Int, (String?) -> Unit>()
 
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
@@ -256,16 +259,31 @@ object InstagramClient {
                                     )
                                 }
                                 is MetaProtocol.IncomingEvent.ParticipantRemoved -> {
-                                    _events.emit(
-                                        GMEvent.ParticipantRemoved(
-                                            source = MessageSource.INSTAGRAM,
-                                            conversationId = "ig:${evt.threadId}",
-                                            participantId = evt.participantId,
+                                    if (evt.participantId == authData?.userId) {
+                                        _events.emit(
+                                            GMEvent.ConversationDeleted(
+                                                source = MessageSource.INSTAGRAM,
+                                                conversationId = "ig:${evt.threadId}",
+                                            )
                                         )
-                                    )
+                                    } else {
+                                        _events.emit(
+                                            GMEvent.ParticipantRemoved(
+                                                source = MessageSource.INSTAGRAM,
+                                                conversationId = "ig:${evt.threadId}",
+                                                participantId = evt.participantId,
+                                            )
+                                        )
+                                    }
                                 }
                                 is MetaProtocol.IncomingEvent.ThreadMuteChanged -> {
-                                    Log.d(TAG, "Thread ${evt.threadId} mute changed: ${evt.muteExpireTimeMs}")
+                                    _events.emit(
+                                        GMEvent.MuteSettingChanged(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            muteExpireTimeMs = evt.muteExpireTimeMs,
+                                        )
+                                    )
                                 }
                                 is MetaProtocol.IncomingEvent.ThreadDeleted -> {
                                     _events.emit(
@@ -276,7 +294,35 @@ object InstagramClient {
                                     )
                                 }
                                 is MetaProtocol.IncomingEvent.MessageRequestReceived -> {
-                                    Log.d(TAG, "Message request received for thread ${evt.threadId}")
+                                    _events.emit(
+                                        GMEvent.MessageRequestReceived(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadSynced -> {
+                                    _events.emit(
+                                        GMEvent.ConversationUpdate(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            peerName = evt.threadName,
+                                            peerPhone = null,
+                                            avatarUrl = null,
+                                            lastPreview = null,
+                                            lastTimestamp = evt.lastActivityTimestampMs,
+                                            unreadCount = 0,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadVerified -> {
+                                    Log.d(TAG, "Thread verified: ${evt.threadId} type=${evt.threadType} folder=${evt.folderName}")
+                                }
+                                is MetaProtocol.IncomingEvent.FolderSynced -> {
+                                    Log.d(TAG, "Folder synced: ${evt.threadId}")
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadMovedToE2EECutover -> {
+                                    Log.d(TAG, "Thread moved to E2EE cutover: ${evt.threadId}")
                                 }
                             }
                         }
@@ -337,7 +383,22 @@ object InstagramClient {
             retryCount++
             Log.w(TAG, "Send failed, retry $retryCount/5")
             kotlinx.coroutines.delay(1000)
-            response = client.makeLSRequest(payload, 3)
+            if (_state.value is State.Disconnected) {
+                val auth = authData ?: return false
+                connect(auth)
+                kotlinx.coroutines.delay(2000)
+            }
+            val retryClient = mqttClient ?: return false
+            response = retryClient.makeLSRequest(payload, 3)
+        }
+
+        if (response != null) {
+            val responseData = MetaProtocol.parsePublishResponse(response.payload)
+            if (responseData != null) {
+                val decoded = LightspeedDecoder.decodePublishResponse(responseData.payload, responseData.sp)
+                val events = MetaProtocol.parseAllEvents(decoded)
+                Log.d(TAG, "Send response contained ${events.size} events")
+            }
         }
         return response != null
     }
@@ -358,6 +419,8 @@ object InstagramClient {
             threadId = threadId,
             attachmentFbIds = emptyList(),
             text = base64Data,
+            mimeType = mimeType,
+            fileName = fileName,
             versionId = client.versionId,
         )
         val response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
@@ -377,7 +440,7 @@ object InstagramClient {
         val client = mqttClient ?: return
         val actorId = authData?.userId?.toLongOrNull() ?: return
 
-        val strippedEmoji = emoji.replace("\uFE0F", "")
+        val strippedEmoji = MetaProtocol.removeVariationSelectors(emoji)
         val payload = MetaProtocol.buildReactionPayload(
             threadKey = threadId,
             messageId = messageId,
@@ -406,14 +469,17 @@ object InstagramClient {
         val payload = MetaProtocol.buildEditMessagePayload(messageId, text, client.versionId)
         var response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
         if (response == null) {
-            Log.w(TAG, "Edit message first attempt failed, retrying in 3s — messageId=$messageId")
-            kotlinx.coroutines.delay(3000)
+            Log.w(TAG, "Edit message first attempt failed, retrying — messageId=$messageId")
+            kotlinx.coroutines.delay(5000)
             response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
         }
         return response != null
     }
 
     suspend fun deleteThread(conversationId: String): Boolean {
+        // Go bridge uses Instagram.DeleteThread() GraphQL API for Instagram.
+        // TODO: Implement proper Instagram GraphQL API call (client.Instagram.DeleteThread).
+        // Socket task fallback may not work reliably for IG.
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildDeleteThreadPayload(threadId, client.versionId)
@@ -428,6 +494,9 @@ object InstagramClient {
     }
 
     suspend fun renameThread(conversationId: String, threadName: String): Boolean {
+        // Go bridge uses Instagram.EditGroupTitle() GraphQL API for Instagram.
+        // TODO: Implement proper Instagram GraphQL API call.
+        // Socket task fallback is used until GraphQL is available.
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildRenameThreadPayload(threadId, threadName, client.versionId)
@@ -476,14 +545,30 @@ object InstagramClient {
 
     suspend fun searchUsers(query: String): Boolean {
         val client = mqttClient ?: return false
-        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId)
+        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId, isMessenger = false)
+        scope.launch {
+            kotlinx.coroutines.delay(10)
+            val secondaryPayload = MetaProtocol.buildSearchUserSecondaryPayload(query, client.versionId, isMessenger = false)
+            client.makeLSRequest(secondaryPayload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        }
         return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
     }
 
     suspend fun createGroup(participantIds: List<Long>): Boolean {
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildCreateGroupPayload(participantIds, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        val response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) ?: return false
+        val responseData = MetaProtocol.parsePublishResponse(response.payload)
+        if (responseData != null) {
+            val decoded = LightspeedDecoder.decodePublishResponse(responseData.payload, responseData.sp)
+            val events = MetaProtocol.parseAllEvents(decoded)
+            for (evt in events) {
+                if (evt is MetaProtocol.IncomingEvent.MessageReceived) {
+                    Log.d(TAG, "Group created with thread ${evt.message.threadId}")
+                }
+            }
+        }
+        return true
     }
 
     suspend fun createPoll(conversationId: String, question: String, options: List<String>): Boolean {
@@ -494,6 +579,9 @@ object InstagramClient {
     }
 
     suspend fun acceptMessageRequest(conversationId: String): Boolean {
+        // Go bridge uses Instagram.AcceptMessageRequest() GraphQL API.
+        // TODO: Implement proper Instagram GraphQL API call.
+        // Socket task fallback is used until GraphQL is available.
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildAcceptMessageRequestPayload(threadId, client.versionId)

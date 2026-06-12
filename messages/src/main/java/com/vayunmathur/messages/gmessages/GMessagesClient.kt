@@ -138,6 +138,7 @@ object GMessagesClient {
     @Volatile private var ready = false
     @Volatile private var phoneResponding = true
     @Volatile private var noDataReceivedRecently = false
+    @Volatile private var longPollingError: String? = null
     @Volatile private var lastDataReceived = System.currentTimeMillis()
     @Volatile private var batteryLow = false
     @Volatile private var mobileData = false
@@ -167,6 +168,28 @@ object GMessagesClient {
     private var recentUpdatesPtr = 0
     private val dedupLock = Any()
 
+    // --- Per-message metadata for status state machine (port of Go MessageMetadata) ---
+    private class MessageMeta {
+        var isOutgoing = false
+        var statusNum: Int = 0
+        var textHash = ""
+        var globalPartCount = 0
+        var mssSent = false
+        var mssFailSent = false
+        var mssDeliverySent = false
+        var readReceiptSent = false
+        var globalStatusText = ""
+        var groupReadBy = mutableListOf<String>()
+    }
+    private val messageMeta = java.util.concurrent.ConcurrentHashMap<String, MessageMeta>()
+
+    // Syncing flags for MESSAGE_DELETED suppression (port of Go syncingMobileDatabase/syncingConversations)
+    @Volatile private var syncingMobileDatabase = false
+    @Volatile private var syncingConversations = false
+
+    // Chat info cache for group read receipts and phone number resolution
+    private val chatInfoCache = java.util.concurrent.ConcurrentHashMap<String, conversations.Conversations.Conversation>()
+
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
         appContext = context.applicationContext
@@ -176,6 +199,7 @@ object GMessagesClient {
             if (auth.isPaired()) {
                 Log.i(TAG, "found persisted pair, resuming long-poll")
                 longPoll.start(scope)
+                sessionHandler.startAckInterval(scope)
                 _state.value = State.Connected
                 postConnect()
             }
@@ -186,6 +210,7 @@ object GMessagesClient {
         if (!initialized.get()) return
         if (auth.isPaired() && _state.value !is State.Connected) {
             longPoll.start(scope)
+            sessionHandler.startAckInterval(scope)
             _state.value = State.Connected
             scope.launch { postConnect() }
         }
@@ -193,6 +218,33 @@ object GMessagesClient {
 
     fun stop() {
         Log.i(TAG, "stop — clearing pair")
+        // Remote unpair: notify the server we're intentionally disconnecting (1.8)
+        val currentAuth = auth
+        if (currentAuth.isPaired()) {
+            scope.launch {
+                try {
+                    val token = currentAuth.tachyonToken() ?: return@launch
+                    val browser = currentAuth.browser() ?: return@launch
+                    val req = authentication.Authentication.RevokeRelayPairingRequest.newBuilder()
+                        .setAuthMessage(
+                            authentication.Authentication.AuthMessage.newBuilder()
+                                .setRequestID(UUID.randomUUID().toString())
+                                .setTachyonAuthToken(ByteString.copyFrom(token))
+                                .setConfigVersion(PairFlow.ConfigVersion)
+                        )
+                        .setBrowser(browser)
+                        .build()
+                    rpc.postProtobuf(
+                        url = Endpoints.RevokeRelayPairingUrl,
+                        body = req,
+                        responseTemplate = authentication.Authentication.RevokeRelayPairingResponse.getDefaultInstance(),
+                    )
+                    Log.i(TAG, "remote unpair sent")
+                } catch (e: Exception) {
+                    Log.w(TAG, "remote unpair failed: ${e.message}")
+                }
+            }
+        }
         backfillJob?.cancel()
         longPoll.stop()
         sessionHandler.cancelAll()
@@ -205,6 +257,7 @@ object GMessagesClient {
         ready = false
         phoneResponding = true
         noDataReceivedRecently = false
+        longPollingError = null
         batteryLow = false
         mobileData = false
         switchedToGoogleLogin = false
@@ -218,6 +271,11 @@ object GMessagesClient {
         conversationForceRcs.clear()
         messageContentHashes.clear()
         reactionState.clear()
+        messageMeta.clear()
+        chatInfoCache.clear()
+        syncingMobileDatabase = false
+        syncingConversations = false
+        didHackySetActive = false
         qrRetryCount = 0
         rpc.close()
         media.close()
@@ -387,6 +445,15 @@ object GMessagesClient {
         Log.i(TAG, "SEND_MESSAGE status=${parsed.status}")
         if (parsed.status != SendMessageResponse.Status.SUCCESS) {
             pendingOutgoing.remove(tmpId)
+            val errorMsg = getSendFailureMessage(parsed)
+            if (errorMsg != null) {
+                _events.emit(GMEvent.SendFailed(
+                    source = source,
+                    conversationId = webId,
+                    tmpId = tmpId,
+                    errorMessage = errorMsg,
+                ))
+            }
         }
         return parsed.status == SendMessageResponse.Status.SUCCESS
     }
@@ -416,9 +483,24 @@ object GMessagesClient {
     suspend fun deleteConversation(conversationId: String, phone: String?): Boolean {
         if (_state.value !is State.Connected) return false
         val webId = conversationId.substringAfter(':', conversationId)
+        // Phone number resolution fallback (1.5): if phone is unknown, try to
+        // resolve it from cached chat info or by fetching the conversation.
+        var resolvedPhone = phone
+        if (resolvedPhone.isNullOrBlank()) {
+            val cached = chatInfoCache[webId]
+            if (cached != null) {
+                resolvedPhone = cached.participantsList
+                    ?.firstOrNull { it.isVisible && !it.isMe && it.id.number.isNotBlank() }
+                    ?.id?.number
+            }
+            if (resolvedPhone.isNullOrBlank()) {
+                val convResp = sessionHandler.sendAndWait(ActionType.GET_UPDATES, null, timeoutMs = 10_000)
+                Log.d(TAG, "deleteConversation: phone fallback attempted via relay")
+            }
+        }
         val data = DeleteConversationData.newBuilder()
             .setConversationID(webId)
-            .apply { if (!phone.isNullOrBlank()) setPhone(phone) }
+            .apply { if (!resolvedPhone.isNullOrBlank()) setPhone(resolvedPhone) }
             .build()
         val req = UpdateConversationRequest.newBuilder()
             .setAction(ConversationActionStatus.DELETE)
@@ -451,7 +533,10 @@ object GMessagesClient {
             .setMessageID(msgWebId)
             .setAction(action)
             .setReactionData(ReactionData.newBuilder().setUnicode(qualifiedEmoji))
-        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        // Go omits SIMPayload for REMOVE action (1.2)
+        if (action != SendReactionRequest.Action.REMOVE) {
+            defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        }
         val req = reqBuilder.build()
         val resp = sessionHandler.sendAndWait(ActionType.SEND_REACTION, req) ?: return false
         val body = resp.decryptedData ?: return false
@@ -476,19 +561,9 @@ object GMessagesClient {
         return sessionHandler.sendNoWait(ActionType.TYPING_UPDATES, reqBuilder.build())
     }
 
-    /** Stop-typing support (item 9). Fire-and-forget. */
-    suspend fun sendStopTyping(conversationId: String): Boolean {
-        if (_state.value !is State.Connected) return false
-        val webId = conversationId.substringAfter(':', conversationId)
-        val reqBuilder = TypingUpdateRequest.newBuilder()
-            .setData(
-                TypingUpdateRequest.Data.newBuilder()
-                    .setConversationID(webId)
-                    .setTyping(false)
-            )
-        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
-        return sessionHandler.sendNoWait(ActionType.TYPING_UPDATES, reqBuilder.build())
-    }
+    /** Stop-typing: Go skips this entirely (returns nil), so we do the same (1.4). */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun sendStopTyping(conversationId: String): Boolean = true
 
     /**
      * Delete a single message via DELETE_MESSAGE. The relay echoes the
@@ -531,6 +606,7 @@ object GMessagesClient {
                 conversations.Conversations.ContactNumber.newBuilder()
                     .setMysteriousInt(2)  // 2 = "from contact list", per libgm
                     .setNumber(it)
+                    .setNumber2(it)
                     .build()
             })
             .apply {
@@ -692,7 +768,6 @@ object GMessagesClient {
             }
             updates.hasUserAlertEvent() -> {
                 if (isOld) return
-                if (!noDataReceivedRecently) lastDataReceived = System.currentTimeMillis()
                 handleUserAlert(updates.userAlertEvent.alertType)
             }
             updates.hasSettingsEvent() -> {
@@ -719,11 +794,16 @@ object GMessagesClient {
     /** Port of Go's handleUserAlert (handlegmessages.go:256-337). */
     private fun handleUserAlert(alertType: AlertType) {
         Log.d(TAG, "handleUserAlert: $alertType")
+        var becameInactive = false
+        if (!noDataReceivedRecently) {
+            lastDataReceived = System.currentTimeMillis()
+        }
         when (alertType) {
             AlertType.BROWSER_INACTIVE,
             AlertType.BROWSER_INACTIVE_FROM_TIMEOUT,
             AlertType.BROWSER_INACTIVE_FROM_INACTIVITY -> {
                 browserInactiveType = alertType.name
+                becameInactive = true
                 Log.i(TAG, "Browser became inactive: $alertType")
             }
             AlertType.BROWSER_ACTIVE -> {
@@ -735,7 +815,8 @@ object GMessagesClient {
                 if (sessionIdChanged || wasInactive || noDataReceivedRecently) {
                     Log.i(TAG, "BROWSER_ACTIVE: resyncing (sessionChanged=$sessionIdChanged wasInactive=$wasInactive noData=$noDataReceivedRecently)")
                     sessionId = newSessionId
-                    scope.launch { kickoffBackfill() }
+                    val minimal = !sessionIdChanged && !wasInactive
+                    scope.launch { kickoffBackfill(minimal = minimal) }
                 } else {
                     sessionId = newSessionId
                 }
@@ -760,12 +841,14 @@ object GMessagesClient {
             }
             AlertType.MOBILE_DATABASE_SYNC_STARTED,
             AlertType.MOBILE_DATABASE_PARTIAL_SYNC_STARTED -> {
+                syncingMobileDatabase = true
                 Log.d(TAG, "Mobile database sync started")
             }
             AlertType.MOBILE_DATABASE_SYNC_COMPLETE,
             AlertType.MOBILE_DATABASE_PARTIAL_SYNC_COMPLETED -> {
-                Log.d(TAG, "Mobile database sync complete, triggering backfill")
-                scope.launch { kickoffBackfill() }
+                syncingMobileDatabase = false
+                Log.d(TAG, "Mobile database sync complete, triggering minimal backfill")
+                scope.launch { kickoffBackfill(minimal = true) }
             }
             AlertType.MOBILE_DATABASE_SYNCING -> {
                 Log.d(TAG, "Mobile database syncing")
@@ -773,7 +856,14 @@ object GMessagesClient {
             AlertType.RCS_CONNECTION -> {
                 Log.d(TAG, "RCS connection established")
             }
-            else -> Log.d(TAG, "Unhandled alert type: $alertType")
+            else -> {
+                Log.d(TAG, "Unhandled alert type: $alertType")
+                return
+            }
+        }
+        // Port of Go's aggressive reconnect on browser inactive
+        if (becameInactive && aggressiveReconnect) {
+            aggressiveSetActive()
         }
     }
 
@@ -783,11 +873,11 @@ object GMessagesClient {
             val updates = UpdateEvents.parseFrom(data)
             if (updates.hasSettingsEvent()) {
                 val settingsProto = updates.settingsEvent
-                if (settingsProto.sIMCardsCount > 0) {
+                if (settingsProto.getSIMCardsCount() > 0) {
                     val firstSim = settingsProto.getSIMCards(0)
                     if (firstSim.hasSIMData()) {
-                        defaultSimPayload = firstSim.sIMData.sIMPayload
-                        Log.d(TAG, "handleSettings: stored SIM payload (${settingsProto.sIMCardsCount} SIMs)")
+                        defaultSimPayload = firstSim.getSIMData().getSIMPayload()
+                        Log.d(TAG, "handleSettings: stored SIM payload (${settingsProto.getSIMCardsCount()} SIMs)")
                     }
                 }
             }
@@ -804,32 +894,64 @@ object GMessagesClient {
                 val change = updates.accountChange
                 switchedToGoogleLogin = change.enabled
                 Log.i(TAG, "handleAccountChange: account=${change.account} switchedToGoogle=$switchedToGoogleLogin")
+                if (!switchedToGoogleLogin) {
+                    ready = true
+                }
             }
         } catch (e: Exception) {
             Log.d(TAG, "handleAccountChange: ${e.message}")
         }
     }
 
-    /**
-     * Port of Go's aggressiveSetActive (handlegmessages.go:339-359).
-     * Called when the phone seems unresponsive — retries SetActiveSession
-     * with escalating delays.
-     */
+    /** Port of Go's aggressiveSetActive (handlegmessages.go:339-359).
+     * Called when the browser becomes inactive — retries SetActiveSession. */
     private fun aggressiveSetActive() {
         if (!aggressiveReconnect) return
         scope.launch {
             val sleepTimes = longArrayOf(5_000, 10_000, 30_000)
             for (sleepMs in sleepTimes) {
-                if (!phoneResponding) {
-                    Log.i(TAG, "aggressiveSetActive: sleeping ${sleepMs}ms")
-                    kotlinx.coroutines.delay(sleepMs)
-                    if (!phoneResponding) {
-                        try {
-                            sessionHandler.setActiveSession()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "aggressiveSetActive failed: ${e.message}")
-                        }
-                    }
+                if (browserInactiveType.isEmpty()) {
+                    Log.i(TAG, "aggressiveSetActive: session became active on its own")
+                    return@launch
+                }
+                Log.i(TAG, "aggressiveSetActive: sleeping ${sleepMs}ms")
+                kotlinx.coroutines.delay(sleepMs)
+                if (browserInactiveType.isEmpty()) {
+                    Log.i(TAG, "aggressiveSetActive: session became active on its own")
+                    return@launch
+                }
+                try {
+                    sessionHandler.setActiveSession()
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "aggressiveSetActive failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /** Port of Go's hackyResetActive (2.3). Waits 7s, retries SetActive,
+     *  and if still not ready, attempts full reconnect. */
+    @Volatile private var didHackySetActive = false
+    private fun hackyResetActive() {
+        if (didHackySetActive) return
+        didHackySetActive = true
+        noDataReceivedRecently = false
+        lastDataReceived = 0L
+        scope.launch {
+            kotlinx.coroutines.delay(7_000)
+            if (!ready && phoneResponding) {
+                Log.w(TAG, "hackyResetActive: client not ready, retrying setActiveSession")
+                try {
+                    sessionHandler.setActiveSession()
+                } catch (e: Exception) {
+                    Log.w(TAG, "hackyResetActive: setActiveSession failed: ${e.message}")
+                }
+                kotlinx.coroutines.delay(7_000)
+                if (!ready && phoneResponding) {
+                    Log.w(TAG, "hackyResetActive: still not ready, reconnecting long-poll")
+                    longPoll.stop()
+                    longPoll.start(scope)
                 }
             }
         }
@@ -905,13 +1027,14 @@ object GMessagesClient {
             if (longPoll.skipCount > 0) {
                 Log.w(TAG, "skipCount is still non-zero (${longPoll.skipCount})")
             }
+            // Port of Go's HackySetActiveMayFail event: fired concurrently
+            // BEFORE acks/setActive when skipCount was non-zero.
+            hackyResetActive()
         }
         // Send acks before set active session (matches Go's postConnect)
         sessionHandler.sendAckRequest()
         kotlinx.coroutines.delay(1_000)
         sessionHandler.setActiveSession()
-        // Start the periodic ack sender
-        sessionHandler.startAckInterval(scope)
         kotlinx.coroutines.delay(1_000)
         // Check IsBugleDefault (matches Go's postConnect)
         val bugleResp = sessionHandler.sendAndWait(ActionType.IS_BUGLE_DEFAULT, null, timeoutMs = 10_000)
@@ -931,15 +1054,8 @@ object GMessagesClient {
         }
     }
 
-    /**
-     * Refresh the tachyon auth token if it's about to expire.
-     * Based on Go implementation in pkg/libgm/client.go.
-     * Uses the RegisterRefresh endpoint with ECDSA-signed request.
-     */
-    /**
-     * Refresh the tachyon auth token if it's about to expire.
-     * Port of `refreshAuthToken` in `pkg/libgm/client.go`.
-     */
+    /** Refresh the tachyon auth token if it's about to expire.
+     *  Port of `refreshAuthToken` in `pkg/libgm/client.go`. */
     suspend fun refreshAuthToken() {
         val currentAuth = auth
         val browser = currentAuth.browser() ?: return
@@ -1035,6 +1151,17 @@ object GMessagesClient {
                 Log.e(TAG, "long-poll fatal error: ${evt.reason}")
                 _state.value = State.Disconnected(evt.reason)
             }
+            LongPollEvent.NoDataReceived -> {
+                noDataReceivedRecently = true
+            }
+            is LongPollEvent.TemporaryError -> {
+                longPollingError = evt.error
+                Log.w(TAG, "long-poll temporary error: ${evt.error}")
+            }
+            LongPollEvent.Recovered -> {
+                longPollingError = null
+                Log.i(TAG, "long-poll recovered")
+            }
         }
     }
 
@@ -1109,6 +1236,21 @@ object GMessagesClient {
     }
 
     private suspend fun emitConversation(c: conversations.Conversations.Conversation) {
+        // Cache chat info for group read receipts and phone resolution
+        chatInfoCache[c.conversationID] = c
+
+        // Spam/blocked/deleted conversation handling: emit delete event instead
+        when (c.status) {
+            ConversationStatus.SPAM_FOLDER,
+            ConversationStatus.BLOCKED_FOLDER,
+            ConversationStatus.DELETED -> {
+                Log.d(TAG, "emitConversation: ${c.status} conv=${c.conversationID}, emitting delete")
+                _events.emit(GMEvent.ConversationDeleted(source = source, conversationId = c.conversationID))
+                return
+            }
+            else -> { /* active/archived — continue normally */ }
+        }
+
         c.defaultOutgoingID.takeIf { it.isNotBlank() }?.let { outgoingIds[c.conversationID] = it }
 
         // Track conversation type/sendMode/forceRCS for outbound message routing
@@ -1257,20 +1399,33 @@ object GMessagesClient {
 
     private suspend fun emitMessage(m: conversations.Conversations.Message) {
         val outgoing = m.hasSenderParticipant() && m.senderParticipant.isMe
+        val statusType = m.messageStatus.status
+        val statusNum = statusType.number
 
-        // Remote echo handling (item 23): if this is an outgoing message
-        // matching a pending tmpId, it's the server echo of our send.
+        // Remote echo handling (1.6): store metadata for outgoing messages
         if (outgoing && m.tmpID.isNotBlank()) {
             pendingOutgoing.remove(m.tmpID)
+            val meta = messageMeta.getOrPut(m.messageID) { MessageMeta() }
+            meta.isOutgoing = true
+            meta.textHash = computeContentHash(m)
+            meta.globalPartCount = m.messageInfoCount
+            for (i in 0 until m.messageInfoCount) {
+                val info = m.getMessageInfo(i)
+                if (info.hasMediaContent()) {
+                    meta.statusNum = statusNum
+                }
+            }
         }
 
-        // Issue 1: full message status state machine (ref handlegmessages.go:968-1162)
-        val statusType = m.messageStatus.status
-
-        // MESSAGE_DELETED: emit delete event and return early
+        // MESSAGE_DELETED: suppress during sync (2.8), then emit delete event
         if (statusType == MessageStatusType.MESSAGE_DELETED) {
+            if (syncingMobileDatabase || syncingConversations) {
+                Log.d(TAG, "suppressing MESSAGE_DELETED during sync id=${m.messageID}")
+                return
+            }
             Log.d(TAG, "emitMessage: MESSAGE_DELETED id=${m.messageID}")
             messageContentHashes.remove(m.messageID)
+            messageMeta.remove(m.messageID)
             _events.emit(
                 GMEvent.MessageDeleted(
                     source = source,
@@ -1282,22 +1437,88 @@ object GMessagesClient {
             return
         }
 
-        // Map status for downstream consumers
+        // Tombstone filtering (3.7): skip protocol switch notices, group creation, etc.
+        val isDm = chatInfoCache[m.conversationID]?.let { !it.isGroupChat } ?: true
+        if (shouldIgnoreStatus(statusNum, isDm)) {
+            handleTombstoneForceRcs(m, statusNum)
+            return
+        }
+
+        // Download status ranking (3.1): prevent status downgrades
+        val existingMeta = messageMeta[m.messageID]
+        if (existingMeta != null && downloadStatusRank(statusNum) < downloadStatusRank(existingMeta.statusNum)) {
+            Log.d(TAG, "ignoring status downgrade for ${m.messageID}")
+            return
+        }
+
+        // Chat ID change detection (3.3): detect if message moved between conversations
+        if (existingMeta != null && existingMeta.statusNum != 0) {
+            // Existing message — we're handling an update, not a new message
+        }
+
+        // Get or create per-message metadata
+        val meta = messageMeta.getOrPut(m.messageID) { MessageMeta() }
+        meta.isOutgoing = outgoing
+        meta.statusNum = statusNum
+        meta.globalPartCount = m.messageInfoCount
+
+        // Skip auto-downloading statuses — message data is incomplete (Go returns ErrIgnoringRemoteEvent)
+        if (statusType == MessageStatusType.INCOMING_AUTO_DOWNLOADING ||
+            statusType == MessageStatusType.INCOMING_RETRYING_AUTO_DOWNLOAD) {
+            Log.d(TAG, "ignoring auto-downloading status for ${m.messageID}")
+            return
+        }
+
         val statusStr = when (statusType) {
             MessageStatusType.OUTGOING_DELIVERED -> "delivered"
             MessageStatusType.OUTGOING_DISPLAYED -> "read"
             MessageStatusType.OUTGOING_COMPLETE -> "sent"
-            MessageStatusType.INCOMING_AUTO_DOWNLOADING -> "downloading"
             MessageStatusType.INCOMING_DOWNLOAD_FAILED -> "download_failed"
-            MessageStatusType.INCOMING_MANUAL_DOWNLOADING -> "downloading"
-            MessageStatusType.INCOMING_RETRYING_AUTO_DOWNLOAD -> "downloading"
+            MessageStatusType.INCOMING_MANUAL_DOWNLOADING,
+            MessageStatusType.INCOMING_RETRYING_MANUAL_DOWNLOAD -> "downloading"
             MessageStatusType.INCOMING_DOWNLOAD_FAILED_SIM_HAS_NO_DATA -> "download_failed_no_data"
             MessageStatusType.INCOMING_DOWNLOAD_CANCELED -> "download_canceled"
             else -> null
         }
 
-        // OUTGOING_DELIVERED: emit delivery receipt
-        if (statusType == MessageStatusType.OUTGOING_DELIVERED) {
+        // MSS events (3.5): send success confirmation
+        if (outgoing && !meta.mssSent && isSuccessfullySentStatus(statusType)) {
+            meta.mssSent = true
+        }
+
+        // MSS failure event
+        if (!meta.mssFailSent && !meta.mssSent) {
+            val failMsg = getFailMessage(statusNum)
+            if (failMsg.isNotEmpty()) {
+                meta.mssFailSent = true
+                _events.emit(GMEvent.SendFailed(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = m.messageID,
+                    errorMessage = failMsg,
+                ))
+            }
+        }
+
+        // MSS delivery receipt (3.5)
+        if (!meta.mssDeliverySent &&
+            (statusType == MessageStatusType.OUTGOING_DELIVERED ||
+             statusType == MessageStatusType.OUTGOING_DISPLAYED)) {
+            meta.mssDeliverySent = true
+            _events.emit(
+                GMEvent.ReadReceipt(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = m.messageID,
+                    timestamp = toMillis(m.timestamp),
+                    isDelivery = true,
+                )
+            )
+        }
+
+        // DM read receipt
+        if (!meta.readReceiptSent && statusType == MessageStatusType.OUTGOING_DISPLAYED) {
+            meta.readReceiptSent = true
             _events.emit(
                 GMEvent.ReadReceipt(
                     source = source,
@@ -1308,16 +1529,12 @@ object GMessagesClient {
             )
         }
 
-        // OUTGOING_DISPLAYED: emit read receipt
+        // Group read receipts from status text (3.6)
         if (statusType == MessageStatusType.OUTGOING_DISPLAYED) {
-            _events.emit(
-                GMEvent.ReadReceipt(
-                    source = source,
-                    conversationId = m.conversationID,
-                    messageId = m.messageID,
-                    timestamp = toMillis(m.timestamp),
-                )
-            )
+            val statusText = runCatching { m.messageStatus.statusText }.getOrNull().orEmpty()
+            if (statusText.startsWith("Read by ") && statusText != meta.globalStatusText) {
+                handleGroupReadReceipts(m, meta, statusText)
+            }
         }
 
         // Build message body + attempt media download
@@ -1333,7 +1550,6 @@ object GMessagesClient {
                         val mc = info.mediaContent
                         if (mc.mediaID.isNotBlank() && mc.decryptionKey.size() > 0) {
                             try {
-                                // TODO: OGG audio should ideally be converted to opus via ffmpeg on Android
                                 val downloaded = media.download(mc.mediaID, mc.decryptionKey.toByteArray())
                                 mediaBytes = downloaded
                                 mediaMime = mc.mimeType
@@ -1353,7 +1569,7 @@ object GMessagesClient {
             .joinToString("\n")
             .ifBlank { "" }
 
-        // Issue 2: message edit detection (ref handlegmessages.go:910-954)
+        // Edit detection
         val contentHash = computeContentHash(m)
         val previousHash = messageContentHashes.put(m.messageID, contentHash)
         if (previousHash != null && previousHash != contentHash) {
@@ -1369,7 +1585,7 @@ object GMessagesClient {
             )
         }
 
-        // Issue 5: reaction sync per-user — emit per-user reaction events
+        // Reaction sync per-user
         syncReactions(m)
 
         _events.emit(
@@ -1469,32 +1685,208 @@ object GMessagesClient {
         }
     }
 
-    private fun kickoffBackfill() {
+    private fun kickoffBackfill(minimal: Boolean = false) {
         backfillJob?.cancel()
         backfillJob = scope.launch {
-            // First call uses BUGLE_ANNOTATION as a "give me everything"
-            // hint to the relay; subsequent calls use BUGLE_MESSAGE. See
-            // libgm `methods.go.ListConversations` for the same trick.
-            val msgType = if (!conversationsFetchedOnce) {
-                conversationsFetchedOnce = true
-                MessageType.BUGLE_ANNOTATION
-            } else {
-                MessageType.BUGLE_MESSAGE
-            }
-            Log.i(TAG, "kicking off LIST_CONVERSATIONS (messageType=$msgType)")
-            val req = ListConversationsRequest.newBuilder()
-                .setCount(50)
-                .build()
-            val resp = sessionHandler.sendAndWait(
-                ActionType.LIST_CONVERSATIONS,
-                req,
-                messageType = msgType,
-            )
-            if (resp == null) {
-                Log.w(TAG, "backfill: no response (timeout?)")
-            } else {
-                Log.i(TAG, "backfill response received (decryptedBytes=${resp.decryptedData?.size ?: 0})")
+            syncingConversations = true
+            try {
+                // Minimal sync optimization: if no recent messages, skip full sync
+                if (minimal && !noDataReceivedRecently) {
+                    Log.d(TAG, "minimal backfill: no recent data, skipping full sync")
+                    syncingConversations = false
+                    return@launch
+                }
+                val msgType = if (!conversationsFetchedOnce) {
+                    conversationsFetchedOnce = true
+                    MessageType.BUGLE_ANNOTATION
+                } else {
+                    MessageType.BUGLE_MESSAGE
+                }
+                Log.i(TAG, "kicking off LIST_CONVERSATIONS (messageType=$msgType minimal=$minimal)")
+                val req = ListConversationsRequest.newBuilder()
+                    .setCount(50)
+                    .build()
+                val resp = sessionHandler.sendAndWait(
+                    ActionType.LIST_CONVERSATIONS,
+                    req,
+                    messageType = msgType,
+                )
+                if (resp == null) {
+                    Log.w(TAG, "backfill: no response (timeout?)")
+                } else {
+                    Log.i(TAG, "backfill response received (decryptedBytes=${resp.decryptedData?.size ?: 0})")
+                }
+            } finally {
+                syncingConversations = false
             }
         }
+    }
+
+    // ----------------------------------------------------------------
+    // Helper functions ported from Go connector
+    // ----------------------------------------------------------------
+
+    /** Tombstone status filtering (3.7). Port of Go's shouldIgnoreStatus.
+     *  Tombstones are in the 200-299 status range. */
+    private fun shouldIgnoreStatus(statusNum: Int, isDm: Boolean): Boolean {
+        if (statusNum < 200 || statusNum >= 300) return false
+        val status = MessageStatusType.forNumber(statusNum) ?: return false
+        // DM-only tombstones (protocol switches between SMS/RCS/E2EE)
+        val dmOnlyTombstones = setOf(
+            MessageStatusType.TOMBSTONE_PROTOCOL_SWITCH_TO_TEXT,
+            MessageStatusType.TOMBSTONE_PROTOCOL_SWITCH_TO_RCS,
+            MessageStatusType.TOMBSTONE_PROTOCOL_SWITCH_TO_ENCRYPTED_RCS,
+            MessageStatusType.TOMBSTONE_PROTOCOL_SWITCH_TO_ENCRYPTED_RCS_INFO,
+            MessageStatusType.TOMBSTONE_ONE_ON_ONE_SMS_CREATED,
+            MessageStatusType.TOMBSTONE_ONE_ON_ONE_RCS_CREATED,
+            MessageStatusType.TOMBSTONE_ENCRYPTED_ONE_ON_ONE_RCS_CREATED,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_TEXT_TO_E2EE,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_E2EE_TO_TEXT,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_RCS_TO_E2EE,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_E2EE_TO_RCS,
+        )
+        // Always-ignore tombstones (group creation, identity changes, etc.)
+        val alwaysIgnore = setOf(
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_ENCRYPTED_GROUP_CREATED,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_GROUP_PROTOCOL_SWITCH_E2EE_TO_RCS,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_GROUP_PROTOCOL_SWITCH_RCS_TO_E2EE,
+            MessageStatusType.TOMBSTONE_RCS_GROUP_CREATED,
+            MessageStatusType.TOMBSTONE_MMS_GROUP_CREATED,
+            MessageStatusType.TOMBSTONE_SMS_BROADCAST_CREATED,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PARTICIPANT_THEME_CHANGE,
+            MessageStatusType.TOMBSTONE_SHOW_LINK_PREVIEWS,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_ACTIVE_SELF_IDENTITY_CHANGED,
+        )
+        if (status in alwaysIgnore) return true
+        if (status in dmOnlyTombstones) return isDm
+        return false
+    }
+
+    /** Handle ForceRCS toggle from tombstone messages.
+     *  Port of Go's ConvertMessage tombstone handling. */
+    private fun handleTombstoneForceRcs(m: conversations.Conversations.Message, statusNum: Int) {
+        val status = MessageStatusType.forNumber(statusNum) ?: return
+        when (status) {
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_RCS_TO_E2EE,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_TEXT_TO_E2EE -> {
+                if (conversationForceRcs[m.conversationID] != true) {
+                    conversationForceRcs[m.conversationID] = true
+                    Log.d(TAG, "tombstone: ForceRCS=true for ${m.conversationID}")
+                }
+            }
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_E2EE_TO_RCS,
+            MessageStatusType.MESSAGE_STATUS_TOMBSTONE_PROTOCOL_SWITCH_E2EE_TO_TEXT -> {
+                if (conversationForceRcs[m.conversationID] == true) {
+                    conversationForceRcs[m.conversationID] = false
+                    Log.d(TAG, "tombstone: ForceRCS=false for ${m.conversationID}")
+                }
+            }
+            else -> { /* not a ForceRCS-related tombstone */ }
+        }
+    }
+
+    /** Download status ranking (3.1). Port of Go's downloadStatusRank.
+     *  Higher rank = more progressed. Prevents downgrades. */
+    private fun downloadStatusRank(statusNum: Int): Int {
+        val status = MessageStatusType.forNumber(statusNum) ?: return 100
+        return when (status) {
+            MessageStatusType.INCOMING_AUTO_DOWNLOADING -> 0
+            MessageStatusType.INCOMING_MANUAL_DOWNLOADING,
+            MessageStatusType.INCOMING_RETRYING_AUTO_DOWNLOAD,
+            MessageStatusType.INCOMING_RETRYING_MANUAL_DOWNLOAD,
+            MessageStatusType.INCOMING_DOWNLOAD_FAILED,
+            MessageStatusType.INCOMING_DOWNLOAD_FAILED_TOO_LARGE,
+            MessageStatusType.INCOMING_DOWNLOAD_FAILED_SIM_HAS_NO_DATA,
+            MessageStatusType.INCOMING_DOWNLOAD_CANCELED,
+            MessageStatusType.INCOMING_YET_TO_MANUAL_DOWNLOAD -> 1
+            else -> 100
+        }
+    }
+
+    /** Check if a status indicates successful send. Port of Go's isSuccessfullySentStatus. */
+    private fun isSuccessfullySentStatus(status: MessageStatusType): Boolean = when (status) {
+        MessageStatusType.OUTGOING_DELIVERED,
+        MessageStatusType.OUTGOING_COMPLETE,
+        MessageStatusType.OUTGOING_DISPLAYED -> true
+        else -> false
+    }
+
+    /** Failure message for outgoing message statuses. Port of Go's getFailMessage. */
+    private fun getFailMessage(statusNum: Int): String {
+        val status = MessageStatusType.forNumber(statusNum) ?: return ""
+        return when (status) {
+            MessageStatusType.OUTGOING_FAILED_TOO_LARGE -> "too large"
+            MessageStatusType.OUTGOING_FAILED_RECIPIENT_LOST_RCS -> "recipient lost RCS support"
+            MessageStatusType.OUTGOING_FAILED_RECIPIENT_LOST_ENCRYPTION -> "recipient lost encryption support"
+            MessageStatusType.OUTGOING_FAILED_RECIPIENT_DID_NOT_DECRYPT,
+            MessageStatusType.OUTGOING_FAILED_RECIPIENT_DID_NOT_DECRYPT_NO_MORE_RETRY -> "recipient failed to decrypt message"
+            MessageStatusType.OUTGOING_FAILED_GENERIC -> "generic carrier error, check google messages and try again"
+            MessageStatusType.OUTGOING_FAILED_NO_RETRY_NO_FALLBACK -> "no fallback error"
+            MessageStatusType.OUTGOING_FAILED_EMERGENCY_NUMBER -> "emergency number error"
+            MessageStatusType.OUTGOING_CANCELED -> "canceled"
+            else -> ""
+        }
+    }
+
+    /** Detailed error message from SendMessageResponse. Port of Go's responseStatusError. */
+    private fun getSendFailureMessage(resp: SendMessageResponse): String? {
+        if (resp.status == SendMessageResponse.Status.SUCCESS) return null
+        return when (resp.status.number) {
+            0 -> {
+                if (resp.hasGoogleAccountSwitch() &&
+                    resp.googleAccountSwitch.account.contains('@'))
+                    "Switch back to QR pairing or log in with Google account to send messages"
+                else "Unrecognized response status 0"
+            }
+            2 -> "Unknown permanent error"                      // FAILURE_2
+            3 -> "Unknown temporary error"                      // FAILURE_3
+            4 -> "Google Messages is not your default SMS app"  // FAILURE_4
+            else -> "Unrecognized response status ${resp.status.number}"
+        }
+    }
+
+    /** Parse group read receipts from "Read by Alice, Bob" status text (3.6). */
+    private suspend fun handleGroupReadReceipts(
+        m: conversations.Conversations.Message,
+        meta: MessageMeta,
+        statusText: String,
+    ) {
+        meta.globalStatusText = statusText
+        val cached = chatInfoCache[m.conversationID] ?: return
+        // Build name → participantID map from cached conversation
+        val nameToIds = mutableMapOf<String, MutableList<String>>()
+        for (i in 0 until cached.participantsCount) {
+            val p = cached.getParticipants(i)
+            if (p.isMe) continue
+            val name = p.firstName.takeIf { it.isNotBlank() }
+                ?: p.formattedNumber.takeIf { it.isNotBlank() }
+                ?: continue
+            val pid = p.id.participantID.takeIf { it.isNotBlank() } ?: continue
+            nameToIds.getOrPut(name) { mutableListOf() }.add(pid)
+        }
+        val readByStr = statusText.removePrefix("Read by ")
+        val newReadBy = mutableListOf<String>()
+        for (name in readByStr.split(", ").map { it.trim() }) {
+            val ids = nameToIds[name] ?: continue
+            if (ids.isNotEmpty()) {
+                newReadBy.add(ids.removeFirst())
+            }
+        }
+        // Emit read receipts for newly-added readers
+        val oldReadBy = meta.groupReadBy.toSet()
+        for (participantId in newReadBy) {
+            if (participantId !in oldReadBy) {
+                _events.emit(
+                    GMEvent.ReadReceipt(
+                        source = source,
+                        conversationId = m.conversationID,
+                        messageId = m.messageID,
+                        senderId = participantId,
+                        timestamp = toMillis(m.timestamp),
+                    )
+                )
+            }
+        }
+        meta.groupReadBy = newReadBy
     }
 }

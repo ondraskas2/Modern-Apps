@@ -66,7 +66,6 @@ object GVoiceClient {
     @Volatile private var rpc: GVoiceRpcClient? = null
     private var realtime: RealtimeChannel? = null
     private var backfillJob: Job? = null
-    @Volatile private var versionToken: String = ""
     private const val AUTH_USER = "0"
 
     // Contact cache with 5-min TTL (matches Go's contactCache + fetchContactInfo)
@@ -87,6 +86,9 @@ object GVoiceClient {
     private val fetchLock = Mutex()
     @Volatile private var fetchLoopJob: Job? = null
 
+    // Per-thread latest message timestamp for deduplication (matches Go's gc.lastEvents)
+    private val lastEvents = ConcurrentHashMap<String, Long>()
+
     private const val MAX_AVATAR_SIZE = 5 * 1024 * 1024
 
     fun init(context: Context) {
@@ -97,7 +99,7 @@ object GVoiceClient {
             val auth = VoiceAuthData.load(appContext)
             if (auth?.hasRequired() == true) {
                 Log.i(TAG, "resuming from persisted cookies")
-                bootSession(auth)
+                connectWithValidation(auth)
             } else {
                 _state.value = State.NeedsSetup
             }
@@ -109,7 +111,7 @@ object GVoiceClient {
         if (_state.value is State.Connected) return
         scope.launch {
             val auth = VoiceAuthData.load(appContext)
-            if (auth?.hasRequired() == true) bootSession(auth)
+            if (auth?.hasRequired() == true) connectWithValidation(auth)
             else _state.value = State.NeedsSetup
         }
     }
@@ -122,6 +124,7 @@ object GVoiceClient {
         realtime = null
         rpc?.close()
         rpc = null
+        lastEvents.clear()
         scope.launch { VoiceAuthData.clear(appContext) }
         _state.value = State.NeedsSetup
     }
@@ -214,6 +217,7 @@ object GVoiceClient {
         data: ByteArray,
         mime: String,
         caption: String?,
+        fileName: String? = null,
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val client = rpc ?: return false
@@ -226,8 +230,13 @@ object GVoiceClient {
             .setType(mediaType)
             .setData(com.google.protobuf.ByteString.copyFrom(data))
             .build()
+        val effectiveCaption = when {
+            fileName.isNullOrBlank() -> null
+            fileName == caption -> null
+            else -> caption
+        }
         val req = baseSendBuilder(webId)
-            .apply { caption?.takeIf { it.isNotBlank() }?.let { setText(it) } }
+            .apply { effectiveCaption?.takeIf { it.isNotBlank() }?.let { setText(it) } }
             .setMedia(media)
             .build()
         return doSend(client, webId, req)
@@ -294,8 +303,8 @@ object GVoiceClient {
 
     // TODO: WAA/Electron signatures for TrackingData aren't available on Android.
     // The Go bridge uses an Electron subprocess to generate request signatures
-    // (see electron.go). Without these signatures, some sends may be rate-limited.
-    /** Common builder: txn ID only. TrackingData omitted without Electron. */
+    // (see electron.go). Without these signatures, the fallback "!" is used.
+    /** Common builder: txn ID + fallback TrackingData (matches Go's SendMessage). */
     private fun baseSendBuilder(webId: String): Requests.ReqSendSMS.Builder =
         Requests.ReqSendSMS.newBuilder()
             .setThreadID(webId)
@@ -303,6 +312,9 @@ object GVoiceClient {
                 Requests.ReqSendSMS.WrappedTxnID.newBuilder()
                     .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
                     .build()
+            )
+            .setTrackingData(
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
             )
 
     // Issue 7: rate limit retry delay for 429 responses
@@ -328,7 +340,10 @@ object GVoiceClient {
                 body = req,
                 responseTemplate = Responses.RespSendSMS.getDefaultInstance(),
             )
-            Log.i(TAG, "sendsms ok thread=$webId itemId=${resp.threadItemID}")
+            Log.i(TAG, "sendsms ok thread=$webId itemId=${resp.threadItemID} ts=${resp.timestampMS}")
+            if (resp.timestampMS > 0) {
+                lastEvents.merge(webId, resp.timestampMS) { old, new -> maxOf(old, new) }
+            }
             resp.threadItemID.isNotBlank()
         } catch (t: Throwable) {
             val errMsg = t.message ?: ""
@@ -443,6 +458,9 @@ object GVoiceClient {
                     .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
                     .build()
             )
+            .setTrackingData(
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
+            )
             .build()
         return sendNewThreadInner(client, req)
     }
@@ -476,6 +494,9 @@ object GVoiceClient {
                 Requests.ReqSendSMS.WrappedTxnID.newBuilder()
                     .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
                     .build()
+            )
+            .setTrackingData(
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
             )
             .build()
         return sendNewThreadInner(client, req)
@@ -569,6 +590,14 @@ object GVoiceClient {
         for (i in 0 until resp.matchesCount) {
             val match = resp.getMatches(i)
             val phone = match.id.phone.takeIf { it.isNotBlank() } ?: continue
+            // Match Go: check failureType; cache nil for PERMANENT failures
+            if (match.failureType != responses.Responses.RespLookupContacts.Match.FailureType.NO_FAILURE) {
+                if (match.failureType == responses.Responses.RespLookupContacts.Match.FailureType.PERMANENT) {
+                    contactCache[phone] = CachedContact(name = null, avatarUrl = null, timestamp = System.currentTimeMillis())
+                }
+                Log.d(TAG, "lookupContact: $phone failure=${match.failureType}")
+                continue
+            }
             personToSuggestions(match.autocompletion).firstOrNull()?.let { out[phone] = it }
         }
         return out
@@ -583,20 +612,24 @@ object GVoiceClient {
         wrapper: contacts.Contacts.PersonWrapper,
     ): List<com.vayunmathur.messages.util.ContactSuggestion> {
         val person = wrapper.person ?: return emptyList()
-        // The display name lives on the contact method's displayInfo;
-        // typically all methods on a person share the same name, so
-        // just use the first non-blank one we see.
-        val displayName = (0 until person.contactMethodsCount)
-            .asSequence()
-            .map { person.getContactMethods(it) }
-            .mapNotNull { it.displayInfo?.name?.value?.takeIf { v -> v.isNotBlank() } }
-            .firstOrNull()
-            ?: "Unknown"
-        val avatar = (0 until person.contactMethodsCount)
-            .asSequence()
-            .map { person.getContactMethods(it) }
-            .mapNotNull { it.displayInfo?.photo?.url?.takeIf { v -> v.isNotBlank() } }
-            .firstOrNull()
+        // Match Go's processContact: prefer primary displayInfo, skip MONOGRAM avatars
+        var displayName = "Unknown"
+        var avatar: String? = null
+        for (idx in 0 until person.contactMethodsCount) {
+            val di = person.getContactMethods(idx).displayInfo ?: continue
+            val isPrimary = di.primary
+            val nameVal = di.name?.value?.takeIf { it.isNotBlank() }
+            if (nameVal != null && (displayName == "Unknown" || isPrimary)) {
+                displayName = nameVal
+            }
+            val photoUrl = di.photo?.url?.takeIf { it.isNotBlank() }
+            if (photoUrl != null
+                && di.photo.type != contacts.Contacts.ContactDisplayInfo.Photo.Type.MONOGRAM
+                && (avatar == null || isPrimary)
+            ) {
+                avatar = photoUrl
+            }
+        }
         return (0 until person.contactMethodsCount).mapNotNull { idx ->
             val cm = person.getContactMethods(idx)
             val rawPhone = cm.phone?.canonicalValue?.takeIf { it.isNotBlank() }
@@ -650,6 +683,35 @@ object GVoiceClient {
     // Internals
     // ----------------------------------------------------------------
 
+    /**
+     * Validate credentials with GetAccount before starting the session.
+     * Mirrors Go's `Connect` which always calls GetAccount first.
+     */
+    private suspend fun connectWithValidation(auth: VoiceAuthData) {
+        _state.value = State.Connecting
+        val client = rpc ?: GVoiceRpcClient(auth.cookies).also { rpc = it }
+        try {
+            client.postPbLite(
+                url = VoiceEndpoints.EndpointGetAccount,
+                body = Requests.ReqGetAccount.newBuilder().setUnknownInt2(1).build(),
+                responseTemplate = Responses.RespGetAccount.getDefaultInstance(),
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "GetAccount failed on connect: ${t.message}")
+            client.close()
+            rpc = null
+            val errMsg = t.message ?: ""
+            val httpStatus = Regex("HTTP (\\d+)").find(errMsg)?.groupValues?.get(1)?.toIntOrNull()
+            if (httpStatus == 401 || httpStatus == 403) {
+                _state.value = State.BadCredentials(errMsg)
+            } else {
+                _state.value = State.ConnectError(errMsg)
+            }
+            return
+        }
+        bootSession(auth)
+    }
+
     private fun bootSession(auth: VoiceAuthData) {
         val client = rpc ?: GVoiceRpcClient(auth.cookies).also { rpc = it }
         client.updateCookies(auth.cookies)
@@ -662,23 +724,32 @@ object GVoiceClient {
         }
         rpc = client
 
-        _state.value = State.Connecting
-        _state.value = State.Connected
-
         scope.launch { loadInitialContacts() }
 
         realtime?.stop()
         realtime = RealtimeChannel(client) { evt ->
             when (evt) {
-                RealtimeEvent.Connected -> Log.i(TAG, "realtime connected")
+                RealtimeEvent.Connected -> {
+                    Log.i(TAG, "realtime connected")
+                    _state.value = State.Connected
+                    kickoffBackfill()
+                }
                 is RealtimeEvent.Data -> handleRealtimeData(evt.event)
             }
         }.also { ch ->
             val rtJob = ch.start(scope)
             rtJob.invokeOnCompletion { cause ->
                 if (!rtJob.isCancelled) {
-                    _state.value = State.Disconnected("realtime connection lost",
-                        errorCode = "gv-realtime-error")
+                    when (ch.terminationReason) {
+                        RealtimeChannel.TerminationReason.AuthError ->
+                            _state.value = State.BadCredentials("realtime auth error")
+                        RealtimeChannel.TerminationReason.TooManyRetries ->
+                            _state.value = State.Disconnected("too many retries",
+                                errorCode = "gv-too-many-retries")
+                        else ->
+                            _state.value = State.Disconnected("realtime connection lost",
+                                errorCode = "gv-realtime-error")
+                    }
                 }
             }
         }
@@ -697,7 +768,6 @@ object GVoiceClient {
     private fun startFetchLoop() {
         fetchLoopJob?.cancel()
         fetchLoopJob = scope.launch {
-            doBackfill()
             while (true) {
                 delay(BACKGROUND_REFRESH_INTERVAL_MS)
                 rateLimitedBackfill()
@@ -721,19 +791,49 @@ object GVoiceClient {
         fetchLock.withLock { doBackfill() }
     }
 
-    /** Load initial contacts into cache (matches Go's loadInitialContacts). */
+    /** Load initial contacts into cache (matches Go's loadInitialContacts).
+     *  Uses the RPC client directly — runs before state is Connected. */
     private suspend fun loadInitialContacts() {
         Log.i(TAG, "loading initial contacts")
+        val client = rpc ?: return
         try {
-            val suggestions = autocompleteContacts("")
-            for (s in suggestions) {
-                val phone = s.phoneE164
-                if (phone.isNotBlank()) {
-                    contactCache[phone] = CachedContact(
-                        name = s.displayName,
-                        avatarUrl = s.avatarUrl,
-                        timestamp = System.currentTimeMillis(),
-                    )
+            val req = Requests.ReqAutocompleteContacts.newBuilder()
+                .setUnknownInt1(243)
+                .setQuery("")
+                .addAllUnknownInts3(listOf(1, 2))
+                .setMaxResults(500)
+                .build()
+            val resp = client.postPbLite(
+                url = VoiceEndpoints.EndpointAutocompleteContacts,
+                body = req,
+                responseTemplate = Responses.RespAutocompleteContacts.getDefaultInstance(),
+            )
+            for (i in 0 until resp.resultsCount) {
+                val person = resp.getResults(i).person ?: continue
+                var name: String? = null
+                var avatar: String? = null
+                for (idx in 0 until person.contactMethodsCount) {
+                    val di = person.getContactMethods(idx).displayInfo ?: continue
+                    val isPrimary = di.primary
+                    val nameVal = di.name?.value?.takeIf { it.isNotBlank() }
+                    if (nameVal != null && (name == null || isPrimary)) name = nameVal
+                    val photoUrl = di.photo?.url?.takeIf { it.isNotBlank() }
+                    if (photoUrl != null
+                        && di.photo.type != contacts.Contacts.ContactDisplayInfo.Photo.Type.MONOGRAM
+                        && (avatar == null || isPrimary)
+                    ) avatar = photoUrl
+                }
+                for (idx in 0 until person.contactMethodsCount) {
+                    val e164 = person.getContactMethods(idx).phone?.canonicalValue
+                        ?.takeIf { it.isNotBlank() } ?: continue
+                    val existing = contactCache[e164]
+                    if (existing == null || person.getContactMethods(idx).displayInfo?.primary == true) {
+                        contactCache[e164] = CachedContact(
+                            name = name,
+                            avatarUrl = avatar,
+                            timestamp = System.currentTimeMillis(),
+                        )
+                    }
                 }
             }
             Log.i(TAG, "loaded ${contactCache.size} initial contacts")
@@ -767,13 +867,11 @@ object GVoiceClient {
 
     private suspend fun doBackfill() {
         val client = rpc ?: return
-        Log.i(TAG, "ListThreads (ALL_THREADS) versionToken=${versionToken.take(20)}")
-        val unknownInt2 = if (versionToken.isNotEmpty()) 10 else 20
+        Log.i(TAG, "ListThreads (ALL_THREADS)")
         val req = Requests.ReqListThreads.newBuilder()
             .setFolder(Threads.ThreadFolder.ALL_THREADS)
-            .setUnknownInt2(unknownInt2)
+            .setUnknownInt2(20)
             .setUnknownInt3(15)
-            .setVersionToken(versionToken)
             .setUnknownWrapper(
                 Requests.UnknownWrapper.newBuilder()
                     .setUnknownInt2(1)
@@ -788,18 +886,21 @@ object GVoiceClient {
             )
         } catch (t: Throwable) {
             Log.w(TAG, "ListThreads failed: ${t.message}")
-            _state.value = State.Disconnected(
-                t.message ?: "ListThreads failed",
-                errorCode = "gv-connect-error",
-            )
             return
-        }
-        if (resp.versionToken.isNotEmpty()) {
-            versionToken = resp.versionToken
         }
         Log.i(TAG, "ListThreads: ${resp.threadsCount} threads")
         for (i in 0 until resp.threadsCount) {
-            emitConversation(resp.getThreads(i))
+            val thread = resp.getThreads(i)
+            val threadId = thread.getID()
+            emitConversation(thread)
+            if (thread.messagesCount == 0) continue
+            val latestTs = thread.getMessages(0).timestamp
+            val prevTs = lastEvents.put(threadId, latestTs)
+            for (j in 0 until thread.messagesCount) {
+                val msg = thread.getMessages(j)
+                if (prevTs != null && msg.timestamp <= prevTs) break
+                emitMessage(threadId, msg, fromBackfill = true)
+            }
         }
     }
 
@@ -813,15 +914,20 @@ object GVoiceClient {
         }
     }
 
-    /** Filter realtime events: only process ones with actual data content. */
+    /** Filter realtime events — match Go's isNewMessages: deep-check for
+     *  sub2.data[0].unknownBytes starting with '['. */
     private fun isNewMessages(evt: webchannel.Webchannel.WebChannelEvent): Boolean {
         if (evt.dataWrapperCount == 0) return false
-        for (i in 0 until evt.dataWrapperCount) {
-            val w = evt.getDataWrapper(i)
-            if (w.hasAltData() && w.altData.reconnect) continue
-            if (w.dataCount > 0) return true
-        }
-        return false
+        val w = evt.getDataWrapper(0)
+        if (w.dataCount == 0) return false
+        val d = w.getData(0)
+        if (!d.hasEvent()) return false
+        val ev = d.event
+        if (!ev.hasSub2()) return false
+        val sub2 = ev.sub2
+        if (sub2.dataCount == 0) return false
+        val unknownBytes = sub2.getData(0).unknownBytes
+        return unknownBytes.size() > 0 && unknownBytes.byteAt(0) == '['.code.toByte()
     }
 
     private suspend fun emitConversation(t: Threads.Thread) {
@@ -859,7 +965,7 @@ object GVoiceClient {
         }
 
         val latest: Threads.Message? = if (t.messagesCount > 0) {
-            t.getMessages(t.messagesCount - 1)
+            t.getMessages(0)
         } else null
         val preview = latest?.text?.takeIf { it.isNotBlank() }
         val tsMillis = latest?.timestamp ?: 0L
@@ -897,7 +1003,7 @@ object GVoiceClient {
         val senderName = if (m.hasContact()) m.contact.name.takeIf { it.isNotBlank() } else null
 
         val body = buildMessageBody(m)
-        if (body.isBlank()) return
+        if (body.isEmpty()) return
 
         _events.emit(
             GMEvent.MessageUpdate(
@@ -931,7 +1037,8 @@ object GVoiceClient {
             m.coarseType == Threads.Message.CoarseType.CALL_TYPE_VOICEMAIL
         ) {
             val transcript = buildVoicemailTranscript(m)
-            return if (transcript.isNotBlank()) "Voicemail: $transcript" else "Voicemail"
+            if (transcript.isNotBlank()) return "Voicemail: $transcript"
+            // Match Go: empty transcript falls through to unknown message
         }
 
         // Missed calls — no text/MMS guard (matches Go's convertGVMissedCallMessage
@@ -976,9 +1083,9 @@ object GVoiceClient {
             val mms = m.getMMS()
             // Bold the subject (matches Go's fmt.Sprintf("**%s**\n%s", subject, text))
             val textPart = when {
-                mms.subject.isNotBlank() && mms.text.isNotBlank() -> "**${mms.subject}**\n${mms.text}"
-                mms.subject.isNotBlank() -> "**${mms.subject}**"
-                mms.text.isNotBlank() -> mms.text
+                mms.subject.isNotEmpty() && mms.text.isNotEmpty() -> "**${mms.subject}**\n${mms.text}"
+                mms.subject.isNotEmpty() -> "**${mms.subject}**"
+                mms.text.isNotEmpty() -> mms.text
                 else -> ""
             }
             val attachmentParts = (0 until mms.attachmentsCount).mapNotNull { i ->
@@ -1002,7 +1109,12 @@ object GVoiceClient {
             val parts = listOfNotNull(
                 textPart.takeIf { it.isNotBlank() },
             ) + attachmentParts
-            return parts.joinToString("\n").ifBlank { "[MMS message]" }
+            val result = parts.joinToString("\n")
+            if (result.isBlank()) {
+                Log.w(TAG, "Empty MMS message id=${m.getID()} type=${m.type} coarseType=${m.coarseType}")
+                return "Unknown message type, please view it on the Google Voice app"
+            }
+            return result
         }
 
         return m.text

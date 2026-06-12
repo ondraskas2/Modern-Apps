@@ -13,6 +13,7 @@ data class User(
     val username: String = "",
     val bot: Boolean = false,
     val deleted: Boolean = false,
+    val premium: Boolean = false,
 ) : TlObject {
     override val typeId = 0x31774388.toInt()
     override fun encode(buf: TlBuffer) {}
@@ -54,6 +55,7 @@ data class User(
                 username = username,
                 bot = flags.has(14),
                 deleted = flags.has(13),
+                premium = flags.has(28),
             )
         }
     }

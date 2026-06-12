@@ -48,9 +48,8 @@ class SignalWebSocket(
         const val PING_INTERVAL_MS = 30_000L
         const val PING_TIMEOUT_MS = 20_000L
         const val PING_TIMEOUT_LIMIT = 5
-        const val INITIAL_BACKOFF_MS = 10_000L
-        const val BACKOFF_INCREMENT_MS = 5_000L
-        const val MAX_BACKOFF_MS = 60_000L
+        const val INITIAL_BACKOFF_MS = 2_000L
+        const val MAX_BACKOFF_MS = 150_000L
         const val MAX_REQUEST_RETRIES = 3
         const val ERROR_COUNT_LIMIT = 500
 
@@ -91,6 +90,7 @@ class SignalWebSocket(
     private var reconnectJob: Job? = null
     private var currentUrl: String? = null
     private var currentBackoff = INITIAL_BACKOFF_MS
+    private var reconnectCount = 0
     private var shouldReconnect = false
     private var consecutivePingFailures = 0
     private var errorCount = 0
@@ -117,8 +117,9 @@ class SignalWebSocket(
     private val listener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Log.d(TAG, "Connected")
-            isConnected = true
+        isConnected = true
             currentBackoff = INITIAL_BACKOFF_MS
+            reconnectCount = 0
             resetPingState()
             scope.launch { _connectionEvents.emit(ConnectionEvent.Connected) }
         }
@@ -345,10 +346,13 @@ class SignalWebSocket(
             if (forceReconnectRequested) {
                 forceReconnectRequested = false
                 currentBackoff = INITIAL_BACKOFF_MS
+                reconnectCount = 0
             } else {
+                // Exponential backoff matching Go: 2 << retryCount, max 150s
+                currentBackoff = ((2L shl reconnectCount) * 1000L).coerceAtMost(MAX_BACKOFF_MS)
+                reconnectCount++
                 Log.d(TAG, "Reconnecting in ${currentBackoff}ms")
                 delay(currentBackoff)
-                currentBackoff = (currentBackoff + BACKOFF_INCREMENT_MS).coerceAtMost(MAX_BACKOFF_MS)
             }
             openSocket(url)
         }

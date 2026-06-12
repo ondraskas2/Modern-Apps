@@ -461,7 +461,6 @@ object MessagesSessionManager {
         }
         if (TelegramClient.state.value is TelegramClient.State.Connected) {
             results += TelegramClient.searchContacts(q)
-                .filter { c -> q.isEmpty() || matches(c, q) }
         }
         if (SignalClient.state.value is SignalClient.State.Connected) {
             results += SignalClient.searchContacts(q)
@@ -773,6 +772,7 @@ object MessagesSessionManager {
             is GMEvent.ConversationDeleted -> {
                 db.conversationDao().deleteById("${event.source.idPrefix}:${event.conversationId}")
             }
+            else -> Unit
         }
     }
 

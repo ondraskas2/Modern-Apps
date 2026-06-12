@@ -9,6 +9,7 @@ import com.vayunmathur.messages.util.ContactSuggestion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +72,15 @@ object WhatsAppClient {
     private val lidToPhoneMap = ConcurrentHashMap<String, String>()
     private val undecryptableTracker = ConcurrentHashMap<String, Int>()
     private val pendingMessageIDs: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+    private val processedEditIDs: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+    private var reconnectJob: Job? = null
+    private var reconnectAttempts = 0
+    private val pollSecrets = ConcurrentHashMap<String, ByteArray>()
+
+    private const val MAX_RECONNECT_ATTEMPTS = 10
+    private const val INITIAL_RECONNECT_DELAY_MS = 1000L
+    private const val MAX_RECONNECT_DELAY_MS = 60_000L
+    private const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -113,11 +123,39 @@ object WhatsAppClient {
         Log.i(TAG, "stop — clearing WhatsApp session")
         backfillJob?.cancel()
         qrJob?.cancel()
+        reconnectJob?.cancel()
+        reconnectAttempts = 0
         webSocket?.disconnect()
         webSocket = null
         nameCache.clear()
         scope.launch { WhatsAppAuthData.clear(appContext) }
         _state.value = State.NeedsSetup
+    }
+
+    private fun scheduleReconnect() {
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            Log.e(TAG, "Max reconnection attempts ($MAX_RECONNECT_ATTEMPTS) reached")
+            _state.value = State.Disconnected("Max reconnection attempts reached")
+            return
+        }
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            val delayMs = minOf(
+                INITIAL_RECONNECT_DELAY_MS * (1L shl reconnectAttempts),
+                MAX_RECONNECT_DELAY_MS
+            )
+            Log.i(TAG, "Reconnecting in ${delayMs}ms (attempt ${reconnectAttempts + 1}/$MAX_RECONNECT_ATTEMPTS)")
+            _state.value = State.Connecting
+            delay(delayMs)
+            reconnectAttempts++
+            val auth = authData ?: return@launch
+            try {
+                connect(auth)
+            } catch (e: Exception) {
+                Log.e(TAG, "Reconnection failed", e)
+                scheduleReconnect()
+            }
+        }
     }
 
     fun startProvisioning() {
@@ -232,11 +270,18 @@ object WhatsAppClient {
                 connectionState.collect { state ->
                     when (state) {
                         is WebViewWebSocket.ConnectionState.Connected -> {
+                            reconnectAttempts = 0
                             _state.value = State.Connected
+                            // Go Connected event sends PresenceUnavailable
+                            sendUnavailablePresence()
                             kickoffBackfill()
                         }
                         is WebViewWebSocket.ConnectionState.Disconnected -> {
-                            _state.value = State.Disconnected(state.reason)
+                            if (authData != null) {
+                                scheduleReconnect()
+                            } else {
+                                _state.value = State.Disconnected(state.reason)
+                            }
                         }
                         else -> {}
                     }
@@ -269,6 +314,30 @@ object WhatsAppClient {
                         type = if (node.tag != "message") node.attrs["type"] else null,
                     )
                     webSocket?.send(WhatsAppProtocol.encodeNode(ack))
+                }
+
+                // Handle connection failure events (Go handleWALogout, ClientOutdated, TemporaryBan)
+                if (node.tag == "failure") {
+                    val reason = node.attrs["reason"] ?: "unknown"
+                    Log.e(TAG, "Connection failure: $reason")
+                    when (reason) {
+                        "401" -> {
+                            _state.value = State.Disconnected("Logged out from WhatsApp")
+                            scope.launch { WhatsAppAuthData.clear(appContext) }
+                            authData = null
+                        }
+                        "405" -> _state.value = State.Disconnected("Client outdated — update required")
+                        "503" -> _state.value = State.Disconnected("Temporarily banned")
+                        else -> _state.value = State.Disconnected("Connection failed: $reason")
+                    }
+                    return@launch
+                }
+
+                if (node.tag == "stream:error") {
+                    val errorNode = node.content.firstOrNull()
+                    Log.e(TAG, "Stream error: ${errorNode?.tag ?: "unknown"}")
+                    _state.value = State.Disconnected("Stream error")
+                    return@launch
                 }
 
                 // Handle receipts with per-sender batching (Go handleWAReceipt)
@@ -315,6 +384,12 @@ object WhatsAppClient {
                 // LID routing (Go rerouteWAMessage)
                 val sender = resolveJID(message.participant ?: message.from)
 
+                // Cache push name from notify attr (Go syncGhost / PushName handling)
+                val notifyName = node.attrs["notify"]
+                if (!notifyName.isNullOrEmpty()) {
+                    nameCache[sender] = notifyName
+                }
+
                 // Handle revoke (message deletion) from Go handleWAMessage/revoke case
                 if (message.isRevoke && message.revokeTargetId != null) {
                     _events.emit(GMEvent.MessageDeleted(
@@ -328,6 +403,11 @@ object WhatsAppClient {
 
                 // Handle edit from Go handleWAMessage/edit case
                 if (message.isEdit && message.editTargetId != null) {
+                    // Edit dedup (Go events.go ConvertEdit meta.Edits check)
+                    if (!processedEditIDs.add(message.id)) {
+                        Log.d(TAG, "Ignoring duplicate edit ${message.id}")
+                        return@launch
+                    }
                     _events.emit(GMEvent.MessageEdited(
                         source = MessageSource.WHATSAPP,
                         conversationId = "wa:${message.from}",
@@ -357,11 +437,51 @@ object WhatsAppClient {
                     storePollOptions(message.id, message.pollData.options)
                 }
 
+                // Prepend forwarded indicator (Go from-whatsapp.go addForwardedFlag)
+                val displayBody = buildString {
+                    if (message.isViewOnce) append("\u26A0\uFE0F View once: ")
+                    if (message.isHD) append("[HD] ")
+                    if (message.isForwarded) {
+                        append("↷ Forwarded\n")
+                    }
+                    append(message.body)
+                }
+
+                // Store poll secrets from incoming polls for vote encryption
+                if (message.pollData != null && !message.pollData.isPollVote && message.e2eMessage != null) {
+                    val secret = message.e2eMessage.messageContextInfo?.messageSecret?.toByteArray()
+                    if (secret != null) pollSecrets[message.id] = secret
+                }
+
+                // Handle reactions separately (Go handleWAMessage reaction case)
+                if (message.e2eMessage?.hasReactionMessage() == true) {
+                    val reaction = message.e2eMessage.reactionMessage
+                    val emoji = reaction.text?.replace("\uFE0F", "") ?: ""
+                    val targetId = reaction.key?.id ?: ""
+                    if (emoji.isEmpty()) {
+                        _events.emit(GMEvent.ReactionRemoved(
+                            source = MessageSource.WHATSAPP,
+                            conversationId = "wa:${message.from}",
+                            messageId = targetId,
+                            senderId = sender,
+                        ))
+                    } else {
+                        _events.emit(GMEvent.ReactionReceived(
+                            source = MessageSource.WHATSAPP,
+                            conversationId = "wa:${message.from}",
+                            messageId = targetId,
+                            senderId = sender,
+                            emoji = emoji,
+                        ))
+                    }
+                    return@launch
+                }
+
                 _events.emit(GMEvent.IncomingMessage(
                     source = MessageSource.WHATSAPP,
                     conversationId = "wa:${message.from}",
                     messageId = message.id,
-                    body = message.body,
+                    body = displayBody,
                     peerName = resolveName(sender),
                     peerPhone = null,
                     timestamp = message.timestamp * 1000,
@@ -384,12 +504,80 @@ object WhatsAppClient {
     }
 
     /**
+     * Handle identity change notification (security code change).
+     * From Go handleWAIdentityChange.
+     */
+    private suspend fun handleIdentityChange(node: WhatsAppProtocol.Node, from: String) {
+        val identityNode = node.getChildByTag("identity")
+        if (identityNode != null) {
+            val jid = node.attrs["participant"] ?: from
+            val ts = node.attrs["t"]?.toLongOrNull() ?: (System.currentTimeMillis() / 1000)
+            Log.i(TAG, "Identity/security code changed for $jid")
+            _events.emit(GMEvent.IncomingMessage(
+                source = MessageSource.WHATSAPP,
+                conversationId = "wa:$from",
+                messageId = "idchange-$from-$jid-$ts",
+                body = "\uD83D\uDD12 Security code changed for ${resolveName(jid)}",
+                peerName = resolveName(jid),
+                peerPhone = null,
+                timestamp = ts * 1000,
+            ))
+        }
+    }
+
+    /**
+     * Handle picture update notification (avatar changes).
+     * From Go handleWAPictureUpdate.
+     */
+    private suspend fun handlePictureUpdate(node: WhatsAppProtocol.Node, from: String) {
+        val pictureNode = node.getChildByTag("set") ?: node.getChildByTag("delete")
+        if (pictureNode != null) {
+            val isRemoved = pictureNode.tag == "delete"
+            Log.d(TAG, "Picture ${if (isRemoved) "removed" else "updated"} for $from")
+        }
+    }
+
+    /**
+     * Handle account sync notification (push name updates).
+     * From Go PushNameSetting / PushName events.
+     */
+    private suspend fun handleAccountSync(node: WhatsAppProtocol.Node) {
+        node.content.filterIsInstance<WhatsAppProtocol.Node>().forEach { child ->
+            when (child.tag) {
+                "push" -> {
+                    val pushName = child.attrs["name"]
+                    val jid = child.attrs["jid"] ?: node.attrs["from"]
+                    if (pushName != null && jid != null) {
+                        nameCache[jid] = pushName
+                        Log.d(TAG, "Push name updated: $jid -> $pushName")
+                    }
+                }
+                "contact" -> {
+                    val contactName = child.attrs["name"]
+                    val jid = child.attrs["jid"] ?: node.attrs["from"]
+                    if (contactName != null && jid != null) {
+                        nameCache[jid] = contactName
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Handle receipt with per-sender batching for group chats.
      * From Go handleWAReceipt — groups messages by sender.
      */
     private suspend fun handleReceipt(node: WhatsAppProtocol.Node) {
         val receiptType = node.attrs["type"]
-        if (receiptType != "read" && receiptType != "read-self") return
+        val isRead = receiptType == "read" || receiptType == "read-self"
+        val isDelivered = receiptType == null || receiptType.isEmpty()
+        if (!isRead && !isDelivered) return
+
+        // Log delivery receipts (Go handleWAReceipt ReceiptTypeDelivered)
+        if (isDelivered) {
+            Log.d(TAG, "Delivery receipt from ${node.attrs["from"]} for ${node.attrs["id"]}")
+            return
+        }
 
         val from = node.attrs["from"] ?: return
         val participant = node.attrs["participant"]
@@ -454,6 +642,12 @@ object WhatsAppClient {
         when (notifType) {
             "w:gp2" -> handleGroupNotification(node, from)
             "server_sync" -> handleServerSync(node, from)
+            "call" -> handleCallNotification(node, from)
+            "encrypt" -> handleIdentityChange(node, from)
+            "picture" -> handlePictureUpdate(node, from)
+            "account_sync" -> handleAccountSync(node)
+            "devices" -> {} // Device list update — Go ignores silently
+            "mediaretry" -> {} // Media retry — Go handles but requires bridge infra
         }
     }
 
@@ -462,46 +656,74 @@ object WhatsAppClient {
      * From Go handleWAGroupInfoChange.
      */
     private suspend fun handleGroupNotification(node: WhatsAppProtocol.Node, groupJid: String) {
+        val timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000
+        val actor = resolveName(node.attrs["participant"] ?: groupJid)
+        val msgId = node.attrs["id"] ?: ""
+
         node.content?.filterIsInstance<WhatsAppProtocol.Node>()?.forEach { child ->
-            when (child.tag) {
+            val body = when (child.tag) {
                 "subject" -> {
                     val newName = child.attrs["subject"] ?: child.data?.let { String(it, Charsets.UTF_8) } ?: return@forEach
-                    _events.emit(GMEvent.IncomingMessage(
-                        source = MessageSource.WHATSAPP,
-                        conversationId = "wa:$groupJid",
-                        messageId = node.attrs["id"] ?: "",
-                        body = "[Group name changed to: $newName]",
-                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
-                        peerPhone = null,
-                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
-                    ))
+                    "[Group name changed to: $newName]"
                 }
                 "description" -> {
                     val newDesc = child.data?.let { String(it, Charsets.UTF_8) } ?: ""
-                    _events.emit(GMEvent.IncomingMessage(
-                        source = MessageSource.WHATSAPP,
-                        conversationId = "wa:$groupJid",
-                        messageId = node.attrs["id"] ?: "",
-                        body = "[Group description changed: $newDesc]",
-                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
-                        peerPhone = null,
-                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
-                    ))
+                    "[Group description changed: $newDesc]"
                 }
                 "add", "remove", "promote", "demote" -> {
                     val participants = child.content?.filterIsInstance<WhatsAppProtocol.Node>()
                         ?.mapNotNull { it.attrs["jid"] } ?: emptyList()
-                    val action = child.tag
-                    _events.emit(GMEvent.IncomingMessage(
-                        source = MessageSource.WHATSAPP,
-                        conversationId = "wa:$groupJid",
-                        messageId = node.attrs["id"] ?: "",
-                        body = "[Group: ${participants.joinToString()} ${action}ed]",
-                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
-                        peerPhone = null,
-                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
-                    ))
+                    "[Group: ${participants.joinToString()} ${child.tag}ed]"
                 }
+                // Go wrapGroupInfoChange: ephemeral setting
+                "ephemeral" -> {
+                    val expiration = child.attrs["expiration"]?.toLongOrNull() ?: 0
+                    if (expiration > 0) {
+                        val duration = when {
+                            expiration >= 86400 * 7 -> "${expiration / (86400 * 7)} week(s)"
+                            expiration >= 86400 -> "${expiration / 86400} day(s)"
+                            expiration >= 3600 -> "${expiration / 3600} hour(s)"
+                            else -> "$expiration seconds"
+                        }
+                        "[Disappearing messages set to $duration]"
+                    } else {
+                        "[Disappearing messages turned off]"
+                    }
+                }
+                // Go wrapGroupInfoChange: announce mode
+                "announce" -> {
+                    val isAnnounce = child.attrs["announce"] == "true" || child.attrs["value"] == "on"
+                    if (isAnnounce) "[Only admins can send messages now]"
+                    else "[All participants can send messages now]"
+                }
+                // Go wrapGroupInfoChange: locked (restrict edit to admins)
+                "locked" -> {
+                    val isLocked = child.attrs["locked"] == "true" || child.attrs["value"] == "on"
+                    if (isLocked) "[Only admins can edit group info now]"
+                    else "[All participants can edit group info now]"
+                }
+                // Go wrapGroupInfoChange: link/unlink community
+                "link" -> {
+                    val linkedGroup = child.attrs["link_type"]
+                    "[Group linked: $linkedGroup]"
+                }
+                "unlink" -> {
+                    val unlinkedGroup = child.attrs["unlink_type"]
+                    "[Group unlinked: $unlinkedGroup]"
+                }
+                else -> null
+            }
+
+            if (body != null) {
+                _events.emit(GMEvent.IncomingMessage(
+                    source = MessageSource.WHATSAPP,
+                    conversationId = "wa:$groupJid",
+                    messageId = msgId,
+                    body = body,
+                    peerName = actor,
+                    peerPhone = null,
+                    timestamp = timestamp,
+                ))
             }
         }
     }
@@ -520,6 +742,41 @@ object WhatsAppClient {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Handle incoming call notification.
+     * From Go handleWACallStart.
+     */
+    private suspend fun handleCallNotification(node: WhatsAppProtocol.Node, from: String) {
+        val offer = node.getChildByTag("offer")
+        if (offer != null) {
+            // Go handleWACallStart: ignore calls older than 15 minutes
+            val callTimestamp = node.attrs["t"]?.toLongOrNull() ?: (System.currentTimeMillis() / 1000)
+            val ageSeconds = (System.currentTimeMillis() / 1000) - callTimestamp
+            if (ageSeconds > 15 * 60) {
+                Log.d(TAG, "Ignoring old call notification (${ageSeconds}s old)")
+                return
+            }
+
+            val caller = node.attrs["participant"] ?: from
+            val callId = node.attrs["id"] ?: ""
+            val callType = offer.attrs["call-type"] ?: "voice"
+            val callLabel = when {
+                callType.contains("video") -> "video call"
+                callType.contains("group") -> "group call"
+                else -> "voice call"
+            }
+            _events.emit(GMEvent.IncomingMessage(
+                source = MessageSource.WHATSAPP,
+                conversationId = "wa:$from",
+                messageId = "call-$callId",
+                body = "\u260E Incoming $callLabel",
+                peerName = resolveName(caller),
+                peerPhone = null,
+                timestamp = callTimestamp * 1000,
+            ))
         }
     }
 
@@ -582,17 +839,30 @@ object WhatsAppClient {
     /**
      * Resolve JID: convert LID JIDs to phone number JIDs.
      * Handles DM sender LID, own message LID, broadcast, and bot cases.
-     * From Go resolveJID / rerouteWAMessage.
+     * From Go resolveJID / rerouteWAMessage — 5 distinct rerouting cases.
      */
     private fun resolveJID(jid: String): String {
+        // Case 1: Not a LID — no rerouting needed
         if (!jid.contains("@lid")) return jid
-        // Check direct LID→phone mapping
+
+        // Case 2: Direct LID→phone mapping from cache
         lidToPhoneMap[jid]?.let { return it }
-        // Check if it matches our own LID
+
+        // Case 3: Own LID matches
         val ownLid = authData?.lid
         if (ownLid != null && ownLid.isNotEmpty() && jid == ownLid) {
             return authData?.wid ?: jid
         }
+
+        // Case 4: Bot server JIDs (Go rerouteWAMessage bot server case)
+        if (jid.contains("@bot")) {
+            return jid // Bot JIDs are valid as-is
+        }
+
+        // Case 5: Extract user part and check LID map without server suffix
+        val userPart = jid.substringBefore("@")
+        lidToPhoneMap.entries.find { it.key.startsWith("$userPart@") }?.let { return it.value }
+
         return jid
     }
 
@@ -607,7 +877,7 @@ object WhatsAppClient {
                 .digest(option.toByteArray(Charsets.UTF_8))
             WhatsAppPollOption(
                 msgId = messageId,
-                optionHash = Base64.encodeToString(hash, Base64.NO_WRAP),
+                optionHash = hash.joinToString("") { "%02x".format(it) },
                 optionName = option,
             )
         }
@@ -651,11 +921,14 @@ object WhatsAppClient {
 
         val to = extractJid(conversationId) ?: return false
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        pendingMessageIDs.add(id)
 
         val node = WhatsAppProtocol.buildTextMessage(to, id, body)
         val data = WhatsAppProtocol.encodeNode(node)
 
-        return ws.send(data)
+        val sent = ws.send(data)
+        if (!sent) pendingMessageIDs.remove(id)
+        return sent
     }
 
     private data class MediaUploadResult(
@@ -701,18 +974,26 @@ object WhatsAppClient {
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
 
         val mediaType = when {
+            mimeType == "image/webp" -> "sticker"
             mimeType.startsWith("image/") -> "image"
             mimeType.startsWith("video/") -> "video"
             mimeType.startsWith("audio/") -> "audio"
             else -> "document"
         }
         val mediaKeyStr = when (mediaType) {
+            "sticker" -> WhatsAppProtocol.MEDIA_KEY_STICKER
             "image" -> WhatsAppProtocol.MEDIA_KEY_IMAGE
             "video" -> WhatsAppProtocol.MEDIA_KEY_VIDEO
             "audio" -> WhatsAppProtocol.MEDIA_KEY_AUDIO
             else -> WhatsAppProtocol.MEDIA_KEY_DOCUMENT
         }
 
+        pendingMessageIDs.add(id)
+        if (bytes.size > MAX_FILE_SIZE) {
+            Log.e(TAG, "File too large: ${bytes.size} bytes (max $MAX_FILE_SIZE)")
+            pendingMessageIDs.remove(id)
+            return false
+        }
         return try {
             val enc = WhatsAppProtocol.encryptMedia(bytes, mediaKeyStr)
             val token = Base64.encodeToString(enc.fileEncSha256, Base64.URL_SAFE or Base64.NO_WRAP)
@@ -722,9 +1003,12 @@ object WhatsAppClient {
                 enc.mediaKey, enc.fileSha256, enc.fileEncSha256, enc.fileLength,
                 mimeType, fileName, mediaType
             )
-            ws.send(WhatsAppProtocol.encodeNode(node))
+            val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+            if (!sent) pendingMessageIDs.remove(id)
+            sent
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send media", e)
+            pendingMessageIDs.remove(id)
             false
         }
     }
@@ -779,6 +1063,7 @@ object WhatsAppClient {
         val chatJid = extractJid(conversationId) ?: return
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
         val ownJid = authData?.wid ?: ""
+        pendingMessageIDs.add(id)
 
         val strippedEmoji = emoji.replace("\uFE0F", "")
         val node = WhatsAppProtocol.buildReactionMessage(
@@ -789,7 +1074,32 @@ object WhatsAppClient {
             ownJid = ownJid,
             id = id,
         )
-        ws.send(WhatsAppProtocol.encodeNode(node))
+        val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+        if (!sent) pendingMessageIDs.remove(id)
+    }
+
+    /**
+     * Remove a reaction from a message by sending empty emoji.
+     * From Go HandleMatrixReactionRemove.
+     */
+    suspend fun removeReaction(conversationId: String, messageId: String, senderJid: String = "") {
+        if (_state.value !is State.Connected) return
+        val ws = webSocket ?: return
+        val chatJid = extractJid(conversationId) ?: return
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val ownJid = authData?.wid ?: ""
+        pendingMessageIDs.add(id)
+
+        val node = WhatsAppProtocol.buildReactionMessage(
+            chatJid = chatJid,
+            senderJid = senderJid,
+            targetMessageId = messageId,
+            emoji = "",
+            ownJid = ownJid,
+            id = id,
+        )
+        val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+        if (!sent) pendingMessageIDs.remove(id)
     }
 
     /**
@@ -813,6 +1123,19 @@ object WhatsAppClient {
 
         val isAudio = typingType == TypingType.RECORDING_AUDIO
         val node = WhatsAppProtocol.buildChatPresence(chatJid, isTyping, isAudio, authData?.wid ?: "")
+        ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Send unavailable presence on connect.
+     * Go client.go Connected handler sends PresenceUnavailable.
+     */
+    private fun sendUnavailablePresence() {
+        val ws = webSocket ?: return
+        val node = WhatsAppProtocol.Node(
+            tag = "presence",
+            attrs = mapOf("type" to "unavailable"),
+        )
         ws.send(WhatsAppProtocol.encodeNode(node))
     }
 
@@ -861,11 +1184,52 @@ object WhatsAppClient {
         val chatJid = extractJid(conversationId) ?: return false
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
 
-        val node = WhatsAppProtocol.buildPollCreationMessage(chatJid, question, options, selectableCount, id)
+        val messageSecret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        val node = WhatsAppProtocol.buildPollCreationMessage(chatJid, question, options, selectableCount, id, messageSecret)
+        pendingMessageIDs.add(id)
         val sent = ws.send(WhatsAppProtocol.encodeNode(node))
         if (sent) {
             storePollOptions(id, options)
+            pollSecrets[id] = messageSecret
+        } else {
+            pendingMessageIDs.remove(id)
         }
+        return sent
+    }
+
+    /**
+     * Send a poll vote.
+     * From Go HandleMatrixPollVote / PollVoteToWhatsApp.
+     */
+    suspend fun sendPollVote(
+        conversationId: String,
+        pollMessageId: String,
+        pollSenderJid: String,
+        selectedOptionNames: List<String>,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val chatJid = extractJid(conversationId) ?: return false
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val ownJid = authData?.wid ?: ""
+
+        val optionHashes = selectedOptionNames.map { option ->
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(option.toByteArray(Charsets.UTF_8))
+        }
+
+        val node = WhatsAppProtocol.buildPollVoteMessage(
+            chatJid = chatJid,
+            pollMessageId = pollMessageId,
+            pollSenderJid = pollSenderJid,
+            optionHashes = optionHashes,
+            ownJid = ownJid,
+            id = id,
+            pollSecret = pollSecrets[pollMessageId],
+        )
+        pendingMessageIDs.add(id)
+        val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+        if (!sent) pendingMessageIDs.remove(id)
         return sent
     }
 
@@ -969,8 +1333,8 @@ object WhatsAppClient {
 
     /**
      * Set group avatar with crop/resize/JPEG conversion.
-     * Crops to square, scales to max 640x640, encodes as JPEG.
-     * From Go HandleMatrixRoomAvatar.
+     * Crops to square, scales between 190-720px, encodes as JPEG quality 75.
+     * From Go HandleMatrixRoomAvatar / convertRoomAvatar.
      */
     suspend fun setGroupAvatar(conversationId: String, imageBytes: ByteArray): Boolean {
         if (_state.value !is State.Connected) return false
@@ -1008,14 +1372,17 @@ object WhatsAppClient {
         val x = (original.width - size) / 2
         val y = (original.height - size) / 2
         val cropped = Bitmap.createBitmap(original, x, y, size, size)
-        val maxDim = 640
-        val scaled = if (size > maxDim) {
-            Bitmap.createScaledBitmap(cropped, maxDim, maxDim, true).also {
+        // Go: min=190, max=720, BiLinear scaling
+        val minDim = 190
+        val maxDim = 720
+        val targetDim = size.coerceIn(minDim, maxDim)
+        val scaled = if (size != targetDim) {
+            Bitmap.createScaledBitmap(cropped, targetDim, targetDim, true).also {
                 if (it !== cropped) cropped.recycle()
             }
         } else cropped
         val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
         if (scaled !== original) scaled.recycle()
         if (original !== cropped && original !== scaled) original.recycle()
         return out.toByteArray()
@@ -1243,6 +1610,36 @@ object WhatsAppClient {
         val conv = db?.conversationDao()?.getConversation(chatJid)
         if (conv != null) {
             db?.conversationDao()?.upsert(conv.copy(pinned = pinned))
+        }
+    }
+
+    /**
+     * Download and decrypt media from a WhatsApp media message.
+     * Integrates WhatsAppProtocol.decryptMedia() for incoming media.
+     * From Go whatsmeow.Download.
+     */
+    suspend fun downloadMedia(
+        url: String,
+        mediaKey: ByteArray,
+        mediaType: String,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("Origin", "https://web.whatsapp.com")
+                .header("Referer", "https://web.whatsapp.com/")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .build()
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Media download failed: HTTP ${response.code}")
+                return@withContext null
+            }
+            val encrypted = response.body?.bytes() ?: return@withContext null
+            WhatsAppProtocol.decryptMedia(encrypted, mediaKey, mediaType)
+        } catch (e: Exception) {
+            Log.e(TAG, "Media download/decrypt failed", e)
+            null
         }
     }
 

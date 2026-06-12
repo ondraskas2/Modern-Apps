@@ -169,8 +169,10 @@ class ContactDiscovery(
 
                 val cdsiRequest = CDSClientRequest.newBuilder()
                     .setNewE164S(com.google.protobuf.ByteString.copyFrom(newE164sData))
-                    .build()
-                val encryptedReq = cds2Client.establishedSend(cdsiRequest.toByteArray())
+                if (cdsiToken != null) {
+                    cdsiRequest.setToken(com.google.protobuf.ByteString.copyFrom(cdsiToken))
+                }
+                val encryptedReq = cds2Client.establishedSend(cdsiRequest.build().toByteArray())
                 socket.send(encryptedReq.toByteString())
 
                 // Response loop matching Go's ReadResponse

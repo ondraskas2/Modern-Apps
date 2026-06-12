@@ -74,7 +74,7 @@ data class AuthData(
 
     fun authNetwork(): String = if (isGoogleAccount()) "GDitto" else ""
 
-    fun hasCookies(): Boolean = if (!isGoogleAccount()) true else cookies != null
+    fun hasCookies(): Boolean = !cookies.isNullOrEmpty()
 
     /** Decode the tachyon token back to raw bytes. */
     fun tachyonToken(): ByteArray? =

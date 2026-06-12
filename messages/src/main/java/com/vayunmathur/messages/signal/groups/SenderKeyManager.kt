@@ -90,7 +90,7 @@ class SenderKeyManager(
         val selfAddress = SignalProtocolAddress(selfAci, selfDeviceId)
         return try {
             val cipher = GroupCipher(senderKeyStore, selfAddress)
-            cipher.encrypt(distributionId, plaintext)
+            cipher.encrypt(distributionId, plaintext).serialize()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to encrypt for group $groupId", e)
             null

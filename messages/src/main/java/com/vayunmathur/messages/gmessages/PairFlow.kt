@@ -138,7 +138,6 @@ object PairFlow {
         rpc: RpcClient,
         auth: AuthData,
     ): RegisterResult {
-        val pubKey = auth.refreshKey.publicKeyDer()
         val tachyonToken = auth.tachyonToken() ?: error("no tachyon token for QR refresh")
         val req = AuthenticationContainer.newBuilder()
             .setAuthMessage(
@@ -148,7 +147,6 @@ object PairFlow {
                     .setNetwork(QrNetwork)
                     .setConfigVersion(ConfigVersion)
             )
-            .setBrowserDetails(BrowserDetails)
             .build()
 
         Log.i(TAG, "RefreshPhoneRelay …")

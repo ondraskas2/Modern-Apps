@@ -48,21 +48,52 @@ class RealtimeChannel(
         job = null
     }
 
+    private class AuthException(message: String) : Exception(message)
+    private class TooManyRetriesException(message: String) : Exception(message)
+
+    sealed interface TerminationReason {
+        data object AuthError : TerminationReason
+        data object TooManyRetries : TerminationReason
+    }
+
+    @Volatile var terminationReason: TerminationReason? = null
+        private set
+
     private suspend fun runLoop() {
         var backoffMs = 0L
+        var transientRetries = 0
         while (true) {
             if (backoffMs > 0) {
-                Log.i(TAG, "reconnecting in ${backoffMs / 1000}s")
+                Log.i(TAG, "reconnecting in ${backoffMs / 1000}s (retry $transientRetries/$MAX_TRANSIENT_RETRIES)")
                 delay(backoffMs)
             }
             val ok = try {
                 run()
+            } catch (e: AuthException) {
+                Log.e(TAG, "realtime auth error, stopping: ${e.message}")
+                terminationReason = TerminationReason.AuthError
+                return
+            } catch (e: TooManyRetriesException) {
+                Log.e(TAG, "too many retries, stopping: ${e.message}")
+                terminationReason = TerminationReason.TooManyRetries
+                return
             } catch (t: Throwable) {
                 Log.w(TAG, "realtime error: ${t.message}")
                 false
             }
             if (!kotlin.coroutines.coroutineContext.isActive) return
-            backoffMs = if (ok) 0L else (if (backoffMs == 0L) 5_000L else minOf(60_000L, backoffMs * 2))
+            if (ok) {
+                transientRetries = 0
+                backoffMs = 0L
+            } else {
+                transientRetries++
+                if (transientRetries > MAX_TRANSIENT_RETRIES) {
+                    Log.e(TAG, "exceeded max transient retries ($MAX_TRANSIENT_RETRIES)")
+                    terminationReason = TerminationReason.TooManyRetries
+                    return
+                }
+                backoffMs = RETRY_TRANSIENT_TIMEOUT_MS
+            }
         }
     }
 
@@ -124,7 +155,7 @@ class RealtimeChannel(
                     failedRequests++
                     if (failedRequests > 10) {
                         Log.e(TAG, "too many Unknown SID errors")
-                        return anyEventSeen
+                        throw TooManyRetriesException("too many Unknown SID errors")
                     }
                     val sleep = ((failedRequests - 1) * 2_000L).coerceAtLeast(0)
                     if (sleep > 0) delay(sleep)
@@ -137,7 +168,12 @@ class RealtimeChannel(
                     ackId = 0
                     lastResubscribeMs = System.currentTimeMillis()
                 }
-                is ChannelOutcome.Error -> return anyEventSeen
+                is ChannelOutcome.Error -> {
+                    if (outcome.status == 401 || outcome.status == 403) {
+                        throw AuthException("HTTP ${outcome.status}")
+                    }
+                    return anyEventSeen
+                }
                 ChannelOutcome.Ok -> {
                 }
             }
@@ -310,6 +346,8 @@ class RealtimeChannel(
     companion object {
         private const val TAG = "GVoice/Realtime"
         private const val FORCE_RESUBSCRIBE_INTERVAL_MS = 60L * 60L * 1000L
+        private const val RETRY_TRANSIENT_TIMEOUT_MS = 60_000L
+        private const val MAX_TRANSIENT_RETRIES = 5
         private const val NOOP_SUFFIX = ",[\"noop\"]]"
         private const val REQ_CHOOSE_SERVER =
             "[[null,null,null,[7,5],null,[null,[null,1],[[[\"3\"]]]]]]"

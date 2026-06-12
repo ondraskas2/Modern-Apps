@@ -361,14 +361,15 @@ data class Message(
                 TlSkip.skipVector(buf) { TlSkip.skipMessageEntity(it) } // entities
                 questionText
             } catch (_: Exception) { "" }
-            // Skip remaining poll data
+            val options = mutableListOf<String>()
             try {
                 TlSkip.skipVector(buf) { // answers
                     buf.int32() // pollAnswer constructor
                     buf.int32() // textWithEntities
-                    buf.string() // text
+                    val answerText = buf.string()
                     TlSkip.skipVector(it) { TlSkip.skipMessageEntity(it) }
                     buf.bytes() // option
+                    options.add(answerText)
                 }
                 if (pollFlags.has(4)) buf.int32() // close_period
                 if (pollFlags.has(5)) buf.int32() // close_date
@@ -377,7 +378,7 @@ data class Message(
             try { TlSkip.skipBoxedType(buf) } catch (_: Exception) {}
             // Skip attached_media (new in layer 225)
             try { if (flags.has(0)) TlSkip.skipBoxedType(buf) } catch (_: Exception) {}
-            return MessageMediaPoll(question)
+            return MessageMediaPoll(question, options)
         }
 
         private fun decodeWebPage(buf: TlBuffer): TlObject {
@@ -542,6 +543,30 @@ data class MessageService(
                     TlSkip.skipBoxedType(buf) // call
                     val duration = if (gFlags.has(0)) buf.int32() else 0
                     MessageActionGroupCall(duration)
+                }
+                0xc0944820.toInt() -> { // topicEdit
+                    val teFlags = Fields.decode(buf)
+                    val title = if (teFlags.has(0)) buf.string() else ""
+                    val iconChanged = teFlags.has(1)
+                    if (teFlags.has(1)) buf.int64() // icon_emoji_id
+                    if (teFlags.has(2)) { buf.int32() } // closed
+                    if (teFlags.has(3)) { buf.int32() } // hidden
+                    MessageActionTopicEdit(title, iconChanged)
+                }
+                0x502f92f4.toInt() -> { // inviteToGroupCall
+                    TlSkip.skipBoxedType(buf) // call
+                    buf.int32() // vector
+                    val userCount = buf.int32()
+                    val users = (0 until userCount).map { buf.int64() }
+                    MessageActionInviteToGroupCall(users)
+                }
+                0xb3a07661.toInt() -> { // groupCallScheduled
+                    TlSkip.skipBoxedType(buf) // call
+                    val schedDate = buf.int32()
+                    MessageActionGroupCallScheduled(schedDate)
+                }
+                0xebbca3cb.toInt() -> { // chatJoinedByRequest
+                    MessageActionChatJoinedByRequest()
                 }
                 else -> {
                     TlSkip.skipMessageAction(buf, actionTypeId)

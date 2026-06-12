@@ -73,7 +73,7 @@ data class MessageMediaVenue(
     fun geoUri(): String = "geo:$lat,$long"
 }
 
-data class MessageMediaPoll(val pollQuestion: String = "") : TlObject {
+data class MessageMediaPoll(val pollQuestion: String = "", val pollOptions: List<String> = emptyList()) : TlObject {
     override val typeId = 0x773f4e66.toInt()
     override fun encode(buf: TlBuffer) {}
 }
@@ -139,6 +139,59 @@ data class InputMediaUploadedDocument(
 data class DocumentAttributeFilename(val fileName: String) : TlObject {
     override val typeId = 0x15590068.toInt()
     override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putString(fileName) }
+}
+
+data class DocumentAttributeVideo(
+    val duration: Double,
+    val w: Int,
+    val h: Int,
+    val roundMessage: Boolean = false,
+    val supportsStreaming: Boolean = true,
+) : TlObject {
+    override val typeId = 0x17399fad.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        var flags = 0
+        if (roundMessage) flags = flags or (1 shl 0)
+        if (supportsStreaming) flags = flags or (1 shl 1)
+        buf.putInt32(flags)
+        buf.putDouble(duration)
+        buf.putInt32(w)
+        buf.putInt32(h)
+    }
+}
+
+data class DocumentAttributeAudio(
+    val duration: Int,
+    val voice: Boolean = false,
+    val title: String = "",
+    val performer: String = "",
+    val waveform: ByteArray? = null,
+) : TlObject {
+    override val typeId = 0x9852f9c6.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        var flags = 0
+        if (voice) flags = flags or (1 shl 10)
+        if (title.isNotEmpty()) flags = flags or (1 shl 0)
+        if (performer.isNotEmpty()) flags = flags or (1 shl 1)
+        if (waveform != null) flags = flags or (1 shl 2)
+        buf.putInt32(flags)
+        buf.putInt32(duration)
+        if (title.isNotEmpty()) buf.putString(title)
+        if (performer.isNotEmpty()) buf.putString(performer)
+        if (waveform != null) buf.putBytes(waveform)
+    }
+}
+
+object DocumentAttributeAnimated : TlObject {
+    override val typeId = 0x11b58939.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+data class DocumentAttributeImageSize(val w: Int, val h: Int) : TlObject {
+    override val typeId = 0x6c37c15c.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(w); buf.putInt32(h) }
 }
 
 // Web page media
@@ -281,6 +334,26 @@ data class MessageActionUnknown(val actionTypeId: Int) : MessageAction {
     override fun encode(buf: TlBuffer) {}
 }
 
+data class MessageActionTopicEdit(val title: String = "", val iconChanged: Boolean = false) : MessageAction {
+    override val typeId = 0xc0944820.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionInviteToGroupCall(val users: List<Long>) : MessageAction {
+    override val typeId = 0x502f92f4.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionGroupCallScheduled(val scheduleDate: Int) : MessageAction {
+    override val typeId = 0xb3a07661.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatJoinedByRequest(val dummy: Int = 0) : MessageAction {
+    override val typeId = 0xebbca3cb.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
 // Reaction types
 data class InputMessageReactionEmoji(val emoticon: String) : TlObject {
     override val typeId = 0x1b2286b8.toInt()
@@ -330,5 +403,15 @@ data class SendMessageUploadDocumentAction(val progress: Int = 0) : TlObject {
 
 data class SendMessageUploadPhotoAction(val progress: Int = 0) : TlObject {
     override val typeId = 0xd1d739de.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
+}
+
+object SendMessageRecordRoundAction : TlObject {
+    override val typeId = 0x88f27fbc.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+data class SendMessageUploadRoundAction(val progress: Int = 0) : TlObject {
+    override val typeId = 0x243e1c66.toInt()
     override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
 }

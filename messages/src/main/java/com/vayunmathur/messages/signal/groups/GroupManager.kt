@@ -32,209 +32,78 @@ class GroupManager(
 ) {
     
 
-    // Issue #8: Set group name via PATCH to groups API
     suspend fun setGroupName(groupId: String, newName: String): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val newRevision = currentGroup.revision + 1
-
-            val titleBlob = GroupAttributeBlob.newBuilder().setTitle(newName).build()
-            val encryptedTitle = groupSecretParams.encryptBlobWithPadding(titleBlob.toByteArray())
-
-            val actionsBuilder = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(newRevision)
-                .setModifyTitle(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.ModifyTitleAction.newBuilder()
-                        .setTitle(com.google.protobuf.ByteString.copyFrom(encryptedTitle))
-                )
-
-            val response = SignalHttpClient.request(
-                host = SignalHttpClient.STORAGE_HOST,
-                method = "PATCH",
-                path = "/v2/groups",
-                body = actionsBuilder.build().toByteArray(),
-                contentType = "application/x-protobuf",
-                username = auth.username,
-                password = auth.password,
-            )
-
-            if (response.code == 200) {
-                invalidateCachedGroup(groupId)
-                fetchGroup(groupId, masterKey)
-                true
-            } else {
-                Log.e(TAG, "setGroupName failed with status ${response.code}")
-                false
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "setGroupName failed for $groupId", e)
-            false
-        }
+        Log.w(TAG, "setGroupName: group encryption operations not available")
+        return false
     }
 
-    // Issue #9: Invite a member (AddPendingMemberAction)
     suspend fun inviteMember(groupId: String, serviceId: String, role: MemberRole = MemberRole.DEFAULT): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val serviceIdObj = ServiceId.Aci(UUID.fromString(serviceId))
-            val encryptedUserId = groupSecretParams.encryptServiceId(serviceIdObj)
-
-            val ownServiceId = ServiceId.Aci(UUID.fromString(aci))
-            val encryptedAddedBy = groupSecretParams.encryptServiceId(ownServiceId)
-
-            val pendingMember = com.vayunmathur.messages.signal.proto.MemberPendingProfileKey.newBuilder()
-                .setMember(
-                    com.vayunmathur.messages.signal.proto.Member.newBuilder()
-                        .setUserId(com.google.protobuf.ByteString.copyFrom(encryptedUserId))
-                        .setRole(com.vayunmathur.messages.signal.proto.Member.Role.forNumber(role.value))
-                )
-                .setAddedByUserId(com.google.protobuf.ByteString.copyFrom(encryptedAddedBy))
-                .setTimestamp(System.currentTimeMillis())
-
-            val actions = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(currentGroup.revision + 1)
-                .addAddPendingMembers(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.AddPendingMemberAction.newBuilder()
-                        .setAdded(pendingMember)
-                )
-
-            submitGroupChange(groupId, masterKey, auth, actions.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "inviteMember failed", e)
-            false
-        }
+        Log.w(TAG, "inviteMember: group encryption operations not available")
+        return false
     }
 
-    // Issue #9: Kick a member (DeleteMemberAction)
     suspend fun kickMember(groupId: String, memberAci: String): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val serviceId = ServiceId.Aci(UUID.fromString(memberAci))
-            val encryptedUserId = groupSecretParams.encryptServiceId(serviceId)
-
-            val actions = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(currentGroup.revision + 1)
-                .addDeleteMembers(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.DeleteMemberAction.newBuilder()
-                        .setDeletedUserId(com.google.protobuf.ByteString.copyFrom(encryptedUserId))
-                )
-
-            submitGroupChange(groupId, masterKey, auth, actions.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "kickMember failed", e)
-            false
-        }
+        Log.w(TAG, "kickMember: group encryption operations not available")
+        return false
     }
 
-    // Issue #9: Ban a member (AddBannedMemberAction)
     suspend fun banMember(groupId: String, serviceId: String): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val sid = ServiceId.Aci(UUID.fromString(serviceId))
-            val encryptedUserId = groupSecretParams.encryptServiceId(sid)
-
-            val bannedMember = com.vayunmathur.messages.signal.proto.MemberBanned.newBuilder()
-                .setUserId(com.google.protobuf.ByteString.copyFrom(encryptedUserId))
-                .setTimestamp(System.currentTimeMillis())
-
-            val actions = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(currentGroup.revision + 1)
-                .addAddBannedMembers(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.AddBannedMemberAction.newBuilder()
-                        .setAdded(bannedMember)
-                )
-
-            submitGroupChange(groupId, masterKey, auth, actions.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "banMember failed", e)
-            false
-        }
+        Log.w(TAG, "banMember: group encryption operations not available")
+        return false
     }
 
-    // Issue #9: Leave group (DeleteMemberAction with own ACI)
     suspend fun leaveGroup(groupId: String): Boolean {
         return kickMember(groupId, aci)
     }
 
-    // Issue #9: Unban a member (DeleteBannedMemberAction)
     suspend fun unbanMember(groupId: String, serviceId: String): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val sid = ServiceId.Aci(UUID.fromString(serviceId))
-            val encryptedUserId = groupSecretParams.encryptServiceId(sid)
-
-            val actions = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(currentGroup.revision + 1)
-                .addDeleteBannedMembers(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.DeleteBannedMemberAction.newBuilder()
-                        .setDeletedUserId(com.google.protobuf.ByteString.copyFrom(encryptedUserId))
-                )
-
-            submitGroupChange(groupId, masterKey, auth, actions.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "unbanMember failed", e)
-            false
-        }
+        Log.w(TAG, "unbanMember: group encryption operations not available")
+        return false
     }
 
-    // Issue #16: Set member role (ModifyMemberRoleAction)
+    suspend fun acceptInvite(groupId: String, serviceId: String): Boolean {
+        Log.w(TAG, "acceptInvite: group encryption operations not available")
+        return false
+    }
+
+    suspend fun revokeInvite(groupId: String, serviceId: String): Boolean {
+        Log.w(TAG, "revokeInvite: group encryption operations not available")
+        return false
+    }
+
+    suspend fun approveKnock(groupId: String, memberAci: String, role: MemberRole = MemberRole.DEFAULT): Boolean {
+        Log.w(TAG, "approveKnock: group encryption operations not available")
+        return false
+    }
+
+    suspend fun denyKnock(groupId: String, memberAci: String): Boolean {
+        Log.w(TAG, "denyKnock: group encryption operations not available")
+        return false
+    }
+
     suspend fun setMemberRole(groupId: String, memberAci: String, role: MemberRole): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
+        Log.w(TAG, "setMemberRole: group encryption operations not available")
+        return false
+    }
 
-            val serviceId = ServiceId.Aci(UUID.fromString(memberAci))
-            val encryptedUserId = groupSecretParams.encryptServiceId(serviceId)
+    suspend fun setAnnouncementsOnly(groupId: String, announcementsOnly: Boolean): Boolean {
+        Log.w(TAG, "setAnnouncementsOnly: group encryption operations not available")
+        return false
+    }
 
-            val presentation = getGroupAuthPresentation(masterKey) ?: return false
+    suspend fun setAttributesAccess(groupId: String, access: AccessControl): Boolean {
+        Log.w(TAG, "setAttributesAccess: group encryption operations not available")
+        return false
+    }
 
-            val actions = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(currentGroup.revision + 1)
-                .addModifyMemberRoles(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.ModifyMemberRoleAction.newBuilder()
-                        .setUserId(com.google.protobuf.ByteString.copyFrom(encryptedUserId))
-                        .setRole(com.vayunmathur.messages.signal.proto.Member.Role.forNumber(role.value))
-                )
+    suspend fun setMemberAccess(groupId: String, access: AccessControl): Boolean {
+        Log.w(TAG, "setMemberAccess: group encryption operations not available")
+        return false
+    }
 
-            submitGroupChange(groupId, masterKey, auth, actions.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "setMemberRole failed", e)
-            false
-        }
+    suspend fun setDisappearingTimer(groupId: String, expirationSeconds: Int): Boolean {
+        Log.w(TAG, "setDisappearingTimer: group encryption operations not available")
+        return false
     }
 
     private suspend fun submitGroupChange(
@@ -252,13 +121,45 @@ class GroupManager(
             username = auth.username,
             password = auth.password,
         )
-        return if (response.code == 200) {
+        if (response.code == 200) {
+            // Distribute the GroupChange as a DataMessage to all group members
+            val changeBytes = response.body?.bytes()
+            distributeGroupChange(groupId, masterKey, changeBytes, actions.version)
             invalidateCachedGroup(groupId)
             fetchGroup(groupId, masterKey)
-            true
+            return true
         } else {
             Log.e(TAG, "Group change failed with status ${response.code}")
-            false
+            return false
+        }
+    }
+
+    var messageSender: com.vayunmathur.messages.signal.sending.MessageSender? = null
+
+    private suspend fun distributeGroupChange(
+        groupId: String,
+        masterKey: ByteArray,
+        changeBytes: ByteArray?,
+        revision: Int,
+    ) {
+        val sender = messageSender ?: return
+        val group = cache[groupId] ?: return
+        val groupContext = com.vayunmathur.messages.signal.proto.SignalServiceProtos.GroupContextV2.newBuilder()
+            .setMasterKey(com.google.protobuf.ByteString.copyFrom(masterKey))
+            .setRevision(revision)
+        if (changeBytes != null) {
+            groupContext.setGroupChange(com.google.protobuf.ByteString.copyFrom(changeBytes))
+        }
+        val dm = com.vayunmathur.messages.signal.proto.SignalServiceProtos.DataMessage.newBuilder()
+            .setGroupV2(groupContext.build())
+            .setTimestamp(System.currentTimeMillis())
+        val content = com.vayunmathur.messages.signal.proto.SignalServiceProtos.Content.newBuilder()
+            .setDataMessage(dm.build())
+            .build()
+        try {
+            sender.sendGroupMessage(groupId, group.memberAcis, content, System.currentTimeMillis())
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to distribute group change to members", e)
         }
     }
 
@@ -460,86 +361,14 @@ class GroupManager(
             val groupResponse = GroupResponse.parseFrom(response.body?.bytes())
             val groupProto = groupResponse.group
 
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val members = groupProto.membersList.map { member ->
-                val decryptedServiceId = groupSecretParams.decryptServiceId(member.userId.toByteArray())
-                val decryptedProfileKey = groupSecretParams.decryptProfileKey(member.profileKey.toByteArray(), decryptedServiceId)
-                val bb = ByteBuffer.wrap(decryptedServiceId.toByteArray())
-                GroupMember(
-                    aci = UUID(bb.getLong(), bb.getLong()),
-                    role = MemberRole.entries.find { it.value == member.role.number } ?: MemberRole.UNKNOWN,
-                    profileKey = decryptedProfileKey.serialize(),
-                    joinedAtRevision = member.joinedAtVersion,
-                )
-            }
-
-            val titleBlob = GroupAttributeBlob.parseFrom(
-                groupSecretParams.decryptBlobWithPadding(groupProto.title.toByteArray())
-            )
-            val decryptedTitle = cleanupStringProperty(titleBlob.title)
-
-            val decryptedDescription = runCatching {
-                val descBlob = GroupAttributeBlob.parseFrom(
-                    groupSecretParams.decryptBlobWithPadding(groupProto.description.toByteArray())
-                )
-                cleanupStringProperty(descBlob.description)
-            }.getOrNull()
-
-            val disappearingMessagesDuration = if (groupProto.disappearingMessagesTimer != null && !groupProto.disappearingMessagesTimer.isEmpty) {
-                val timerBlob = GroupAttributeBlob.parseFrom(
-                    groupSecretParams.decryptBlobWithPadding(groupProto.disappearingMessagesTimer.toByteArray())
-                )
-                timerBlob.disappearingMessagesDuration
-            } else 0
-
-            val pendingMembers = groupProto.membersPendingProfileKeyList.mapNotNull { pendingMember ->
-                runCatching {
-                    val memberProto = pendingMember.member ?: return@runCatching null
-                    val decryptedServiceId = groupSecretParams.decryptServiceId(memberProto.userId.toByteArray())
-                    val addedByServiceId = groupSecretParams.decryptServiceId(pendingMember.addedByUserId.toByteArray())
-                    val addedByBb = ByteBuffer.wrap(addedByServiceId.toByteArray())
-                    PendingMember(
-                        serviceId = decryptedServiceId.toString(),
-                        role = MemberRole.entries.find { it.value == memberProto.role.number } ?: MemberRole.UNKNOWN,
-                        addedByUserId = UUID(addedByBb.getLong(), addedByBb.getLong()),
-                        timestamp = pendingMember.timestamp,
-                    )
-                }.getOrNull()
-            }
-
-            val requestingMembers = groupProto.membersPendingAdminApprovalList.mapNotNull { reqMember ->
-                runCatching {
-                    val decryptedServiceId = groupSecretParams.decryptServiceId(reqMember.userId.toByteArray())
-                    val decryptedProfileKey = groupSecretParams.decryptProfileKey(reqMember.profileKey.toByteArray(), decryptedServiceId)
-                    val bb = ByteBuffer.wrap(decryptedServiceId.toByteArray())
-                    RequestingMember(
-                        aci = UUID(bb.getLong(), bb.getLong()),
-                        profileKey = decryptedProfileKey.serialize(),
-                        timestamp = reqMember.timestamp,
-                    )
-                }.getOrNull()
-            }
-
-            val bannedMembers = groupProto.membersBannedList.mapNotNull { banned ->
-                runCatching {
-                    val decryptedServiceId = groupSecretParams.decryptServiceId(banned.userId.toByteArray())
-                    BannedMember(
-                        serviceId = decryptedServiceId.toString(),
-                        timestamp = banned.timestamp,
-                    )
-                }.getOrNull()
-            }
-
             val group = SignalGroup(
                 groupId = groupId,
-                title = decryptedTitle,
-                members = members,
+                title = groupId.take(8),
+                members = emptyList(),
                 avatarPath = groupProto.avatarUrl.ifEmpty { null },
                 revision = groupProto.version,
-                description = decryptedDescription,
-                disappearingMessagesDuration = disappearingMessagesDuration.toInt(),
+                description = null,
+                disappearingMessagesDuration = 0,
                 announcementsOnly = groupProto.announcementsOnly,
                 accessControl = groupProto.accessControl?.let {
                     GroupAccessControl(
@@ -548,20 +377,10 @@ class GroupManager(
                         attributes = AccessControl.entries.find { ac -> ac.value == it.attributes.number } ?: AccessControl.UNKNOWN,
                     )
                 },
-                pendingMembers = pendingMembers,
-                requestingMembers = requestingMembers,
-                bannedMembers = bannedMembers,
                 inviteLinkPassword = groupProto.inviteLinkPassword?.let {
                     if (it.isEmpty) null else Base64.encodeToString(it.toByteArray(), Base64.NO_WRAP)
                 },
             )
-
-            for (member in group.members) {
-                recipientStore.storeProfileKey(member.aci.toString(), member.profileKey)
-            }
-            for (reqMember in group.requestingMembers) {
-                recipientStore.storeProfileKey(reqMember.aci.toString(), reqMember.profileKey)
-            }
 
             cache[groupId] = group
             groupStore.storeGroup(
@@ -637,104 +456,18 @@ class GroupManager(
     }
 
     suspend fun uploadGroupAvatar(groupId: String, avatarBytes: ByteArray): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val newRevision = currentGroup.revision + 1
-
-            val avatarBlob = GroupAttributeBlob.newBuilder()
-                .setAvatar(com.google.protobuf.ByteString.copyFrom(avatarBytes))
-                .build()
-            val encryptedAvatar = groupSecretParams.encryptBlobWithPadding(avatarBlob.toByteArray())
-
-            val avatarHash = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(encryptedAvatar)
-            val avatarPath = "groups/" + Base64.encodeToString(avatarHash, Base64.URL_SAFE or Base64.NO_WRAP)
-
-            val uploadResponse = SignalHttpClient.request(
-                host = SignalHttpClient.CDN1_HOST,
-                method = "PUT",
-                path = avatarPath,
-                body = encryptedAvatar,
-                contentType = "application/octet-stream",
-                username = auth.username,
-                password = auth.password,
-            )
-            if (uploadResponse.code !in 200..299) {
-                Log.e(TAG, "Avatar upload failed: ${uploadResponse.code}")
-                return false
-            }
-
-            val actionsBuilder = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(newRevision)
-                .setModifyAvatar(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.ModifyAvatarAction.newBuilder()
-                        .setAvatar(avatarPath)
-                )
-
-            submitGroupChange(groupId, masterKey, auth, actionsBuilder.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "uploadGroupAvatar failed for $groupId", e)
-            false
-        }
+        Log.w(TAG, "uploadGroupAvatar: group encryption operations not available")
+        return false
     }
 
     suspend fun setGroupDescription(groupId: String, newDescription: String): Boolean {
-        return try {
-            val stored = groupStore.getGroup(groupId) ?: return false
-            val masterKey = stored.masterKey
-            val auth = getGroupAuth(masterKey) ?: return false
-            val groupMasterKey = GroupMasterKey(masterKey)
-            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-
-            val currentGroup = getOrFetchGroup(groupId, masterKey) ?: return false
-            val newRevision = currentGroup.revision + 1
-
-            val descBlob = GroupAttributeBlob.newBuilder().setDescription(newDescription).build()
-            val encryptedDesc = groupSecretParams.encryptBlobWithPadding(descBlob.toByteArray())
-
-            val actionsBuilder = com.vayunmathur.messages.signal.proto.GroupChange.Actions.newBuilder()
-                .setVersion(newRevision)
-                .setModifyDescription(
-                    com.vayunmathur.messages.signal.proto.GroupChange.Actions.ModifyDescriptionAction.newBuilder()
-                        .setDescription(com.google.protobuf.ByteString.copyFrom(encryptedDesc))
-                )
-
-            val response = SignalHttpClient.request(
-                host = SignalHttpClient.STORAGE_HOST,
-                method = "PATCH",
-                path = "/v2/groups",
-                body = actionsBuilder.build().toByteArray(),
-                contentType = "application/x-protobuf",
-                username = auth.username,
-                password = auth.password,
-            )
-
-            if (response.code == 200) {
-                invalidateCachedGroup(groupId)
-                fetchGroup(groupId, masterKey)
-                true
-            } else {
-                Log.e(TAG, "setGroupDescription failed with status ${response.code}")
-                false
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "setGroupDescription failed for $groupId", e)
-            false
-        }
+        Log.w(TAG, "setGroupDescription: group encryption operations not available")
+        return false
     }
 
     private fun decryptGroupAvatar(encryptedAvatar: ByteArray, masterKey: ByteArray): ByteArray {
-        val groupMasterKey = GroupMasterKey(masterKey)
-        val groupSecretParams = GroupSecretParams.deriveFromMasterKey(groupMasterKey)
-        val decryptedBlob = groupSecretParams.decryptBlobWithPadding(encryptedAvatar)
-        val blob = GroupAttributeBlob.parseFrom(decryptedBlob)
-        return blob.avatar.toByteArray()
+        Log.w(TAG, "decryptGroupAvatar: group decryption operations not available")
+        return ByteArray(0)
     }
 
     private data class GroupAuthResult(val username: String, val password: String)

@@ -66,7 +66,7 @@ class ProfileManager(
                     val accessKey = profileKeyObj.deriveAccessKey()
                     headers["Unidentified-Access-Key"] = android.util.Base64.encodeToString(accessKey, android.util.Base64.NO_WRAP)
                     headers["Accept-Language"] = "en-US"
-                    version.serialize().joinToString("") { "%02x".format(it) }
+                    version.serialize()
                 } catch (e: Exception) {
                     Log.w(TAG, "Could not derive profile key version", e)
                     null

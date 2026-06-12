@@ -101,6 +101,31 @@ data class UpdateMessageReactions(val peer: TlObject, val msgId: Int) : TlObject
     override fun encode(buf: TlBuffer) {}
 }
 
+data class UpdateBotMessageReaction(val peer: TlObject, val msgId: Int, val actorId: TlObject) : TlObject {
+    override val typeId = 0xac21d3ce.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdatePhoneCall(val phoneCallTypeId: Int, val phoneCallId: Long) : TlObject {
+    override val typeId = 0xab0f6b1e.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdateChatDefaultBannedRights(val peer: TlObject, val defaultBannedRights: Int, val version: Int) : TlObject {
+    override val typeId = 0x54c01850.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdatePeerBlocked(val peerId: TlObject, val blocked: Boolean) : TlObject {
+    override val typeId = 0xebe07752.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdateUserStatus(val userId: Long, val statusTypeId: Int) : TlObject {
+    override val typeId = 0xe5bdf8de.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
 // Update container types
 data class Updates(val updates: List<TlObject>, val users: List<TlObject>, val chats: List<TlObject>, val date: Int, val seq: Int) : TlObject {
     override val typeId = 0x74ae4240.toInt()

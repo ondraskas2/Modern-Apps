@@ -26,7 +26,7 @@ sealed interface MessageContent {
     data class SyncRead(val messages: List<Pair<String, Long>>) : MessageContent
     data class SyncKeys(val masterKey: ByteArray?, val accountEntropyPool: String?) : MessageContent
     data class SyncFetchLatest(val type: String) : MessageContent
-    data class SyncDeleteForMe(val timestamp: Long, val conversationDeletes: List<ConversationDelete> = emptyList(), val messageDeletes: List<MessageDelete> = emptyList()) : MessageContent
+    data class SyncDeleteForMe(val timestamp: Long, val conversationDeletes: List<ConversationDelete> = emptyList(), val messageDeletes: List<MessageDelete> = emptyList(), val attachmentDeletes: List<AttachmentDelete> = emptyList()) : MessageContent
     data class SyncMessageRequestResponse(val threadAci: String?, val groupId: ByteArray?, val type: String) : MessageContent
     data class SyncContacts(val blob: ByteArray) : MessageContent
     data class Call(val isRinging: Boolean, val groupId: String? = null) : MessageContent
@@ -54,6 +54,14 @@ data class ConversationDelete(
 data class MessageDelete(
     val conversationId: ConversationIdentifier,
     val messages: List<AddressableMsg>,
+)
+
+data class AttachmentDelete(
+    val conversationId: ConversationIdentifier,
+    val targetMessage: AddressableMsg,
+    val clientUuid: ByteArray? = null,
+    val fallbackDigest: ByteArray? = null,
+    val fallbackPlaintextHash: ByteArray? = null,
 )
 
 data class ConversationIdentifier(
@@ -148,9 +156,15 @@ object ContentDispatcher {
 
         if (data.hasReaction()) {
             val r = data.reaction
+            val targetAuthor = if (r.targetAuthorAciBinary != null && r.targetAuthorAciBinary.size() == 16) {
+                val buf = java.nio.ByteBuffer.wrap(r.targetAuthorAciBinary.toByteArray())
+                java.util.UUID(buf.long, buf.long).toString()
+            } else if (r.hasTargetAuthorAci()) {
+                r.targetAuthorAci
+            } else null
             return MessageContent.Reaction(
                 r.emoji, r.targetSentTimestamp, r.remove,
-                targetAuthorAci = if (r.hasTargetAuthorAci()) r.targetAuthorAci else null,
+                targetAuthorAci = targetAuthor,
                 groupId = groupId,
             )
         }
@@ -251,6 +265,13 @@ object ContentDispatcher {
             )
         }
 
+        // Unsupported protocol version — still treat as a message (matching Go: RemoteEventMessage)
+        if (data.hasRequiredProtocolVersion() && data.requiredProtocolVersion > SignalServiceProtos.DataMessage.ProtocolVersion.CURRENT_VALUE) {
+            return MessageContent.TextMessage(
+                "[Message from newer Signal version]", data.timestamp, groupId,
+            )
+        }
+
         return MessageContent.Unknown("DataMessage with no recognized fields")
     }
 
@@ -279,8 +300,16 @@ object ContentDispatcher {
                 sent.hasMessage() -> dispatchData(sent.message, sent.timestamp)
                 else -> null
             }
+            val destAci = when {
+                sent.hasDestinationServiceIdBinary() && sent.destinationServiceIdBinary.size() == 16 -> {
+                    val buf = java.nio.ByteBuffer.wrap(sent.destinationServiceIdBinary.toByteArray())
+                    java.util.UUID(buf.long, buf.long).toString()
+                }
+                sent.hasDestinationServiceId() -> sent.destinationServiceId
+                else -> null
+            }
             return MessageContent.SyncSent(
-                destinationAci = if (sent.hasDestinationServiceId()) sent.destinationServiceId else null,
+                destinationAci = destAci,
                 message = innerContent,
                 timestamp = sent.timestamp,
             )
@@ -291,14 +320,18 @@ object ContentDispatcher {
             val masterKey = if (keys.hasAccountEntropyPool() && keys.accountEntropyPool.isNotEmpty()) {
                 try {
                     val aep = keys.accountEntropyPool
-                    val hkdf = org.signal.libsignal.protocol.hkdf.HKDF.createFor(3)
-                    hkdf.deriveSecrets(aep.toByteArray(), "20231031_Signal_Accounts_MasterKey".toByteArray(), 32)
+                    val salt = ByteArray(32)
+                    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                    mac.init(javax.crypto.spec.SecretKeySpec(salt, "HmacSHA256"))
+                    val prk = mac.doFinal(aep.toByteArray())
+                    mac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
+                    mac.update("20231031_Signal_Accounts_MasterKey".toByteArray())
+                    mac.update(byteArrayOf(1))
+                    mac.doFinal().copyOfRange(0, 32)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to derive master key from AEP", e)
                     null
                 }
-            } else if (keys.hasMaster() && keys.master.size() == 32) {
-                keys.master.toByteArray()
             } else null
             return MessageContent.SyncKeys(
                 masterKey = masterKey,
@@ -353,13 +386,46 @@ object ContentDispatcher {
                     }
                 )
             }
-            return MessageContent.SyncDeleteForMe(timestamp, convDeletes, msgDeletes)
+            val attDeletes = dfm.attachmentDeletesList.mapNotNull { ad ->
+                runCatching {
+                    val targetMsg = ad.targetMessage
+                    val authorAci = if (targetMsg.authorServiceIdBinary != null && targetMsg.authorServiceIdBinary.size() == 16) {
+                        val buf = java.nio.ByteBuffer.wrap(targetMsg.authorServiceIdBinary.toByteArray())
+                        java.util.UUID(buf.long, buf.long).toString()
+                    } else if (targetMsg.hasAuthorServiceId()) {
+                        targetMsg.authorServiceId
+                    } else null
+                    AttachmentDelete(
+                        conversationId = parseConversationId(ad.conversation),
+                        targetMessage = AddressableMsg(authorAci = authorAci, sentTimestamp = targetMsg.sentTimestamp),
+                        clientUuid = if (ad.hasClientUuid()) ad.clientUuid.toByteArray() else null,
+                        fallbackDigest = if (ad.hasFallbackDigest()) ad.fallbackDigest.toByteArray() else null,
+                        fallbackPlaintextHash = if (ad.hasFallbackPlaintextHash()) ad.fallbackPlaintextHash.toByteArray() else null,
+                    )
+                }.getOrNull()
+            }
+            // LocalOnlyConversationDeletes treated same as ConversationDeletes
+            val localOnlyDeletes = dfm.localOnlyConversationDeletesList.map { cd ->
+                ConversationDelete(
+                    conversationId = parseConversationId(cd.conversation),
+                    isFullDelete = true,
+                )
+            }
+            return MessageContent.SyncDeleteForMe(timestamp, convDeletes + localOnlyDeletes, msgDeletes, attDeletes)
         }
 
         if (sync.hasMessageRequestResponse()) {
             val mrr = sync.messageRequestResponse
+            val threadAci = when {
+                mrr.hasThreadAciBinary() && mrr.threadAciBinary.size() == 16 -> {
+                    val buf = java.nio.ByteBuffer.wrap(mrr.threadAciBinary.toByteArray())
+                    java.util.UUID(buf.long, buf.long).toString()
+                }
+                mrr.hasThreadAci() -> mrr.threadAci
+                else -> null
+            }
             return MessageContent.SyncMessageRequestResponse(
-                threadAci = if (mrr.hasThreadAci()) mrr.threadAci else null,
+                threadAci = threadAci,
                 groupId = if (mrr.hasGroupId()) mrr.groupId.toByteArray() else null,
                 type = mrr.type.name,
             )
@@ -376,7 +442,15 @@ object ContentDispatcher {
         }
 
         if (sync.readCount > 0) {
-            val reads = sync.readList.map { it.senderAci to it.timestamp }
+            val reads = sync.readList.map { read ->
+                val senderAci = if (read.hasSenderAciBinary() && read.senderAciBinary.size() == 16) {
+                    val buf = java.nio.ByteBuffer.wrap(read.senderAciBinary.toByteArray())
+                    java.util.UUID(buf.long, buf.long).toString()
+                } else {
+                    read.senderAci
+                }
+                senderAci to read.timestamp
+            }
             return MessageContent.SyncRead(reads)
         }
 
@@ -391,6 +465,10 @@ object ContentDispatcher {
                 java.util.UUID(buf.long, buf.long).toString()
             }
             conv.hasThreadServiceId() -> conv.threadServiceId
+            conv.hasThreadE164() -> {
+                Log.w(TAG, "Unsupported E164 conversation ID: ${conv.threadE164}")
+                null
+            }
             else -> null
         }
         val threadGroupId = if (conv.hasThreadGroupId()) conv.threadGroupId.toByteArray() else null

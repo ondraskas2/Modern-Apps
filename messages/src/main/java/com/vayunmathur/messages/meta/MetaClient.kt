@@ -274,16 +274,32 @@ object MetaClient {
                                     )
                                 }
                                 is MetaProtocol.IncomingEvent.ParticipantRemoved -> {
-                                    _events.emit(
-                                        GMEvent.ParticipantRemoved(
-                                            source = MessageSource.MESSENGER,
-                                            conversationId = "fb:${evt.threadId}",
-                                            participantId = evt.participantId,
+                                    // Go bridge: when self is removed, treat as thread deletion
+                                    if (evt.participantId == authData?.userId) {
+                                        _events.emit(
+                                            GMEvent.ConversationDeleted(
+                                                source = MessageSource.MESSENGER,
+                                                conversationId = "fb:${evt.threadId}",
+                                            )
                                         )
-                                    )
+                                    } else {
+                                        _events.emit(
+                                            GMEvent.ParticipantRemoved(
+                                                source = MessageSource.MESSENGER,
+                                                conversationId = "fb:${evt.threadId}",
+                                                participantId = evt.participantId,
+                                            )
+                                        )
+                                    }
                                 }
                                 is MetaProtocol.IncomingEvent.ThreadMuteChanged -> {
-                                    Log.d(TAG, "Thread ${evt.threadId} mute changed: ${evt.muteExpireTimeMs}")
+                                    _events.emit(
+                                        GMEvent.MuteSettingChanged(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            muteExpireTimeMs = evt.muteExpireTimeMs,
+                                        )
+                                    )
                                 }
                                 is MetaProtocol.IncomingEvent.ThreadDeleted -> {
                                     _events.emit(
@@ -294,7 +310,35 @@ object MetaClient {
                                     )
                                 }
                                 is MetaProtocol.IncomingEvent.MessageRequestReceived -> {
-                                    Log.d(TAG, "Message request received for thread ${evt.threadId}")
+                                    _events.emit(
+                                        GMEvent.MessageRequestReceived(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadSynced -> {
+                                    _events.emit(
+                                        GMEvent.ConversationUpdate(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            peerName = evt.threadName,
+                                            peerPhone = null,
+                                            avatarUrl = null,
+                                            lastPreview = null,
+                                            lastTimestamp = evt.lastActivityTimestampMs,
+                                            unreadCount = 0,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadVerified -> {
+                                    Log.d(TAG, "Thread verified: ${evt.threadId} type=${evt.threadType} folder=${evt.folderName}")
+                                }
+                                is MetaProtocol.IncomingEvent.FolderSynced -> {
+                                    Log.d(TAG, "Folder synced: ${evt.threadId}")
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadMovedToE2EECutover -> {
+                                    Log.d(TAG, "Thread moved to E2EE cutover: ${evt.threadId}")
                                 }
                             }
                         }
@@ -329,8 +373,15 @@ object MetaClient {
         backfillJob = scope.launch {
             Log.i(TAG, "Backfill: syncing thread list via Lightspeed")
             val client = mqttClient ?: return@launch
-            val payload = MetaProtocol.buildSyncThreadListPayload(client.versionId)
-            client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+            try {
+                val payload = MetaProtocol.buildFetchThreadsPayload(client.versionId)
+                client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+
+                val payloadSG95 = MetaProtocol.buildFetchThreadsPayload(client.versionId, syncGroup = 95)
+                client.makeLSRequest(payloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
+            } catch (e: Exception) {
+                Log.e(TAG, "Backfill failed", e)
+            }
         }
     }
 
@@ -409,7 +460,7 @@ object MetaClient {
         val client = mqttClient ?: return
         val actorId = authData?.userId?.toLongOrNull() ?: return
 
-        val strippedEmoji = emoji.replace("\uFE0F", "")
+        val strippedEmoji = MetaProtocol.removeVariationSelectors(emoji)
         val payload = MetaProtocol.buildReactionPayload(
             threadKey = threadId,
             messageId = messageId,
@@ -438,8 +489,9 @@ object MetaClient {
         val payload = MetaProtocol.buildEditMessagePayload(messageId, text, client.versionId)
         var response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
         if (response == null) {
-            Log.w(TAG, "Edit message first attempt failed, retrying in 3s — messageId=$messageId")
-            kotlinx.coroutines.delay(3000)
+            // Go bridge waits up to 5s for server to correct a rejected edit
+            Log.w(TAG, "Edit message first attempt failed, retrying — messageId=$messageId")
+            kotlinx.coroutines.delay(5000)
             response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
             if (response == null) {
                 Log.e(TAG, "Edit message retry also failed — messageId=$messageId")
@@ -452,7 +504,13 @@ object MetaClient {
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildDeleteThreadPayload(threadId, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        val result = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        if (result) {
+            // Go bridge: Messenger also sends SyncGroup=95 delete for WA-encrypted threads
+            val payloadSG95 = MetaProtocol.buildDeleteThreadPayload(threadId, client.versionId, syncGroup = 95)
+            client.makeLSRequest(payloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        }
+        return result
     }
 
     suspend fun muteThread(conversationId: String, muteExpireTimeMs: Long): Boolean {
@@ -515,14 +573,31 @@ object MetaClient {
 
     suspend fun searchUsers(query: String): Boolean {
         val client = mqttClient ?: return false
-        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId)
+        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId, isMessenger = true)
+        // Go bridge sends secondary task with 10ms delay
+        scope.launch {
+            kotlinx.coroutines.delay(10)
+            val secondaryPayload = MetaProtocol.buildSearchUserSecondaryPayload(query, client.versionId, isMessenger = true)
+            client.makeLSRequest(secondaryPayload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        }
         return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
     }
 
     suspend fun createGroup(participantIds: List<Long>): Boolean {
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildCreateGroupPayload(participantIds, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        val response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) ?: return false
+        val responseData = MetaProtocol.parsePublishResponse(response.payload)
+        if (responseData != null) {
+            val decoded = LightspeedDecoder.decodePublishResponse(responseData.payload, responseData.sp)
+            val events = MetaProtocol.parseAllEvents(decoded)
+            for (evt in events) {
+                if (evt is MetaProtocol.IncomingEvent.MessageReceived) {
+                    Log.d(TAG, "Group created with thread ${evt.message.threadId}")
+                }
+            }
+        }
+        return true
     }
 
     suspend fun createPoll(conversationId: String, question: String, options: List<String>): Boolean {
@@ -533,10 +608,9 @@ object MetaClient {
     }
 
     suspend fun acceptMessageRequest(conversationId: String): Boolean {
-        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
-        val client = mqttClient ?: return false
-        val payload = MetaProtocol.buildAcceptMessageRequestPayload(threadId, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        // Go bridge: accepting message requests is not implemented for Messenger
+        Log.w(TAG, "acceptMessageRequest is not supported for Messenger")
+        return false
     }
 
     private fun extractThreadId(conversationId: String): String? {

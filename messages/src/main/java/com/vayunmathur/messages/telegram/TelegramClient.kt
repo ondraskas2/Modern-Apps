@@ -3,13 +3,15 @@ package com.vayunmathur.messages.telegram
 import android.content.Context
 import android.util.Base64
 import android.util.Log
-import com.vayunmathur.messages.data.ContactSuggestion
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.gmessages.GMEvent
+import com.vayunmathur.messages.telegram.api.TlRegistry
 import com.vayunmathur.messages.telegram.api.functions.*
 import com.vayunmathur.messages.telegram.api.types.*
+import com.vayunmathur.messages.telegram.mtproto.TelegramApiClient
+import com.vayunmathur.messages.telegram.mtproto.crypto.Srp
 import com.vayunmathur.messages.telegram.mtproto.tl.TlObject
-import com.vayunmathur.messages.telegram.mtproto.tl.TlRegistry
+import com.vayunmathur.messages.util.ContactSuggestion
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.security.SecureRandom
@@ -58,12 +60,13 @@ object TelegramClient {
     private var reconnectAttempt = 0
     private var isPremium = false
 
-    private companion object {
-        const val MAX_CAPTION_LENGTH = 2048
-        const val MAX_CAPTION_LENGTH_PREMIUM = 4096
-        const val MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024
-        const val MAX_IMAGE_ASPECT_RATIO = 20.0
-    }
+    private const val MAX_MESSAGE_LENGTH = 4096
+    private const val MAX_CAPTION_LENGTH = 1024
+    private const val MAX_CAPTION_LENGTH_PREMIUM = 4096
+    private const val MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024
+    private const val MAX_IMAGE_ASPECT_RATIO = 20.0
+    private const val MAX_IMAGE_DIMENSION_SUM = 10000
+    private const val MAX_IMAGE_PIXELS = 10000 * 10000L
 
     private var currentPts = 0
     private var currentQts = 0
@@ -153,7 +156,7 @@ object TelegramClient {
                     is AuthPassword -> {
                         val hint = try {
                             val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) }
-                            if (pwd is Password) pwd.hint else ""
+                            if (pwd is AuthPassword) pwd.hint else ""
                         } catch (_: Exception) { "" }
                         _state.value = State.AwaitingPassword(phone, hint)
                     }
@@ -163,7 +166,7 @@ object TelegramClient {
                 if (e.message?.contains("SESSION_PASSWORD_NEEDED") == true) {
                     val hint = try {
                         val pwd = apiClient?.invoke(AccountGetPassword) { TlRegistry.decode(it) }
-                        if (pwd is Password) pwd.hint else ""
+                        if (pwd is AuthPassword) pwd.hint else ""
                     } catch (_: Exception) { "" }
                     _state.value = State.AwaitingPassword(phone, hint)
                 } else {
@@ -179,8 +182,10 @@ object TelegramClient {
             try {
                 val client = apiClient ?: return@launch
                 val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) }
-                if (pwd !is Password) return@launch
-                val answer = SRPHelper.computeSRP(password, pwd)
+                if (pwd !is AuthPassword) return@launch
+                val algo = pwd.currentAlgo ?: return@launch
+                val randomA = ByteArray(256).also { random.nextBytes(it) }
+                val answer = Srp.computeAnswer(password.toByteArray(), pwd.srpB, randomA, algo.salt1, algo.salt2, algo.g, algo.p)
                 val inputPassword = InputCheckPasswordSRP(pwd.srpId, answer.a, answer.m1)
                 val result = client.invoke(AuthCheckPassword(inputPassword)) { TlRegistry.decode(it) }
                 if (result is AuthAuthorization) {
@@ -208,9 +213,13 @@ object TelegramClient {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
-        // Parse markdown entities from body if none provided (Issue 13)
-        val resolvedEntities = entities.ifEmpty { parseMarkdownEntities(body) }
-        val cleanBody = if (entities.isEmpty() && resolvedEntities.isNotEmpty()) stripMarkdown(body) else body
+        val parsed = if (entities.isEmpty()) parseMarkdown(body) else null
+        val resolvedEntities = parsed?.entities ?: entities
+        var cleanBody = parsed?.text ?: body
+        if (cleanBody.length > MAX_MESSAGE_LENGTH) {
+            Log.w(TAG, "Message truncated from ${cleanBody.length} to $MAX_MESSAGE_LENGTH chars")
+            cleanBody = cleanBody.take(MAX_MESSAGE_LENGTH)
+        }
         // Include topic ID in replyTo for forums (Issue 12)
         val topicReplyId = extractTopicId(conversationId) ?: replyToMsgId
         return try {
@@ -285,7 +294,20 @@ object TelegramClient {
             val media: TlObject = if (mime.startsWith("image/") && !shouldSendImageAsFile(bytes, mime)) {
                 InputMediaUploadedPhoto(inputFile)
             } else {
-                InputMediaUploadedDocument(inputFile, mime, listOf(DocumentAttributeFilename(fileName)))
+                val attrs = mutableListOf<TlObject>(DocumentAttributeFilename(fileName))
+                when {
+                    mime.startsWith("video/") -> attrs.add(DocumentAttributeVideo(0.0, 0, 0))
+                    mime.startsWith("audio/") -> attrs.add(DocumentAttributeAudio(0, voice = mime == "audio/ogg"))
+                    mime == "image/gif" -> { attrs.add(DocumentAttributeAnimated); attrs.add(DocumentAttributeImageSize(0, 0)) }
+                    mime.startsWith("image/") -> {
+                        val imgOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, imgOpts)
+                        if (imgOpts.outWidth > 0 && imgOpts.outHeight > 0) {
+                            attrs.add(DocumentAttributeImageSize(imgOpts.outWidth, imgOpts.outHeight))
+                        }
+                    }
+                }
+                InputMediaUploadedDocument(inputFile, mime, attrs)
             }
 
             client.invoke(MessagesSendMedia(peer, media, truncatedCaption ?: "", random.nextLong())) { TlRegistry.decode(it) }
@@ -303,32 +325,36 @@ object TelegramClient {
         val w = opts.outWidth
         val h = opts.outHeight
         if (w <= 0 || h <= 0) return false
+        val pixels = w.toLong() * h.toLong()
+        if (pixels > MAX_IMAGE_PIXELS) return true
         val ratio = w.toDouble() / h.toDouble()
-        return ratio > MAX_IMAGE_ASPECT_RATIO || ratio < (1.0 / MAX_IMAGE_ASPECT_RATIO)
+        if (ratio > MAX_IMAGE_ASPECT_RATIO || ratio < (1.0 / MAX_IMAGE_ASPECT_RATIO)) return true
+        if (w + h > MAX_IMAGE_DIMENSION_SUM) return true
+        return false
     }
 
     suspend fun markRead(conversationId: String, maxId: Int = Int.MAX_VALUE): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        val topicId = extractTopicId(conversationId) ?: 0
         return try {
             when (peer) {
                 is InputPeerChannel -> {
                     val inputChannel = InputChannel(peer.channelId, peer.accessHash)
                     client.invoke(ChannelsReadHistory(inputChannel, maxId)) { TlRegistry.decode(it) }
-                    // Also read mentions and reactions in parallel (Issue 14)
-                    scope.launch {
-                        try { client.invoke(MessagesReadMentions(peer)) { TlRegistry.decode(it) } }
-                        catch (t: Throwable) { Log.d(TAG, "readMentions: ${t.message}") }
-                    }
-                    scope.launch {
-                        try { client.invoke(MessagesReadReactions(peer)) { TlRegistry.decode(it) } }
-                        catch (t: Throwable) { Log.d(TAG, "readReactions: ${t.message}") }
-                    }
                 }
                 else -> {
                     client.invoke(MessagesReadHistory(peer, maxId)) { TlRegistry.decode(it) }
                 }
+            }
+            scope.launch {
+                try { client.invoke(MessagesReadMentions(peer, topicId)) { TlRegistry.decode(it) } }
+                catch (t: Throwable) { Log.d(TAG, "readMentions: ${t.message}") }
+            }
+            scope.launch {
+                try { client.invoke(MessagesReadReactions(peer, topicId)) { TlRegistry.decode(it) } }
+                catch (t: Throwable) { Log.d(TAG, "readReactions: ${t.message}") }
             }
             true
         } catch (t: Throwable) {
@@ -357,7 +383,7 @@ object TelegramClient {
                     client.invoke(MessagesDeleteChat(peer.chatId)) { TlRegistry.decode(it) }
                 }
                 peer is InputPeerChannel -> {
-                    client.invoke(ChannelsLeaveChannel(
+                    client.invoke(ChannelsDeleteChannel(
                         InputChannel(peer.channelId, peer.accessHash)
                     )) { TlRegistry.decode(it) }
                 }
@@ -404,8 +430,9 @@ object TelegramClient {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        val topMsgId = extractTopicId(conversationId) ?: 0
         return try {
-            client.invoke(MessagesSetTyping(peer, action)) { TlRegistry.decode(it) }
+            client.invoke(MessagesSetTyping(peer, action, topMsgId)) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
             Log.w(TAG, "sendTyping failed: ${humanizeError(t)}")
@@ -435,12 +462,16 @@ object TelegramClient {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        val topicId = extractTopicId(conversationId)
         return try {
-            when (peer) {
-                is InputPeerChat -> {
+            when {
+                topicId != null && peer is InputPeerChannel -> {
+                    client.invoke(MessagesEditForumTopic(peer, topicId, newName)) { TlRegistry.decode(it) }
+                }
+                peer is InputPeerChat -> {
                     client.invoke(MessagesEditChatTitle(peer.chatId, newName)) { TlRegistry.decode(it) }
                 }
-                is InputPeerChannel -> {
+                peer is InputPeerChannel -> {
                     client.invoke(ChannelsEditTitle(InputChannel(peer.channelId, peer.accessHash), newName)) { TlRegistry.decode(it) }
                 }
                 else -> return false
@@ -546,7 +577,7 @@ object TelegramClient {
                     displayName = name,
                     phoneE164 = user.phone.takeIf { it.isNotBlank() }?.let { "+$it" },
                     avatarUrl = null,
-                    source = source,
+                    source = MessageSource.TELEGRAM,
                     username = user.username.takeIf { it.isNotBlank() },
                 )
             }
@@ -600,6 +631,7 @@ object TelegramClient {
     }
 
     private fun onAuthorized(user: User) {
+        isPremium = user.premium
         _state.value = State.Connected
         reconnectAttempt = 0
         val client = apiClient ?: return
@@ -738,8 +770,9 @@ object TelegramClient {
                 currentPts = update.pts
             }
             is UpdateDeleteChannelMessages -> {
+                val chatId = update.channelId.toString()
                 for (id in update.messages) {
-                    _events.emit(GMEvent.MessageDeleted(source, id.toString()))
+                    _events.emit(GMEvent.MessageDeleted(source, "${chatId}_$id"))
                 }
                 currentPts = update.pts
             }
@@ -776,8 +809,8 @@ object TelegramClient {
                 _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
             }
             is UpdateReadChannelOutbox -> {
-                val chatId = update.channelId.toString()
-                _events.emit(GMEvent.ReadReceipt(source, chatId, "${chatId}_${update.maxId}", null, System.currentTimeMillis()))
+                // Go does not emit read receipts for channel outbox reads.
+                // Channels show aggregate read counts, not per-user receipts.
             }
             is UpdateChannel -> {
                 val chatId = update.channelId.toString()
@@ -785,7 +818,7 @@ object TelegramClient {
             }
             is UpdateUserTyping -> {
                 val chatId = update.userId.toString()
-                val isTyping = update.actionTypeId != 0xfd5ec8f5.toInt() // not cancel
+                val isTyping = update.actionTypeId != 0xfd5ec8f5.toInt()
                 _events.emit(GMEvent.TypingIndicator(source, chatId, update.userId.toString(), isTyping))
             }
             is UpdateChatUserTyping -> {
@@ -804,17 +837,51 @@ object TelegramClient {
                 val chatId = peerToId(update.peer)
                 _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
             }
+            is UpdateBotMessageReaction -> {
+                val chatId = peerToId(update.peer)
+                _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
+            }
+            is UpdateChatDefaultBannedRights -> {
+                val chatId = peerToId(update.peer)
+                _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
+            }
+            is UpdatePeerBlocked -> {
+                Log.d(TAG, "Peer blocked/unblocked: ${peerToId(update.peerId)} blocked=${update.blocked}")
+            }
+            is UpdatePhoneCall -> {
+                Log.d(TAG, "Phone call update: callId=${update.phoneCallId}")
+            }
+            is UpdateUserStatus -> {
+                // Intentionally ignored, same as Go bridge
+            }
             is UpdateUserName -> {
                 val name = "${update.firstName} ${update.lastName}".trim()
                 if (name.isNotBlank()) userNameCache[update.userId] = name
             }
             is UpdateNotifySettings -> {
-                // Mute settings changed
+                val chatId = peerToId(update.peer)
+                if (chatId != "0") {
+                    _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
+                }
             }
             is UpdatePinnedDialogs -> {
-                // Pin state changed
+                kickoffBackfill()
+            }
+            is UpdateChatTitle -> {
+                val chatId = update.chatId.toString()
+                _events.emit(GMEvent.ConversationNameChanged(source, chatId, update.title))
             }
         }
+    }
+
+    private fun classifyTypingAction(actionTypeId: Int): String = when (actionTypeId) {
+        0x16bf744e.toInt() -> "text"                // SendMessageTypingAction
+        0xa187d66f.toInt(), 0xd52f73f7.toInt(),     // RecordVideo, RecordAudio
+        0x88f27fbc.toInt() -> "recording"            // RecordRound
+        0xe9763aec.toInt(), 0xf351d7ab.toInt(),     // UploadVideo, UploadAudio
+        0xaa0cd9e4.toInt(), 0xd1d739de.toInt(),     // UploadDocument, UploadPhoto
+        0x243e1c66.toInt() -> "uploading"            // UploadRound
+        else -> "text"
     }
 
     private suspend fun handleServiceMessageEvent(msg: MessageService, chatId: String) {
@@ -850,12 +917,22 @@ object TelegramClient {
             }
             is MessageActionChatDeleteUser -> {
                 _events.emit(GMEvent.ParticipantRemoved(source, chatId, action.userId.toString()))
-                val removedName = userNameCache[action.userId] ?: action.userId.toString()
+                val isSelfLeave = msg.fromId is PeerUser && (msg.fromId as PeerUser).userId == action.userId
+                val body = if (isSelfLeave) {
+                    val name = userNameCache[action.userId] ?: action.userId.toString()
+                    "$name left the group"
+                } else {
+                    val removedName = userNameCache[action.userId] ?: action.userId.toString()
+                    "${senderName ?: "Someone"} removed $removedName"
+                }
                 _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
-                    "${senderName ?: "Someone"} removed $removedName",
-                    msg.out, msg.date.toLong() * 1000, senderName))
+                    body, msg.out, msg.date.toLong() * 1000, senderName))
             }
             is MessageActionChatJoinedByLink -> {
+                val joinedUserId = if (msg.fromId is PeerUser) (msg.fromId as PeerUser).userId else 0L
+                if (joinedUserId != 0L) {
+                    _events.emit(GMEvent.ParticipantAdded(source, chatId, joinedUserId.toString()))
+                }
                 _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
                     "${senderName ?: "Someone"} joined via invite link",
                     msg.out, msg.date.toLong() * 1000, senderName))
@@ -870,9 +947,20 @@ object TelegramClient {
                     body, msg.out, msg.date.toLong() * 1000, senderName))
             }
             is MessageActionPhoneCall -> {
+                val reasonText = when (action.reason) {
+                    0x85e42301.toInt() -> "missed"
+                    0xe095c1a0.toInt() -> "disconnected"
+                    0x57adc690.toInt() -> "ended"
+                    0xfaf7e8c9.toInt() -> "rejected"
+                    else -> {
+                        Log.w(TAG, "Unknown call end reason: ${action.reason}")
+                        return
+                    }
+                }
                 val body = buildString {
-                    if (action.video) append("Video call") else append("Voice call")
-                    if (action.duration > 0) append(" (${action.duration}s)")
+                    if (action.video) append("Video call ") else append("Call ")
+                    append(reasonText)
+                    if (action.duration > 0) append(" (${formatDuration(action.duration)})")
                 }
                 _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
                     body, msg.out, msg.date.toLong() * 1000, senderName))
@@ -898,13 +986,50 @@ object TelegramClient {
                     msg.out, msg.date.toLong() * 1000, senderName))
             }
             is MessageActionGroupCall -> {
-                val body = if (action.duration > 0) "Group call (${action.duration}s)" else "Group call started"
+                val body = if (action.duration == 0) {
+                    "Started a video chat"
+                } else {
+                    "Ended the video chat (${formatDuration(action.duration)})"
+                }
                 _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
                     body, msg.out, msg.date.toLong() * 1000, senderName))
             }
             is MessageActionChannelCreate -> {
                 _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
                     "Channel created", msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionTopicEdit -> {
+                val body = if (action.title.isNotBlank()) {
+                    "${senderName ?: "Someone"} renamed the topic to \"${action.title}\""
+                } else if (action.iconChanged) {
+                    "${senderName ?: "Someone"} changed the topic icon"
+                } else {
+                    "${senderName ?: "Someone"} edited the topic"
+                }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    body, msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionInviteToGroupCall -> {
+                val names = action.users.joinToString(", ") { userNameCache[it] ?: it.toString() }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} invited $names to the video chat",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionGroupCallScheduled -> {
+                val date = java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.US)
+                    .format(java.util.Date(action.scheduleDate.toLong() * 1000))
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "Video chat scheduled for $date",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatJoinedByRequest -> {
+                val joinedUserId = if (msg.fromId is PeerUser) (msg.fromId as PeerUser).userId else 0L
+                if (joinedUserId != 0L) {
+                    _events.emit(GMEvent.ParticipantAdded(source, chatId, joinedUserId.toString()))
+                }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} joined via approval",
+                    msg.out, msg.date.toLong() * 1000, senderName))
             }
             is MessageActionUnknown -> {}
         }
@@ -917,6 +1042,23 @@ object TelegramClient {
         seconds >= 60 -> "${seconds / 60} minute(s)"
         else -> "$seconds second(s)"
     }
+
+    private fun formatLocation(lat: Double, long: Double): String {
+        val latChar = if (lat > 0) "N" else "S"
+        val longChar = if (long > 0) "E" else "W"
+        val body = "%.4f° %s, %.4f° %s".format(lat, latChar, long, longChar)
+        val url = "https://maps.google.com/?q=%f,%f".format(lat, long)
+        return "$body\n$url"
+    }
+
+    private fun formatDuration(seconds: Int): String = buildString {
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        if (h > 0) append("${h}h ")
+        if (m > 0) append("${m}m ")
+        if (s > 0 || (h == 0 && m == 0)) append("${s}s")
+    }.trim()
 
     private fun kickoffBackfill() {
         backfillJob?.cancel()
@@ -1020,31 +1162,64 @@ object TelegramClient {
         if (currentPts == 0) return
         val client = apiClient ?: return
         try {
-            val diff = client.invoke(UpdatesGetDifference(currentPts, currentDate, currentQts)) { TlRegistry.decode(it) }
-            if (diff is UpdatesDifference) {
-                cacheUsers(diff.users)
-                cacheChats(diff.chats)
-                for (msg in diff.newMessages) {
-                    when (msg) {
-                        is Message -> {
-                            val chatId = peerToId(msg.peerId)
-                            _events.emit(msg.toMessageUpdate(chatId))
-                        }
-                        is MessageService -> {
-                            val chatId = peerToId(msg.peerId)
-                            handleServiceMessageEvent(msg, chatId)
-                        }
+            var fetching = true
+            while (fetching) {
+                val diff = client.invoke(UpdatesGetDifference(currentPts, currentDate, currentQts)) { TlRegistry.decode(it) }
+                when (diff) {
+                    is UpdatesDifference -> {
+                        processDiffMessages(diff.newMessages, diff.users, diff.chats, diff.otherUpdates)
+                        currentPts = diff.state.pts
+                        currentQts = diff.state.qts
+                        currentDate = diff.state.date
+                        currentSeq = diff.state.seq
+                        fetching = false
                     }
+                    is UpdatesDifferenceSlice -> {
+                        processDiffMessages(diff.newMessages, diff.users, diff.chats, diff.otherUpdates)
+                        currentPts = diff.intermediateState.pts
+                        currentQts = diff.intermediateState.qts
+                        currentDate = diff.intermediateState.date
+                        currentSeq = diff.intermediateState.seq
+                    }
+                    is UpdatesDifferenceTooLong -> {
+                        currentPts = diff.pts
+                        kickoffBackfill()
+                        fetching = false
+                    }
+                    is UpdatesDifferenceEmpty -> {
+                        currentDate = diff.date
+                        currentSeq = diff.seq
+                        fetching = false
+                    }
+                    else -> fetching = false
                 }
-                for (u in diff.otherUpdates) handleSingleUpdate(u)
-                currentPts = diff.state.pts
-                currentQts = diff.state.qts
-                currentDate = diff.state.date
-                currentSeq = diff.state.seq
             }
         } catch (t: Throwable) {
             Log.w(TAG, "recoverGap failed: ${t.message}")
         }
+    }
+
+    private suspend fun processDiffMessages(
+        newMessages: List<TlObject>,
+        users: List<TlObject>,
+        chats: List<TlObject>,
+        otherUpdates: List<TlObject>,
+    ) {
+        cacheUsers(users)
+        cacheChats(chats)
+        for (msg in newMessages) {
+            when (msg) {
+                is Message -> {
+                    val chatId = peerToId(msg.peerId)
+                    _events.emit(msg.toMessageUpdate(chatId))
+                }
+                is MessageService -> {
+                    val chatId = peerToId(msg.peerId)
+                    handleServiceMessageEvent(msg, chatId)
+                }
+            }
+        }
+        for (u in otherUpdates) handleSingleUpdate(u)
     }
 
     // ----------------------------------------------------------------
@@ -1085,9 +1260,11 @@ object TelegramClient {
                 peerCache[peer.chatId] = InputPeerChat(peer.chatId)
             }
             is PeerChannel -> {
-                val cached = peerCache[peer.channelId]
-                if (cached is InputPeerChannel) {
-                    peerCache[peer.channelId] = cached
+                if (peerCache[peer.channelId] == null) {
+                    val ch = channelMetaCache[peer.channelId]
+                    if (ch != null) {
+                        peerCache[peer.channelId] = InputPeerChannel(peer.channelId, ch.accessHash)
+                    }
                 }
             }
         }
@@ -1217,17 +1394,18 @@ object TelegramClient {
                     media.isVideo -> "[Video]"
                     media.isAnimated -> "[GIF]"
                     media.mimeType.startsWith("audio/") -> "[Audio]"
+                    media.mimeType.startsWith("image/") -> "[Image]"
                     media.fileName.isNotBlank() -> "[File: ${media.fileName}]"
                     else -> "[File]"
                 }
                 is MessageMediaContact -> {
                     val name = "${media.firstName} ${media.lastName}".trim()
-                    val phone = media.phoneNumber
-                    if (phone.isNotBlank()) "[Contact: $name ($phone)]" else "[Contact: $name]"
+                    val phone = "+${media.phoneNumber.trimStart('+')}"
+                    "Shared contact info for ${name.ifBlank { "Unknown" }}: $phone"
                 }
-                is MessageMediaGeo -> "[Location: ${media.geoUri()}]"
-                is MessageMediaGeoLive -> "[Live Location: ${media.geoUri()}]"
-                is MessageMediaVenue -> if (media.title.isNotBlank()) "[Venue: ${media.title} at ${media.geoUri()}]" else "[Venue]"
+                is MessageMediaGeo -> "Location: ${formatLocation(media.lat, media.long)}"
+                is MessageMediaGeoLive -> "Live Location (see your Telegram client for live updates): ${formatLocation(media.lat, media.long)}"
+                is MessageMediaVenue -> if (media.title.isNotBlank()) "${media.title}: ${media.address.ifBlank { "" }} (${formatLocation(media.lat, media.long)})" else "Location: ${formatLocation(media.lat, media.long)}"
                 is MessageMediaPoll -> renderPoll(media)
                 is MessageMediaDice -> renderDice(media)
                 else -> null
@@ -1247,19 +1425,59 @@ object TelegramClient {
     }
 
     private fun renderPoll(poll: MessageMediaPoll): String {
-        return if (poll.pollQuestion.isNotBlank()) "[Poll: ${poll.pollQuestion}]" else "[Poll]"
+        val sb = StringBuilder()
+        sb.append("Poll: ").append(poll.pollQuestion.ifBlank { "Unknown" })
+        for ((i, opt) in poll.pollOptions.withIndex()) {
+            sb.append("\n").append(i + 1).append(". ").append(opt)
+        }
+        sb.append("\nOpen the Telegram app to vote.")
+        return sb.toString()
     }
 
     private fun renderDice(dice: MessageMediaDice): String {
-        return when (dice.emoticon) {
-            "🎯" -> "Dart: ${dice.value}"
-            "🎲" -> "Dice: ${dice.value}"
-            "🏀" -> "Basketball: ${if (dice.value >= 4) "Score!" else "Miss"}"
-            "⚽" -> "Football: ${if (dice.value >= 3) "Goal!" else "Miss"}"
-            "🎳" -> "Bowling: ${dice.value} pins"
-            "🎰" -> "Slots: ${dice.value}"
-            else -> "${dice.emoticon} ${dice.value}"
+        val result: String?
+        val label = when (dice.emoticon) {
+            "🎯" -> { result = null; "Dart throw" }
+            "🎲" -> { result = null; "Dice roll" }
+            "🏀" -> { result = null; "Basketball throw" }
+            "⚽" -> { result = footballResult(dice.value); "Football kick" }
+            "🎳" -> { result = bowlingResult(dice.value); "Bowling" }
+            "🎰" -> { result = slotMachineResult(dice.value); "Slot machine" }
+            else -> { result = null; "${dice.emoticon}" }
         }
+        return if (result != null) {
+            "${dice.emoticon} $label result: $result (${dice.value})"
+        } else {
+            "${dice.emoticon} $label result: ${dice.value}"
+        }
+    }
+
+    private fun footballResult(value: Int): String = when (value) {
+        1 -> "miss"
+        2 -> "hit the woodwork"
+        3 -> "goal"
+        4 -> "goal"
+        5 -> "goal \uD83C\uDF89"
+        else -> "$value"
+    }
+
+    private fun bowlingResult(value: Int): String = when (value) {
+        1 -> "miss"
+        2 -> "1 pin down"
+        3 -> "3 pins down, split"
+        4 -> "4 pins down, split"
+        5 -> "5 pins down"
+        6 -> "strike \uD83C\uDF89"
+        else -> "$value"
+    }
+
+    private fun slotMachineResult(value: Int): String {
+        val slotEmojis = mapOf(0 to "\uD83C\uDF6B", 1 to "\uD83C\uDF52", 2 to "\uD83C\uDF4B", 3 to "7\uFE0F\u20E3")
+        val res = value - 1
+        val r1 = slotEmojis[res % 4] ?: "?"
+        val r2 = slotEmojis[res / 4 % 4] ?: "?"
+        val r3 = slotEmojis[res / 16] ?: "?"
+        return "$r1 $r2 $r3"
     }
 
     private fun extractPreview(msg: Message): String? {
@@ -1292,11 +1510,12 @@ object TelegramClient {
             }
             is MessageMediaContact -> {
                 val name = "${media.firstName} ${media.lastName}".trim()
-                "[Contact: $name${if (media.phoneNumber.isNotBlank()) " (${media.phoneNumber})" else ""}]"
+                val phone = "+${media.phoneNumber.trimStart('+')}"
+                "Shared contact info for ${name.ifBlank { "Unknown" }}: $phone"
             }
-            is MessageMediaGeo -> "[Location]"
-            is MessageMediaGeoLive -> "[Live Location]"
-            is MessageMediaVenue -> if (media.title.isNotBlank()) "[Venue: ${media.title}]" else "[Venue]"
+            is MessageMediaGeo -> "Location: ${formatLocation(media.lat, media.long)}"
+            is MessageMediaGeoLive -> "Live Location (see your Telegram client for live updates): ${formatLocation(media.lat, media.long)}"
+            is MessageMediaVenue -> if (media.title.isNotBlank()) "${media.title}: ${media.address.ifBlank { "" }} (${formatLocation(media.lat, media.long)})" else "Location: ${formatLocation(media.lat, media.long)}"
             is MessageMediaPoll -> renderPoll(media)
             is MessageMediaDice -> renderDice(media)
             is MessageMediaWebPage -> if (media.url.isNotBlank()) "[Link: ${media.url}]" else "[Link Preview]"
@@ -1367,8 +1586,12 @@ object TelegramClient {
         return try {
             when (peer) {
                 is InputPeerChannel -> {
+                    val inputChannel = InputChannel(peer.channelId, peer.accessHash)
                     client.invoke(ChannelsEditBanned(
-                        InputChannel(peer.channelId, peer.accessHash), inputUser
+                        inputChannel, inputUser, bannedRights = 1L
+                    )) { TlRegistry.decode(it) }
+                    client.invoke(ChannelsEditBanned(
+                        inputChannel, inputUser
                     )) { TlRegistry.decode(it) }
                 }
                 is InputPeerChat -> {
@@ -1414,7 +1637,7 @@ object TelegramClient {
                 }
                 is InputPeerChat -> {
                     client.invoke(MessagesDeleteChatUser(
-                        peer.chatId, InputUser(0, 0) // self
+                        peer.chatId, InputUserSelf
                     )) { TlRegistry.decode(it) }
                 }
                 else -> return false
@@ -1443,51 +1666,57 @@ object TelegramClient {
     // Markdown parsing for outbound entities (Issue 13)
     // ----------------------------------------------------------------
 
-    private fun parseMarkdownEntities(text: String): List<MessageEntity> {
-        val entities = mutableListOf<MessageEntity>()
+    private data class ParsedMarkdown(val text: String, val entities: List<MessageEntity>)
+
+    private fun parseMarkdown(raw: String): ParsedMarkdown {
+        data class RawMatch(val start: Int, val end: Int, val content: String, val type: String, val url: String = "")
+
+        val matches = mutableListOf<RawMatch>()
         val patterns = listOf(
             "\\*\\*(.+?)\\*\\*" to "bold",
-            "\\*(.+?)\\*" to "italic",
             "__(.+?)__" to "underline",
             "~~(.+?)~~" to "strikethrough",
+            "\\|\\|(.+?)\\|\\|" to "spoiler",
             "```(.+?)```" to "pre",
             "`(.+?)`" to "code",
-            "\\|\\|(.+?)\\|\\|" to "spoiler",
+            "\\*(.+?)\\*" to "italic",
         )
+
         for ((pattern, type) in patterns) {
             val regex = Regex(pattern, RegexOption.DOT_MATCHES_ALL)
-            for (match in regex.findAll(text)) {
-                entities.add(MessageEntity(
-                    type = type,
-                    offset = match.range.first,
-                    length = match.groupValues[1].length,
-                ))
+            for (match in regex.findAll(raw)) {
+                val overlaps = matches.any { it.start < match.range.last + 1 && match.range.first < it.end }
+                if (!overlaps) {
+                    matches.add(RawMatch(match.range.first, match.range.last + 1, match.groupValues[1], type))
+                }
             }
         }
-        // URL detection
-        val urlRegex = Regex("\\[(.+?)]\\((.+?)\\)")
-        for (match in urlRegex.findAll(text)) {
-            entities.add(MessageEntity(
-                type = "textUrl",
-                offset = match.range.first,
-                length = match.groupValues[1].length,
-                url = match.groupValues[2],
-            ))
-        }
-        return entities.sortedBy { it.offset }
-    }
 
-    private fun stripMarkdown(text: String): String {
-        var result = text
-        result = result.replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
-        result = result.replace(Regex("\\*(.+?)\\*"), "$1")
-        result = result.replace(Regex("__(.+?)__"), "$1")
-        result = result.replace(Regex("~~(.+?)~~"), "$1")
-        result = result.replace(Regex("```(.+?)```", RegexOption.DOT_MATCHES_ALL), "$1")
-        result = result.replace(Regex("`(.+?)`"), "$1")
-        result = result.replace(Regex("\\|\\|(.+?)\\|\\|"), "$1")
-        result = result.replace(Regex("\\[(.+?)]\\((.+?)\\)"), "$1")
-        return result
+        val urlRegex = Regex("\\[(.+?)]\\((.+?)\\)")
+        for (match in urlRegex.findAll(raw)) {
+            val overlaps = matches.any { it.start < match.range.last + 1 && match.range.first < it.end }
+            if (!overlaps) {
+                matches.add(RawMatch(match.range.first, match.range.last + 1, match.groupValues[1], "textUrl", match.groupValues[2]))
+            }
+        }
+
+        matches.sortBy { it.start }
+
+        val stripped = StringBuilder()
+        val entities = mutableListOf<MessageEntity>()
+        var lastEnd = 0
+
+        for (m in matches) {
+            if (m.start > lastEnd) stripped.append(raw, lastEnd, m.start)
+            val offset = stripped.length
+            stripped.append(m.content)
+            entities.add(MessageEntity(m.type, offset, m.content.length, url = m.url))
+            lastEnd = m.end
+        }
+        if (lastEnd < raw.length) stripped.append(raw, lastEnd, raw.length)
+
+        return if (entities.isEmpty()) ParsedMarkdown(raw, emptyList())
+        else ParsedMarkdown(stripped.toString(), entities.sortedBy { it.offset })
     }
 
     // ----------------------------------------------------------------
@@ -1497,41 +1726,399 @@ object TelegramClient {
     private fun humanizeError(t: Throwable): String {
         val msg = t.message ?: return t.toString()
         return when {
-            msg.contains("PEER_ID_INVALID") -> "Invalid peer: the user or chat could not be found"
-            msg.contains("CHAT_WRITE_FORBIDDEN") -> "You can't write in this chat"
+            msg.contains("2FA_CONFIRM_WAIT") -> "The account is 2FA protected so it will be deleted in a week"
+            msg.contains("ABOUT_TOO_LONG") -> "The provided bio is too long"
+            msg.contains("ACCESS_TOKEN_EXPIRED") -> "Bot token expired"
+            msg.contains("ACCESS_TOKEN_INVALID") -> "The provided token is not valid"
+            msg.contains("ACTIVE_USER_REQUIRED") -> "The method is only available to already activated users"
+            msg.contains("ADMINS_TOO_MUCH") -> "Too many admins"
+            msg.contains("ADMIN_ID_INVALID") -> "The specified admin ID is invalid"
+            msg.contains("ADMIN_RANK_EMOJI_NOT_ALLOWED") -> "Emoji are not allowed in admin titles or ranks"
+            msg.contains("ADMIN_RANK_INVALID") -> "The given admin title or rank was invalid"
+            msg.contains("ALBUM_PHOTOS_TOO_MANY") -> "Too many photos were included in the album"
+            msg.contains("API_ID_INVALID") -> "The api_id/api_hash combination is invalid"
+            msg.contains("API_ID_PUBLISHED_FLOOD") -> "This API id was published somewhere, you can't use it now"
+            msg.contains("ARTICLE_TITLE_EMPTY") -> "The title of the article is empty"
+            msg.contains("AUTH_BYTES_INVALID") -> "The provided authorization is invalid"
+            msg.contains("AUTH_KEY_DUPLICATED") -> "The authorization key was used under two different IP addresses simultaneously"
+            msg.contains("AUTH_KEY_INVALID") -> "The key is invalid"
+            msg.contains("AUTH_KEY_PERM_EMPTY") -> "The method is unavailable for temporary authorization key"
+            msg.contains("AUTH_KEY_UNREGISTERED") -> "The key is not registered in the system"
+            msg.contains("AUTH_RESTART") -> "Restart the authorization process"
+            msg.contains("AUTH_TOKEN_ALREADY_ACCEPTED") -> "The authorization token was already used"
+            msg.contains("AUTH_TOKEN_EXPIRED") -> "The provided authorization token has expired and the updated QR-code must be re-scanned"
+            msg.contains("AUTH_TOKEN_INVALID") -> "An invalid authorization token was provided"
+            msg.contains("BANNED_RIGHTS_INVALID") -> "You cannot use that set of permissions in this request"
+            msg.contains("BOTS_TOO_MUCH") -> "There are too many bots in this chat/channel"
+            msg.contains("BOT_CHANNELS_NA") -> "Bots can't edit admin privileges"
+            msg.contains("BOT_COMMAND_DESCRIPTION_INVALID") -> "The command description was empty, too long or had invalid characters"
+            msg.contains("BOT_COMMAND_INVALID") -> "The specified command is invalid"
+            msg.contains("BOT_DOMAIN_INVALID") -> "The domain used for the auth button does not match the one configured in @BotFather"
+            msg.contains("BOT_GAMES_DISABLED") -> "Bot games cannot be used in this type of chat"
+            msg.contains("BOT_GROUPS_BLOCKED") -> "This bot can't be added to groups"
+            msg.contains("BOT_INLINE_DISABLED") -> "This bot can't be used in inline mode"
+            msg.contains("BOT_INVALID") -> "This is not a valid bot"
+            msg.contains("BOT_METHOD_INVALID") -> "The API access for bot users is restricted"
+            msg.contains("BOT_MISSING") -> "This method can only be run by a bot"
+            msg.contains("BOT_PAYMENTS_DISABLED") -> "This method can only be run by a bot"
+            msg.contains("BOT_POLLS_DISABLED") -> "You cannot create polls under a bot account"
+            msg.contains("BOT_RESPONSE_TIMEOUT") -> "The bot did not answer to the callback query in time"
+            msg.contains("BROADCAST_FORBIDDEN") -> "The request cannot be used in broadcast channels"
+            msg.contains("BROADCAST_ID_INVALID") -> "The channel is invalid"
+            msg.contains("BROADCAST_PUBLIC_VOTERS_FORBIDDEN") -> "You cannot broadcast polls where the voters are public"
+            msg.contains("BROADCAST_REQUIRED") -> "The request can only be used with a broadcast channel"
+            msg.contains("BUTTON_DATA_INVALID") -> "The provided button data is invalid"
+            msg.contains("BUTTON_TEXT_INVALID") -> "The specified button text is invalid"
+            msg.contains("BUTTON_TYPE_INVALID") -> "The type of one of the buttons you provided is invalid"
+            msg.contains("BUTTON_URL_INVALID") -> "Button URL invalid"
+            msg.contains("CALL_ALREADY_ACCEPTED") -> "The call was already accepted"
+            msg.contains("CALL_ALREADY_DECLINED") -> "The call was already declined"
+            msg.contains("CALL_OCCUPY_FAILED") -> "The call failed because the user is already making another call"
+            msg.contains("CALL_PEER_INVALID") -> "The provided call peer object is invalid"
+            msg.contains("CHANNELS_ADMIN_LOCATED_TOO_MUCH") -> "The user has reached the limit of public geogroups"
+            msg.contains("CHANNELS_ADMIN_PUBLIC_TOO_MUCH") -> "You're admin of too many public channels"
+            msg.contains("CHANNELS_TOO_MUCH") -> "You have joined too many channels/supergroups"
+            msg.contains("CHANNEL_BANNED") -> "The channel is banned"
+            msg.contains("CHANNEL_FORUM_MISSING") -> "This channel is not a forum"
+            msg.contains("CHANNEL_ID_INVALID") -> "The specified supergroup ID is invalid"
+            msg.contains("CHANNEL_INVALID") -> "Invalid channel object"
+            msg.contains("CHANNEL_PARICIPANT_MISSING") -> "The current user is not in the channel"
+            msg.contains("CHANNEL_PRIVATE") -> "This channel is private and you lack permission to access it"
+            msg.contains("CHANNEL_TOO_LARGE") -> "Channel is too large to be deleted"
+            msg.contains("CHAT_ABOUT_NOT_MODIFIED") -> "About text has not changed"
+            msg.contains("CHAT_ABOUT_TOO_LONG") -> "Chat about too long"
+            msg.contains("CHAT_ADMIN_INVITE_REQUIRED") -> "You do not have the rights to do this"
             msg.contains("CHAT_ADMIN_REQUIRED") -> "Admin privileges are required"
             msg.contains("CHAT_FORBIDDEN") -> "You cannot write in this chat"
-            msg.contains("USER_BANNED_IN_CHANNEL") -> "You're banned from sending messages in this channel"
-            msg.contains("USER_NOT_PARTICIPANT") -> "You are not a member of this chat"
-            msg.contains("CHANNEL_PRIVATE") -> "This channel is private"
-            msg.contains("MESSAGE_TOO_LONG") -> "Message was too long"
-            msg.contains("MESSAGE_EMPTY") -> "Message is empty"
-            msg.contains("MESSAGE_NOT_MODIFIED") -> "Message content was not changed"
-            msg.contains("MESSAGE_EDIT_TIME_EXPIRED") -> "You can't edit this message anymore"
-            msg.contains("MEDIA_CAPTION_TOO_LONG") -> "The caption is too long"
-            msg.contains("MEDIA_EMPTY") -> "The provided media is invalid"
+            msg.contains("CHAT_FORWARDS_RESTRICTED") -> "You can't forward messages from a protected chat"
+            msg.contains("CHAT_GUEST_SEND_FORBIDDEN") -> "You need to join the discussion group before commenting"
+            msg.contains("CHAT_ID_EMPTY") -> "The provided chat ID is empty"
+            msg.contains("CHAT_ID_GENERATE_FAILED") -> "Failure while generating the chat ID"
+            msg.contains("CHAT_ID_INVALID") -> "Invalid object ID for a chat"
+            msg.contains("CHAT_INVALID") -> "The chat is invalid for this request"
+            msg.contains("CHAT_INVITE_PERMANENT") -> "You can't set an expiration date on permanent invite links"
+            msg.contains("CHAT_LINK_EXISTS") -> "The chat is linked to a channel and cannot be used in that request"
+            msg.contains("CHAT_NOT_MODIFIED") -> "The chat or channel wasn't modified"
+            msg.contains("CHAT_RESTRICTED") -> "The chat is restricted and cannot be used"
+            msg.contains("CHAT_REVOKE_DATE_UNSUPPORTED") -> "min_date and max_date are not available for using with non-user peers"
+            msg.contains("CHAT_SEND_GAME_FORBIDDEN") -> "You can't send a game to this chat"
+            msg.contains("CHAT_SEND_GIFS_FORBIDDEN") -> "You can't send GIFs in this chat"
+            msg.contains("CHAT_SEND_INLINE_FORBIDDEN") -> "You cannot send inline results in this chat"
+            msg.contains("CHAT_SEND_MEDIA_FORBIDDEN") -> "You can't send media in this chat"
+            msg.contains("CHAT_SEND_POLL_FORBIDDEN") -> "You can't send polls in this chat"
+            msg.contains("CHAT_SEND_STICKERS_FORBIDDEN") -> "You can't send stickers in this chat"
+            msg.contains("CHAT_TITLE_EMPTY") -> "No chat title provided"
+            msg.contains("CHAT_WRITE_FORBIDDEN") -> "You can't write in this chat"
+            msg.contains("CODE_EMPTY") -> "The provided code is empty"
+            msg.contains("CODE_HASH_INVALID") -> "Code hash invalid"
+            msg.contains("CODE_INVALID") -> "Code invalid"
+            msg.contains("CONNECTION_API_ID_INVALID") -> "The provided API id is invalid"
+            msg.contains("CONNECTION_LAYER_INVALID") -> "The very first request must always be InvokeWithLayerRequest"
+            msg.contains("CONTACT_ADD_MISSING") -> "Contact to add is missing"
+            msg.contains("CONTACT_ID_INVALID") -> "The provided contact ID is invalid"
+            msg.contains("CONTACT_NAME_EMPTY") -> "The provided contact name cannot be empty"
+            msg.contains("CREATE_CALL_FAILED") -> "An error occurred while creating the call"
+            msg.contains("DATA_INVALID") -> "Encrypted data invalid"
+            msg.contains("DATA_JSON_INVALID") -> "The provided JSON data is invalid"
+            msg.contains("DATA_TOO_LONG") -> "Data too long"
+            msg.contains("DC_ID_INVALID") -> "This occurs when an authorization is tried to be exported for the same data center"
+            msg.contains("DOCUMENT_INVALID") -> "The document file was invalid"
+            msg.contains("EDIT_BOT_INVITE_FORBIDDEN") -> "Normal users can't edit invites that were created by bots"
+            msg.contains("EMAIL_HASH_EXPIRED") -> "The email hash expired"
+            msg.contains("EMAIL_INVALID") -> "The given email is invalid"
+            msg.contains("EMAIL_VERIFY_EXPIRED") -> "The verification email has expired"
+            msg.contains("EMOJI_INVALID") -> "The specified theme emoji is invalid"
+            msg.contains("EMOTICON_EMPTY") -> "The emoticon field cannot be empty"
+            msg.contains("EMOTICON_INVALID") -> "The specified emoticon cannot be used"
+            msg.contains("ENCRYPTED_MESSAGE_INVALID") -> "Encrypted message invalid"
+            msg.contains("ENCRYPTION_DECLINED") -> "The secret chat was declined"
+            msg.contains("ENCRYPTION_ID_INVALID") -> "The provided secret chat ID is invalid"
+            msg.contains("ENTITIES_TOO_LONG") -> "The message formatting entities are too long"
+            msg.contains("ENTITY_BOUNDS_INVALID") -> "Invalid formatting entity bounds"
+            msg.contains("ENTITY_MENTION_USER_INVALID") -> "You can't mention this user"
+            msg.contains("EXPIRE_DATE_INVALID") -> "The specified expiration date is invalid"
+            msg.contains("EXTERNAL_URL_INVALID") -> "External URL invalid"
+            msg.contains("FILEREF_UPGRADE_NEEDED") -> "The file reference needs to be refreshed"
+            msg.contains("FILE_CONTENT_TYPE_INVALID") -> "File content-type is invalid"
+            msg.contains("FILE_ID_INVALID") -> "The provided file id is invalid"
+            msg.contains("FILE_PARTS_INVALID") -> "The number of file parts is invalid"
+            msg.contains("FILE_PART_0_MISSING") -> "File part 0 missing"
+            msg.contains("FILE_PART_EMPTY") -> "The provided file part is empty"
+            msg.contains("FILE_PART_INVALID") -> "The file part number is invalid"
+            msg.contains("FILE_PART_LENGTH_INVALID") -> "The length of a file part is invalid"
+            msg.contains("FILE_PART_SIZE_CHANGED") -> "The file part size cannot change during upload"
+            msg.contains("FILE_PART_SIZE_INVALID") -> "Invalid file part size"
+            msg.contains("FILE_PART_TOO_BIG") -> "The uploaded file part is too big"
+            msg.contains("FILE_REFERENCE_EMPTY") -> "The file reference must exist to access the media"
+            msg.contains("FILE_REFERENCE_EXPIRED") -> "The file reference has expired"
+            msg.contains("FILE_REFERENCE_INVALID") -> "The file reference is invalid"
+            msg.contains("FILTER_ID_INVALID") -> "The specified filter ID is invalid"
+            msg.contains("FILTER_TITLE_EMPTY") -> "The title field of the filter is empty"
+            msg.contains("FIRSTNAME_INVALID") -> "The first name is invalid"
             msg.contains("FLOOD_WAIT") -> "Too many requests, please wait"
-            msg.contains("SLOWMODE_WAIT") -> "Slow mode is active, please wait"
-            msg.contains("USER_PRIVACY_RESTRICTED") -> "The user's privacy settings don't allow this"
-            msg.contains("REACTIONS_TOO_MANY") -> "Too many different reactions on this message"
-            msg.contains("REACTION_INVALID") -> "Invalid reaction"
-            msg.contains("PHONE_NUMBER_INVALID") -> "The phone number is invalid"
+            msg.contains("FLOOD_PREMIUM_WAIT") -> "Too many requests, please wait (non-premium)"
+            msg.contains("FOLDER_ID_EMPTY") -> "The folder you tried to delete was already empty"
+            msg.contains("FOLDER_ID_INVALID") -> "The folder you tried to use was not valid"
+            msg.contains("FRESH_CHANGE_ADMINS_FORBIDDEN") -> "Recently logged-in users cannot add or change admins"
+            msg.contains("FRESH_CHANGE_PHONE_FORBIDDEN") -> "Recently logged-in users cannot use this request"
+            msg.contains("FRESH_RESET_AUTHORISATION_FORBIDDEN") -> "The current session is too new"
+            msg.contains("FROM_PEER_INVALID") -> "The given from_user peer cannot be used"
+            msg.contains("GAME_BOT_INVALID") -> "You cannot send that game with the current bot"
+            msg.contains("GEO_POINT_INVALID") -> "Invalid geoposition provided"
+            msg.contains("GIF_CONTENT_TYPE_INVALID") -> "GIF content-type invalid"
+            msg.contains("GIF_ID_INVALID") -> "The provided GIF ID is invalid"
+            msg.contains("GROUPCALL_ALREADY_DISCARDED") -> "The group call was already discarded"
+            msg.contains("GROUPCALL_FORBIDDEN") -> "The group call has already ended"
+            msg.contains("GROUPCALL_INVALID") -> "The specified group call is invalid"
+            msg.contains("GROUPCALL_JOIN_MISSING") -> "You haven't joined this group call"
+            msg.contains("GROUPED_MEDIA_INVALID") -> "Invalid grouped media"
+            msg.contains("HASH_INVALID") -> "The provided hash is invalid"
+            msg.contains("HISTORY_GET_FAILED") -> "Fetching of history failed"
+            msg.contains("IMAGE_PROCESS_FAILED") -> "Failure while processing image"
+            msg.contains("IMPORT_FILE_INVALID") -> "The file is too large to be imported"
+            msg.contains("IMPORT_FORMAT_UNRECOGNIZED") -> "Unknown import format"
+            msg.contains("IMPORT_ID_INVALID") -> "The specified import ID is invalid"
+            msg.contains("INLINE_BOT_REQUIRED") -> "The action must be performed through an inline bot callback"
+            msg.contains("INLINE_RESULT_EXPIRED") -> "The inline query expired"
+            msg.contains("INPUT_CONSTRUCTOR_INVALID") -> "The provided constructor is invalid"
+            msg.contains("INPUT_FETCH_ERROR") -> "An error occurred while deserializing TL parameters"
+            msg.contains("INPUT_FETCH_FAIL") -> "Failed deserializing TL payload"
+            msg.contains("INPUT_FILTER_INVALID") -> "The search query filter is invalid"
+            msg.contains("INPUT_LAYER_INVALID") -> "The provided layer is invalid"
+            msg.contains("INPUT_METHOD_INVALID") -> "The invoked method does not exist anymore"
+            msg.contains("INPUT_REQUEST_TOO_LONG") -> "The input request was too long"
+            msg.contains("INPUT_TEXT_EMPTY") -> "The specified text is empty"
+            msg.contains("INPUT_USER_DEACTIVATED") -> "The specified user was deleted"
+            msg.contains("INVITE_FORBIDDEN_WITH_JOINAS") -> "Anonymous channel users can't invite others to calls"
+            msg.contains("INVITE_HASH_EMPTY") -> "The invite hash is empty"
+            msg.contains("INVITE_HASH_EXPIRED") -> "The invite link has expired"
+            msg.contains("INVITE_HASH_INVALID") -> "The invite link is invalid"
+            msg.contains("INVITE_REQUEST_SENT") -> "You have successfully requested to join this chat or channel"
+            msg.contains("INVITE_REVOKED_MISSING") -> "The specified invite link was already revoked or is invalid"
+            msg.contains("LANG_CODE_INVALID") -> "The specified language code is invalid"
+            msg.contains("LANG_PACK_INVALID") -> "The provided language pack is invalid"
+            msg.contains("LASTNAME_INVALID") -> "The last name is invalid"
+            msg.contains("LIMIT_INVALID") -> "An invalid limit was provided"
+            msg.contains("LOCATION_INVALID") -> "The location given for a file was invalid"
+            msg.contains("MAX_ID_INVALID") -> "The provided max ID is invalid"
+            msg.contains("MAX_QTS_INVALID") -> "The provided QTS were invalid"
+            msg.contains("MD5_CHECKSUM_INVALID") -> "The MD5 check-sums do not match"
+            msg.contains("MEDIA_CAPTION_TOO_LONG") -> "The caption is too long"
+            msg.contains("MEDIA_EMPTY") -> "The provided media object is invalid"
+            msg.contains("MEDIA_GROUPED_INVALID") -> "You tried to send media of different types in an album"
+            msg.contains("MEDIA_INVALID") -> "Media invalid"
+            msg.contains("MEDIA_NEW_INVALID") -> "The new media to edit the message with is invalid"
+            msg.contains("MEDIA_PREV_INVALID") -> "The old media cannot be edited with anything else"
+            msg.contains("MEGAGROUP_ID_INVALID") -> "The group is invalid"
+            msg.contains("MEGAGROUP_REQUIRED") -> "The request can only be used with a megagroup channel"
+            msg.contains("MESSAGE_AUTHOR_REQUIRED") -> "Message author required"
+            msg.contains("MESSAGE_DELETE_FORBIDDEN") -> "You can't delete this message"
+            msg.contains("MESSAGE_EDIT_TIME_EXPIRED") -> "You can't edit this message anymore"
+            msg.contains("MESSAGE_EMPTY") -> "Message is empty"
+            msg.contains("MESSAGE_IDS_EMPTY") -> "No message ids were provided"
+            msg.contains("MESSAGE_ID_INVALID") -> "The specified message ID is invalid"
+            msg.contains("MESSAGE_NOT_MODIFIED") -> "Message content was not changed"
+            msg.contains("MESSAGE_POLL_CLOSED") -> "The poll was closed and can no longer be voted on"
+            msg.contains("MESSAGE_TOO_LONG") -> "Message was too long"
+            msg.contains("METHOD_INVALID") -> "The API method is invalid"
+            msg.contains("MULTI_MEDIA_TOO_LONG") -> "Too many media files in the album"
+            msg.contains("NEW_SALT_INVALID") -> "The new salt is invalid"
+            msg.contains("NEW_SETTINGS_INVALID") -> "The new settings are invalid"
+            msg.contains("OFFSET_INVALID") -> "The given offset was invalid"
+            msg.contains("OFFSET_PEER_ID_INVALID") -> "The provided offset peer is invalid"
+            msg.contains("OPTIONS_TOO_MUCH") -> "You defined too many options for the poll"
+            msg.contains("OPTION_INVALID") -> "The option specified is invalid"
+            msg.contains("PACK_SHORT_NAME_INVALID") -> "Invalid sticker pack name"
+            msg.contains("PACK_SHORT_NAME_OCCUPIED") -> "A stickerpack with this name already exists"
+            msg.contains("PARTICIPANTS_TOO_FEW") -> "Not enough participants"
+            msg.contains("PARTICIPANT_ID_INVALID") -> "The specified participant ID is invalid"
+            msg.contains("PASSWORD_EMPTY") -> "The provided password is empty"
+            msg.contains("PASSWORD_HASH_INVALID") -> "The password you entered is invalid"
+            msg.contains("PASSWORD_MISSING") -> "The account must have 2-factor authentication enabled"
+            msg.contains("PASSWORD_RECOVERY_EXPIRED") -> "The recovery code has expired"
+            msg.contains("PASSWORD_RECOVERY_NA") -> "No email was set, can't recover password via email"
+            msg.contains("PASSWORD_REQUIRED") -> "The account must have 2-factor authentication enabled"
+            msg.contains("PAYMENT_PROVIDER_INVALID") -> "The payment provider was not recognised or its token was invalid"
+            msg.contains("PEER_FLOOD") -> "Too many requests"
+            msg.contains("PEER_ID_INVALID") -> "Invalid peer: the user or chat could not be found"
+            msg.contains("PEER_ID_NOT_SUPPORTED") -> "The provided peer ID is not supported"
+            msg.contains("PHONE_CODE_EMPTY") -> "The phone code is missing"
+            msg.contains("PHONE_CODE_EXPIRED") -> "The verification code has expired"
+            msg.contains("PHONE_CODE_HASH_EMPTY") -> "The phone code hash is missing"
             msg.contains("PHONE_CODE_INVALID") -> "The verification code is invalid"
+            msg.contains("PHONE_HASH_EXPIRED") -> "An invalid or expired phone_code_hash was provided"
+            msg.contains("PHONE_NOT_OCCUPIED") -> "No user is associated to the specified phone number"
+            msg.contains("PHONE_NUMBER_APP_SIGNUP_FORBIDDEN") -> "You can't sign up using this app"
+            msg.contains("PHONE_NUMBER_BANNED") -> "This phone number has been banned"
+            msg.contains("PHONE_NUMBER_FLOOD") -> "You asked for the code too many times"
+            msg.contains("PHONE_NUMBER_INVALID") -> "The phone number is invalid"
+            msg.contains("PHONE_NUMBER_OCCUPIED") -> "The phone number is already in use"
+            msg.contains("PHONE_NUMBER_UNOCCUPIED") -> "The phone number is not yet being used"
+            msg.contains("PHONE_PASSWORD_FLOOD") -> "You have tried logging in too many times"
+            msg.contains("PHONE_PASSWORD_PROTECTED") -> "This phone is password protected"
+            msg.contains("PHOTO_CONTENT_TYPE_INVALID") -> "Photo mime-type invalid"
+            msg.contains("PHOTO_CROP_SIZE_SMALL") -> "Photo is too small"
+            msg.contains("PHOTO_EXT_INVALID") -> "The extension of the photo is invalid"
+            msg.contains("PHOTO_FILE_MISSING") -> "Profile photo file missing"
+            msg.contains("PHOTO_ID_INVALID") -> "Photo id is invalid"
+            msg.contains("PHOTO_INVALID") -> "Photo invalid"
+            msg.contains("PHOTO_INVALID_DIMENSIONS") -> "The photo dimensions are invalid"
+            msg.contains("PHOTO_SAVE_FILE_INVALID") -> "The photo is too large to send"
+            msg.contains("PINNED_DIALOGS_TOO_MUCH") -> "Too many pinned dialogs"
+            msg.contains("PIN_RESTRICTED") -> "You can't pin messages in private chats with other people"
+            msg.contains("POLL_ANSWERS_INVALID") -> "The poll did not have enough answers or had too many"
+            msg.contains("POLL_ANSWER_INVALID") -> "One of the poll answers is not acceptable"
+            msg.contains("POLL_OPTION_DUPLICATE") -> "A duplicate option was sent in the same poll"
+            msg.contains("POLL_OPTION_INVALID") -> "A poll option used invalid data"
+            msg.contains("POLL_QUESTION_INVALID") -> "The poll question was either empty or too long"
+            msg.contains("POLL_UNSUPPORTED") -> "This layer does not support polls"
+            msg.contains("POLL_VOTE_REQUIRED") -> "Cast a vote in the poll before calling this method"
+            msg.contains("PREMIUM_ACCOUNT_REQUIRED") -> "A premium account is required to execute this action"
+            msg.contains("PRIVACY_KEY_INVALID") -> "The privacy key is invalid"
+            msg.contains("PRIVACY_TOO_LONG") -> "Cannot add that many entities in a single request"
+            msg.contains("PRIVACY_VALUE_INVALID") -> "The privacy value is invalid"
+            msg.contains("RANDOM_ID_DUPLICATE") -> "Duplicate message ID, please try again"
+            msg.contains("RANDOM_ID_EMPTY") -> "Random ID empty"
+            msg.contains("RANDOM_ID_INVALID") -> "A provided random ID is invalid"
+            msg.contains("REACTIONS_TOO_MANY") -> "Too many different reactions on this message"
+            msg.contains("REACTION_EMPTY") -> "No reaction provided"
+            msg.contains("REACTION_INVALID") -> "Invalid reaction"
+            msg.contains("REPLY_MARKUP_INVALID") -> "The provided reply markup is invalid"
+            msg.contains("REPLY_MARKUP_TOO_LONG") -> "The data embedded in the reply markup buttons was too much"
+            msg.contains("RESULTS_TOO_MUCH") -> "You sent too many results"
+            msg.contains("RESULT_ID_DUPLICATE") -> "Duplicated IDs on the sent results"
+            msg.contains("RIGHT_FORBIDDEN") -> "Your admin rights do not allow you to do this"
+            msg.contains("RIGHTS_NOT_MODIFIED") -> "The new admin rights are equal to the old rights"
+            msg.contains("RPC_CALL_FAIL") -> "Telegram is having internal issues, please try again later"
+            msg.contains("RPC_MCGET_FAIL") -> "Telegram is having internal issues, please try again later"
+            msg.contains("SCHEDULE_DATE_INVALID") -> "Invalid schedule date provided"
+            msg.contains("SCHEDULE_DATE_TOO_LATE") -> "The date you tried to schedule is too far in the future"
+            msg.contains("SCHEDULE_TOO_MUCH") -> "You cannot schedule more messages in this chat"
+            msg.contains("SEARCH_QUERY_EMPTY") -> "The search query is empty"
+            msg.contains("SEND_AS_PEER_INVALID") -> "You can't send messages as the specified peer"
+            msg.contains("SEND_CODE_UNAVAILABLE") -> "All available verification options have been used"
+            msg.contains("SEND_MESSAGE_MEDIA_INVALID") -> "The message media was invalid or not specified"
+            msg.contains("SEND_MESSAGE_TYPE_INVALID") -> "The message type is invalid"
+            msg.contains("SESSION_EXPIRED") -> "The authorization has expired"
             msg.contains("SESSION_PASSWORD_NEEDED") -> "Two-factor authentication is required"
-            msg.contains("CHANNEL_FORUM_MISSING") -> "This channel is not a forum"
+            msg.contains("SESSION_REVOKED") -> "The authorization has been invalidated"
+            msg.contains("SHA256_HASH_INVALID") -> "The provided SHA256 hash is invalid"
+            msg.contains("SLOWMODE_WAIT") -> "Slow mode is active, please wait"
+            msg.contains("SLOWMODE_MULTI_MSGS_DISABLED") -> "Slowmode is enabled, you cannot forward multiple messages"
+            msg.contains("SRP_ID_INVALID") -> "Invalid SRP ID, please try again"
+            msg.contains("SRP_PASSWORD_CHANGED") -> "Password has changed"
+            msg.contains("STICKERSET_INVALID") -> "The provided sticker set is invalid"
+            msg.contains("STICKERS_TOO_MUCH") -> "There are too many stickers in this stickerpack"
+            msg.contains("STICKER_DOCUMENT_INVALID") -> "The sticker file was invalid"
+            msg.contains("STICKER_EMOJI_INVALID") -> "Sticker emoji invalid"
+            msg.contains("STICKER_FILE_INVALID") -> "Sticker file invalid"
+            msg.contains("STICKER_INVALID") -> "The provided sticker is invalid"
+            msg.contains("TAKEOUT_INVALID") -> "The takeout session has been invalidated"
+            msg.contains("TAKEOUT_REQUIRED") -> "You must initialize a takeout request first"
+            msg.contains("TIMEOUT") -> "A timeout occurred while fetching data"
+            msg.contains("TOKEN_INVALID") -> "The provided token is invalid"
             msg.contains("TOPIC_DELETED") -> "The topic was deleted"
+            msg.contains("TTL_DAYS_INVALID") -> "The provided TTL is invalid"
+            msg.contains("TTL_MEDIA_INVALID") -> "The provided media cannot be used with a TTL"
+            msg.contains("TTL_PERIOD_INVALID") -> "The provided TTL Period is invalid"
+            msg.contains("UNKNOWN_METHOD") -> "The method you tried to call cannot be called on non-CDN DCs"
+            msg.contains("URL_INVALID") -> "The URL used was invalid"
+            msg.contains("USERNAME_INVALID") -> "Nobody is using this username, or the username is unacceptable"
+            msg.contains("USERNAME_NOT_MODIFIED") -> "The username is not different from the current username"
+            msg.contains("USERNAME_NOT_OCCUPIED") -> "The username is not in use by anyone else yet"
+            msg.contains("USERNAME_OCCUPIED") -> "The username is already taken"
+            msg.contains("USERS_TOO_FEW") -> "Not enough users"
+            msg.contains("USERS_TOO_MUCH") -> "The maximum number of users has been exceeded"
+            msg.contains("USER_ADMIN_INVALID") -> "Either you're not an admin or you tried to ban an admin that you didn't promote"
+            msg.contains("USER_ALREADY_INVITED") -> "You have already invited this user"
+            msg.contains("USER_ALREADY_PARTICIPANT") -> "The user is already a member of this chat"
+            msg.contains("USER_BANNED_IN_CHANNEL") -> "You're banned from sending messages in this channel"
+            msg.contains("USER_BLOCKED") -> "User blocked"
+            msg.contains("USER_BOT_INVALID") -> "This method can only be called by a bot"
+            msg.contains("USER_BOT_REQUIRED") -> "This method can only be called by a bot"
+            msg.contains("USER_CHANNELS_TOO_MUCH") -> "One of the users you tried to add is already in too many channels"
+            msg.contains("USER_CREATOR") -> "You can't leave this channel, because you're its creator"
+            msg.contains("USER_DEACTIVATED_BAN") -> "The user has been deleted/deactivated"
+            msg.contains("USER_DEACTIVATED") -> "The user has been deleted/deactivated"
+            msg.contains("USER_DELETED") -> "You can't send this message because the other participant deleted their account"
+            msg.contains("USER_ID_INVALID") -> "Invalid object ID for a user"
+            msg.contains("USER_INVALID") -> "The given user was invalid"
+            msg.contains("USER_IS_BLOCKED") -> "User is blocked"
+            msg.contains("USER_IS_BOT") -> "Bots can't send messages to other bots"
+            msg.contains("USER_KICKED") -> "This user was kicked from this chat"
+            msg.contains("USER_NOT_MUTUAL_CONTACT") -> "The provided user is not a mutual contact"
+            msg.contains("USER_NOT_PARTICIPANT") -> "You are not a member of this chat"
+            msg.contains("USER_PRIVACY_RESTRICTED") -> "The user's privacy settings don't allow this"
+            msg.contains("USER_RESTRICTED") -> "You're spamreported, you can't create channels or chats"
+            msg.contains("VIDEO_CONTENT_TYPE_INVALID") -> "The video content type is not supported"
+            msg.contains("VIDEO_FILE_INVALID") -> "The given video cannot be used"
+            msg.contains("VOICE_MESSAGES_FORBIDDEN") -> "This user doesn't allow voice messages"
+            msg.contains("WALLPAPER_FILE_INVALID") -> "The given file cannot be used as a wallpaper"
+            msg.contains("WALLPAPER_INVALID") -> "The input wallpaper was not valid"
+            msg.contains("WEBDOCUMENT_INVALID") -> "Invalid webdocument URL provided"
+            msg.contains("WEBPAGE_CURL_FAILED") -> "Failure while fetching the webpage"
+            msg.contains("WORKER_BUSY_TOO_LONG_RETRY") -> "Telegram workers are too busy to respond immediately"
+            msg.contains("YOU_BLOCKED_USER") -> "You blocked this user"
+            msg.contains("FROZEN_METHOD_INVALID") -> "You tried to use a method that is not available for frozen accounts"
+            msg.contains("FROZEN_PARTICIPANT_MISSING") -> "Your account is frozen and can't access the chat"
             else -> msg
         }
     }
 
-    private fun handleSponsoredMessage() {
-        Log.i(TAG, "Sponsored messages are not supported on this client")
+    suspend fun sendLocation(conversationId: String, lat: Double, long: Double): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            val media = InputMediaGeoPoint(InputGeoPoint(lat, long))
+            client.invoke(MessagesSendMedia(peer, media, "", random.nextLong())) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "sendLocation failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun unbanMember(conversationId: String, userId: Long): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        if (peer !is InputPeerChannel) return false
+        val cached = peerCache[userId]
+        val inputUser = if (cached is InputPeerUser) InputUser(cached.userId, cached.accessHash) else return false
+        return try {
+            client.invoke(ChannelsEditBanned(
+                InputChannel(peer.channelId, peer.accessHash), inputUser
+            )) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "unbanMember failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun joinChannel(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        if (peer !is InputPeerChannel) return false
+        return try {
+            client.invoke(ChannelsJoinChannel(
+                InputChannel(peer.channelId, peer.accessHash)
+            )) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "joinChannel failed: ${humanizeError(t)}")
+            false
+        }
     }
 
     suspend fun setGroupAvatar(conversationId: String, imageBytes: ByteArray): Boolean {
         if (_state.value !is State.Connected) return false
+        if (isTopicConversation(conversationId)) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        if (peer is InputPeerUser) return false
         return try {
             val fileId = random.nextLong()
             val partSize = 512 * 1024
@@ -1562,8 +2149,10 @@ object TelegramClient {
 
     suspend fun removeGroupAvatar(conversationId: String): Boolean {
         if (_state.value !is State.Connected) return false
+        if (isTopicConversation(conversationId)) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        if (peer is InputPeerUser) return false
         return try {
             val emptyPhoto = InputChatPhotoEmpty
             when (peer) {
@@ -1608,18 +2197,74 @@ object TelegramClient {
     }
 
     private fun fullyQualifyEmoji(emoji: String): String {
-        if (emoji.codePointCount(0, emoji.length) == 1) {
-            val cp = emoji.codePointAt(0)
-            if (cp in 0x2600..0x27BF || cp in 0x2300..0x23FF ||
-                cp in 0x2B50..0x2B55 || cp in 0x200D..0x200D ||
-                cp in 0x2702..0x27B0 || cp in 0x3030..0x3030 ||
-                cp in 0x303D..0x303D || cp in 0x3297..0x3299 ||
-                cp in 0x2049..0x2139 || cp in 0x231A..0x231B ||
-                cp in 0x25AA..0x25FE || cp in 0x2934..0x2935 ||
-                cp in 0x2194..0x21AA || cp in 0x00A9..0x00AE) {
-                return emoji + "\uFE0F"
+        if (emoji.contains("\uFE0F")) return emoji
+        val sb = StringBuilder()
+        var i = 0
+        while (i < emoji.length) {
+            val cp = Character.codePointAt(emoji, i)
+            val charCount = Character.charCount(cp)
+            sb.appendCodePoint(cp)
+            val nextIdx = i + charCount
+            val nextIsVS16 = nextIdx < emoji.length && emoji[nextIdx] == '\uFE0F'
+            if (!nextIsVS16 && needsVS16(cp)) {
+                sb.append('\uFE0F')
             }
+            i = nextIdx
         }
-        return emoji
+        return sb.toString()
     }
+
+    private fun needsVS16(cp: Int): Boolean = cp in vs16Codepoints
+
+    private val vs16Codepoints = setOf(
+        0x00A9, 0x00AE,
+        0x203C, 0x2049, 0x2122, 0x2139,
+        0x2194, 0x2195, 0x2196, 0x2197, 0x2198, 0x2199,
+        0x21A9, 0x21AA,
+        0x231A, 0x231B,
+        0x2328,
+        0x23CF,
+        0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23ED, 0x23EE, 0x23EF,
+        0x23F0, 0x23F1, 0x23F2, 0x23F3, 0x23F8, 0x23F9, 0x23FA,
+        0x24C2,
+        0x25AA, 0x25AB, 0x25B6, 0x25C0,
+        0x25FB, 0x25FC, 0x25FD, 0x25FE,
+        0x2600, 0x2601, 0x2602, 0x2603, 0x2604,
+        0x260E, 0x2611, 0x2614, 0x2615, 0x2618,
+        0x261D,
+        0x2620, 0x2622, 0x2623, 0x2626, 0x262A, 0x262E, 0x262F,
+        0x2638, 0x2639, 0x263A,
+        0x2640, 0x2642,
+        0x2648, 0x2649, 0x264A, 0x264B, 0x264C, 0x264D, 0x264E, 0x264F,
+        0x2650, 0x2651, 0x2652, 0x2653,
+        0x265F, 0x2660, 0x2663, 0x2665, 0x2666, 0x2668,
+        0x267B, 0x267E, 0x267F,
+        0x2692, 0x2693, 0x2694, 0x2695, 0x2696, 0x2697,
+        0x2699, 0x269B, 0x269C,
+        0x26A0, 0x26A1, 0x26A7,
+        0x26AA, 0x26AB,
+        0x26B0, 0x26B1,
+        0x26BD, 0x26BE,
+        0x26C4, 0x26C5, 0x26C8,
+        0x26CE, 0x26CF,
+        0x26D1, 0x26D3, 0x26D4,
+        0x26E9, 0x26EA,
+        0x26F0, 0x26F1, 0x26F2, 0x26F3, 0x26F4, 0x26F5,
+        0x26F7, 0x26F8, 0x26F9, 0x26FA,
+        0x26FD,
+        0x2702, 0x2705, 0x2708, 0x2709, 0x270A, 0x270B, 0x270C, 0x270D, 0x270F,
+        0x2712, 0x2714, 0x2716, 0x271D,
+        0x2721, 0x2728,
+        0x2733, 0x2734,
+        0x2744, 0x2747,
+        0x274C, 0x274E,
+        0x2753, 0x2754, 0x2755, 0x2757,
+        0x2763, 0x2764,
+        0x2795, 0x2796, 0x2797,
+        0x27A1, 0x27B0, 0x27BF,
+        0x2934, 0x2935,
+        0x2B05, 0x2B06, 0x2B07,
+        0x2B1B, 0x2B1C, 0x2B50, 0x2B55,
+        0x3030, 0x303D, 0x3297, 0x3299,
+    )
 }

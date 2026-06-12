@@ -504,15 +504,6 @@ data class InputMediaGeoLive(
     }
 }
 
-// InputUser for inviting/kicking
-data class InputUser(val userId: Long, val accessHash: Long) : TlObject {
-    override val typeId = 0xf21158c6.toInt()
-    override fun encode(buf: TlBuffer) {
-        buf.putId(typeId)
-        buf.putInt64(userId)
-        buf.putInt64(accessHash)
-    }
-}
 
 // InputChannel for channel operations
 data class InputChannel(val channelId: Long, val accessHash: Long) : TlObject {
@@ -584,6 +575,31 @@ data class ChannelsDeleteTopicHistory(val channel: TlObject, val topMsgId: Int) 
         buf.putId(typeId)
         channel.encode(buf)
         buf.putInt32(topMsgId)
+    }
+}
+
+// messages.editForumTopic (rename forum topic)
+data class MessagesEditForumTopic(
+    val peer: TlObject,
+    val topMsgId: Int,
+    val title: String,
+) : TlMethod<TlObject> {
+    override val typeId = 0xf4dfa185.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        buf.putInt32(1) // flags: has title (bit 0)
+        peer.encode(buf)
+        buf.putInt32(topMsgId)
+        buf.putString(title)
+    }
+}
+
+// channels.joinChannel
+data class ChannelsJoinChannel(val channel: TlObject) : TlMethod<TlObject> {
+    override val typeId = 0x24b524c5.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        channel.encode(buf)
     }
 }
 

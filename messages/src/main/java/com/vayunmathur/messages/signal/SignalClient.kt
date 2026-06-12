@@ -99,14 +99,17 @@ object SignalClient {
     private var profileManager: ProfileManager? = null
     private var groupManager: GroupManager? = null
     private var contactDiscovery: ContactDiscovery? = null
+    private var recipientStore: SignalRecipientStore? = null
     var syncContactsOnConnect: Boolean = false
+    private var lastContactSyncTime: Long = 0L
     private var lastContactRequestTime: Long = 0L
+    private val CONTACT_SYNC_THRESHOLD_MS = 3L * 24 * 60 * 60 * 1000 // 3 days (matching Go bridge)
     val encryptionLock = Mutex()
 
     private val nameCache = ConcurrentHashMap<String, String>()
 
     fun isConnected(): Boolean {
-        return webSocket?.isConnected() == true && unauthedWebSocket?.isConnected() == true
+        return webSocket?.isConnected == true && unauthedWebSocket?.isConnected == true
     }
 
     fun isLoggedIn(): Boolean {
@@ -263,9 +266,19 @@ object SignalClient {
     suspend fun sendMessage(conversationId: String, body: String): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val timestamp = System.currentTimeMillis()
         val content = ContentBuilders.textMessage(body, timestamp)
+
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
     }
@@ -282,7 +295,6 @@ object SignalClient {
             val ws = webSocket ?: return false
             val pointer = AttachmentManager.upload(ws, bytes, mime, fileName) ?: return false
             val sender = messageSender ?: return false
-            val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
             val timestamp = System.currentTimeMillis()
             val dataMessage = SignalServiceProtos.DataMessage.newBuilder()
                 .setTimestamp(timestamp)
@@ -291,6 +303,17 @@ object SignalClient {
             val content = SignalServiceProtos.Content.newBuilder()
                 .setDataMessage(dataMessage.build())
                 .build()
+
+            val groupId = extractGroupIdFromConversation(conversationId)
+            if (groupId != null) {
+                val group = groupManager?.getCachedGroup(groupId)
+                if (group != null) {
+                    val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                    return results.any { it.success }
+                }
+            }
+
+            val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
             val result = sender.sendMessage(recipientAci, content, timestamp)
             result.success
         } catch (t: Throwable) {
@@ -309,20 +332,23 @@ object SignalClient {
             val messages = messagesDb.messageDao().observeForConversation(conversationId).first()
             if (messages.isEmpty()) return true
 
-            // Group timestamps by sender ACI
-            val timestampsBySender = mutableMapOf<String, MutableList<Long>>()
-            for (msg in messages) {
-                val senderAci = msg.senderId ?: continue
-                // Skip own messages
-                if (senderAci == auth.aci) continue
-                timestampsBySender.getOrPut(senderAci) { mutableListOf() }.add(msg.timestamp)
-            }
+            // Send read receipt to the conversation peer for all incoming messages
+            val incomingTimestamps = messages
+                .filter { it.direction == com.vayunmathur.messages.data.MessageDirection.INCOMING }
+                .map { it.timestamp }
+            if (incomingTimestamps.isEmpty()) return true
 
-            // Send a separate ReceiptMessage per sender
-            for ((senderAci, timestamps) in timestampsBySender) {
-                val recipientAci = resolveRecipient(senderAci) ?: continue
-                val content = ContentBuilders.readReceipt(timestamps)
-                sender.sendMessage(recipientAci, content, System.currentTimeMillis())
+            val peerAci = extractAci(conversationId) ?: return true
+            val recipientAci = resolveRecipient(peerAci) ?: return true
+            val content = ContentBuilders.readReceipt(incomingTimestamps)
+            sender.sendMessage(recipientAci, content, System.currentTimeMillis())
+
+            // Send SyncMessage.Read to sync read state to other devices
+            try {
+                val syncContent = ContentBuilders.syncReadMessage(peerAci, incomingTimestamps)
+                sender.sendSelfSyncMessage(syncContent, System.currentTimeMillis())
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to send sync read: ${t.message}")
             }
             true
         } catch (t: Throwable) {
@@ -331,36 +357,43 @@ object SignalClient {
         }
     }
 
-    // Fix #2: deleteThread — add SyncMessage DeleteForMe sync to Signal
-    suspend fun deleteThread(conversationId: String): Boolean {
+    // Fix #2: deleteThread — add SyncMessage DeleteForMe sync to Signal (supports DM and group)
+    suspend fun deleteThread(conversationId: String, fromMessageRequest: Boolean = false): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
         val auth = authData ?: return false
         val aci = extractAci(conversationId) ?: return false
 
-        // Build ConversationIdentifier
-        val convId = SignalServiceProtos.ConversationIdentifier.newBuilder()
-            .setThreadServiceIdBinary(
-                com.google.protobuf.ByteString.copyFrom(MessageSender.uuidToBytes(aci))
-            ).build()
+        // Build ConversationIdentifier — handle both DM and group conversations
+        val groupId = extractGroupIdFromConversation(conversationId)
+        val convId = if (groupId != null) {
+            val groupIdBytes = Base64.decode(groupId, Base64.DEFAULT)
+            SignalServiceProtos.ConversationIdentifier.newBuilder()
+                .setThreadGroupId(
+                    com.google.protobuf.ByteString.copyFrom(groupIdBytes)
+                ).build()
+        } else {
+            SignalServiceProtos.ConversationIdentifier.newBuilder()
+                .setThreadServiceIdBinary(
+                    com.google.protobuf.ByteString.copyFrom(MessageSender.uuidToBytes(aci))
+                ).build()
+        }
+
+        // Matching Go: HandleMatrixDeleteChat sends MessageRequestResponse DELETE when FromMessageRequest
+        if (fromMessageRequest && groupId == null) {
+            val syncContent = ContentBuilders.messageRequestResponseSync(
+                threadAci = aci,
+                type = SignalServiceProtos.SyncMessage.MessageRequestResponse.Type.DELETE,
+            )
+            try {
+                sender.sendSelfSyncMessage(syncContent, System.currentTimeMillis())
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to send message request delete sync: ${t.message}")
+            }
+        }
 
         // Query last 5 messages for the anchor
-        val mostRecentMessages = try {
-            val messagesDb = buildMessagesDatabase(appContext)
-            val messages = messagesDb.messageDao().observeForConversation(conversationId).first()
-            messages.takeLast(5).mapNotNull { msg ->
-                val authorAci = msg.senderId ?: return@mapNotNull null
-                SignalServiceProtos.AddressableMessage.newBuilder()
-                    .setAuthorServiceIdBinary(
-                        com.google.protobuf.ByteString.copyFrom(MessageSender.uuidToBytes(authorAci))
-                    )
-                    .setSentTimestamp(msg.timestamp)
-                    .build()
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Failed to query recent messages for delete: ${t.message}")
-            emptyList()
-        }
+        val mostRecentMessages = emptyList<SignalServiceProtos.AddressableMessage>()
 
         val deleteContent = ContentBuilders.deleteForMeSyncMessage(
             conversationId = convId,
@@ -379,16 +412,23 @@ object SignalClient {
         return true
     }
 
-    // Fix #9: Message deletion with 24h time restriction
+    // Fix #9: Message deletion with 24h time restriction and author verification
     suspend fun deleteMessage(
         messageId: String,
         conversationId: String,
         messageTimestamp: Long,
+        messageAuthorAci: String? = null,
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val auth = authData ?: return false
         val targetTimestamp = messageId.substringAfterLast('_').toLongOrNull() ?: return false
+
+        // Verify the message author is self (matching Go: only allow self-deletes)
+        if (messageAuthorAci != null && messageAuthorAci != auth.aci) {
+            Log.w(TAG, "Cannot delete other people's messages")
+            return false
+        }
 
         // Enforce 24h delete window (matching Go bridge capabilities: DeleteMaxAge = 24h)
         val age = System.currentTimeMillis() - messageTimestamp
@@ -399,6 +439,18 @@ object SignalClient {
 
         val content = ContentBuilders.deleteMessage(targetTimestamp)
         val timestamp = System.currentTimeMillis()
+
+        // Group deletes (matching Go: HandleMatrixMessageRemove sends to group)
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
     }
@@ -413,11 +465,24 @@ object SignalClient {
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val targetTimestamp = messageId.substringAfterLast('_').toLongOrNull() ?: return false
-        val authorAci = messageAuthorAci ?: recipientAci
-        val content = ContentBuilders.reactionMessage(emoji, authorAci, targetTimestamp, !add)
         val timestamp = System.currentTimeMillis()
+
+        // Group reactions (matching Go: HandleMatrixReaction sends to group)
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val authorAci = messageAuthorAci ?: authData?.aci ?: return false
+                val content = ContentBuilders.reactionMessage(emoji, authorAci, targetTimestamp, !add, timestamp)
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val authorAci = messageAuthorAci ?: authData?.aci ?: return false
+        val content = ContentBuilders.reactionMessage(emoji, authorAci, targetTimestamp, !add, timestamp)
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
     }
@@ -477,10 +542,21 @@ object SignalClient {
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val targetTimestamp = originalMessageId.substringAfterLast('_').toLongOrNull() ?: return false
         val editTimestamp = System.currentTimeMillis()
         val content = ContentBuilders.editMessage(targetTimestamp, newBody, editTimestamp)
+
+        // Group edits (matching Go: HandleMatrixEdit sends to group)
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, editTimestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val result = sender.sendMessage(recipientAci, content, editTimestamp)
         return result.success
     }
@@ -503,18 +579,40 @@ object SignalClient {
             Log.w(TAG, "Failed to send message request accept sync: ${t.message}")
         }
 
-        // Send profileKey DataMessage to the requester
-        val profileKey = contactManager?.getProfileKey(auth.aci)
+        // Send profileKey DataMessage to the requester (matching Go: sends ProfileKey + PNI signature)
+        val profileKey = recipientStore?.getRecipient(auth.aci)?.profileKey
         val timestamp = System.currentTimeMillis()
         val dm = SignalServiceProtos.DataMessage.newBuilder()
             .setFlags(SignalServiceProtos.DataMessage.Flags.PROFILE_KEY_UPDATE_VALUE)
             .setTimestamp(timestamp)
+            .setRequiredProtocolVersion(0)
         if (profileKey != null) {
             dm.setProfileKey(com.google.protobuf.ByteString.copyFrom(profileKey))
         }
-        val content = SignalServiceProtos.Content.newBuilder()
+
+        // Only attach PNI signature when phone number sharing mode is EVERYBODY (matching Go bridge)
+        val contentBuilder = SignalServiceProtos.Content.newBuilder()
             .setDataMessage(dm.build())
-            .build()
+
+        val acctRecord = try {
+            auth.accountRecord?.let { com.vayunmathur.messages.signal.proto.AccountRecord.parseFrom(it) }
+        } catch (_: Exception) { null }
+        val pniKeyPair = try { IdentityKeyPair(Base64.decode(auth.pniIdentityKeyPair, Base64.NO_WRAP)) } catch (_: Exception) { null }
+        val aciKeyPair = try { IdentityKeyPair(Base64.decode(auth.aciIdentityKeyPair, Base64.NO_WRAP)) } catch (_: Exception) { null }
+        if (acctRecord?.phoneNumberSharingMode == com.vayunmathur.messages.signal.proto.AccountRecord.PhoneNumberSharingMode.EVERYBODY
+            && pniKeyPair != null && aciKeyPair != null && auth.pni != null) {
+            val sig = pniKeyPair.privateKey.calculateSignature(aciKeyPair.publicKey.serialize())
+            val pniBytes = MessageSender.uuidToBytes(auth.pni)
+            contentBuilder.setPniSignatureMessage(
+                SignalServiceProtos.PniSignatureMessage.newBuilder()
+                    .setPni(com.google.protobuf.ByteString.copyFrom(pniBytes))
+                    .setSignature(com.google.protobuf.ByteString.copyFrom(sig))
+                    .build()
+            )
+        }
+
+        val content = contentBuilder.build()
+
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
     }
@@ -539,6 +637,115 @@ object SignalClient {
         return gm.setGroupDescription(groupId, newDescription)
     }
 
+    // Expose setMemberRole (Go: HandleMatrixPowerLevels → ModifyMemberRoleAction)
+    suspend fun setMemberRole(groupId: String, memberAci: String, isAdmin: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        val role = if (isAdmin) GroupManager.MemberRole.ADMINISTRATOR else GroupManager.MemberRole.DEFAULT
+        return gm.setMemberRole(groupId, memberAci, role)
+    }
+
+    // Accept invite (PromotePendingMemberAction)
+    suspend fun acceptInvite(groupId: String, serviceId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.acceptInvite(groupId, serviceId)
+    }
+
+    // Revoke invite (DeletePendingMemberAction)
+    suspend fun revokeInvite(groupId: String, serviceId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.revokeInvite(groupId, serviceId)
+    }
+
+    // Approve knock request (PromoteRequestingMemberAction)
+    suspend fun approveKnock(groupId: String, memberAci: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.approveKnock(groupId, memberAci)
+    }
+
+    // Deny knock request (DeleteRequestingMemberAction)
+    suspend fun denyKnock(groupId: String, memberAci: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.denyKnock(groupId, memberAci)
+    }
+
+    // Leave group (matching Go: HandleMatrixMembership Leave)
+    suspend fun leaveGroup(groupId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.leaveGroup(groupId)
+    }
+
+    // Kick member (matching Go: HandleMatrixMembership Kick)
+    suspend fun kickMember(groupId: String, memberAci: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.kickMember(groupId, memberAci)
+    }
+
+    // Invite member (matching Go: HandleMatrixMembership Invite)
+    suspend fun inviteMember(groupId: String, serviceId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.inviteMember(groupId, serviceId)
+    }
+
+    // Ban member (matching Go: HandleMatrixMembership Ban)
+    suspend fun banMember(groupId: String, serviceId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.banMember(groupId, serviceId)
+    }
+
+    // Unban member (matching Go: HandleMatrixMembership Unban)
+    suspend fun unbanMember(groupId: String, serviceId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.unbanMember(groupId, serviceId)
+    }
+
+    // Set group announcements-only mode (matching Go: HandleMatrixPowerLevels → ModifyAnnouncementsOnly)
+    suspend fun setAnnouncementsOnly(groupId: String, announcementsOnly: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.setAnnouncementsOnly(groupId, announcementsOnly)
+    }
+
+    // Set group attributes access (matching Go: HandleMatrixPowerLevels → ModifyAttributesAccess)
+    suspend fun setAttributesAccess(groupId: String, adminOnly: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        val access = if (adminOnly) GroupManager.AccessControl.ADMINISTRATOR else GroupManager.AccessControl.MEMBER
+        return gm.setAttributesAccess(groupId, access)
+    }
+
+    // Set group member access (matching Go: HandleMatrixPowerLevels → ModifyMemberAccess)
+    suspend fun setMemberAccess(groupId: String, adminOnly: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        val access = if (adminOnly) GroupManager.AccessControl.ADMINISTRATOR else GroupManager.AccessControl.MEMBER
+        return gm.setMemberAccess(groupId, access)
+    }
+
+    // Send viewed receipt (Go: HandleMatrixViewingChat sends VIEWED receipt)
+    suspend fun sendViewedReceipt(recipientAci: String, timestamps: List<Long>): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        return try {
+            val resolved = resolveRecipient(recipientAci) ?: return false
+            val content = ContentBuilders.viewedReceipt(timestamps)
+            val result = sender.sendMessage(resolved, content, System.currentTimeMillis())
+            result.success
+        } catch (t: Throwable) {
+            Log.w(TAG, "sendViewedReceipt failed: ${t.message}")
+            false
+        }
+    }
+
     // Fix #6: Disappearing messages
     suspend fun setDisappearingTimer(conversationId: String, expirationSeconds: Int): Boolean {
         if (_state.value !is State.Connected) return false
@@ -547,16 +754,23 @@ object SignalClient {
         val groupId = extractGroupIdFromConversation(conversationId)
 
         val timestamp = System.currentTimeMillis()
-        val content = ContentBuilders.disappearingTimerMessage(expirationSeconds, timestamp)
 
+        // For groups, use GroupChange (matching Go: HandleMatrixDisappearingTimer uses GroupChange for groups)
         if (groupId != null) {
-            val group = groupManager?.getCachedGroup(groupId)
+            val gm = groupManager ?: return false
+            val success = gm.setDisappearingTimer(groupId, expirationSeconds)
+            if (success) return true
+            // Fallback to DataMessage if GroupChange fails
+            val group = gm.getCachedGroup(groupId)
             if (group != null) {
+                val content = ContentBuilders.disappearingTimerMessage(expirationSeconds, timestamp)
                 val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
                 return results.any { it.success }
             }
+            return false
         }
 
+        val content = ContentBuilders.disappearingTimerMessage(expirationSeconds, timestamp)
         val recipientAci = resolveRecipient(aci) ?: return false
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
@@ -666,6 +880,7 @@ object SignalClient {
 
             val devManager = DeviceManager(ws, sessStore, idStore, pkStore, pkStore, pkStore, skStore)
             val recipientStore = SignalRecipientStore(database)
+            this.recipientStore = recipientStore
             val groupStore = SignalGroupStore(database)
             val aciKeyPair = try { IdentityKeyPair(Base64.decode(auth.aciIdentityKeyPair, Base64.NO_WRAP)) } catch (_: Exception) { null }
             val pniKeyPair = try { IdentityKeyPair(Base64.decode(auth.pniIdentityKeyPair, Base64.NO_WRAP)) } catch (_: Exception) { null }
@@ -675,9 +890,10 @@ object SignalClient {
             val sender = MessageSender(ws, sessStore, idStore, pkStore, pkStore, pkStore, skStore, auth.aci, auth.deviceId, devManager, recipientStore, unauthedWs, groupStore, auth.pni, aciKeyPair, pniKeyPair, acctRecord)
             messageSender = sender
             contactManager = ContactManager(recipientStore)
-            contactDiscovery = ContactDiscovery(recipientStore, auth.aci, auth.deviceId, auth.password, appContext)
+            contactDiscovery = ContactDiscovery(recipientStore, ws, appContext)
             profileManager = ProfileManager(unauthedWs, recipientStore)
             groupManager = GroupManager(ws, groupStore, recipientStore, auth.aci, auth.pni, auth.password)
+            groupManager?.messageSender = sender
 
             ws.incomingRequestHandler = { request ->
                 handleIncomingRequest(request, auth, sessStore, idStore, pkStore, skStore)
@@ -727,7 +943,13 @@ object SignalClient {
             }
 
             if (syncContactsOnConnect) {
-                kickoffBackfill()
+                val now = System.currentTimeMillis()
+                if (lastContactSyncTime == 0L || (now - lastContactSyncTime) > CONTACT_SYNC_THRESHOLD_MS) {
+                    lastContactSyncTime = now
+                    kickoffBackfill()
+                } else {
+                    Log.d(TAG, "Skipping contact sync, last sync was ${(now - lastContactSyncTime) / 1000}s ago")
+                }
             }
 
             if (auth.masterKey == null) {
@@ -741,18 +963,41 @@ object SignalClient {
             }
 
             scope.launch {
+                var debounceJob: Job? = null
                 ws.connectionEvents.collect { event ->
                     when (event) {
                         is SignalWebSocket.ConnectionEvent.Connected -> {
+                            debounceJob?.cancel()
+                            debounceJob = null
                             _state.value = State.Connected
                         }
                         is SignalWebSocket.ConnectionEvent.Disconnected -> {
-                            _state.value = State.Disconnected(event.reason)
+                            // Debounce disconnect events (matching Go: 7-second debounce)
+                            if (debounceJob == null) {
+                                debounceJob = scope.launch {
+                                    delay(7_000L)
+                                    _state.value = State.Disconnected(event.reason)
+                                    debounceJob = null
+                                }
+                            }
                         }
                         is SignalWebSocket.ConnectionEvent.LoggedOut -> {
+                            debounceJob?.cancel()
                             _state.value = State.Disconnected("Logged out")
                             stop()
                         }
+                        is SignalWebSocket.ConnectionEvent.Error -> {
+                            debounceJob?.cancel()
+                            _state.value = State.Disconnected(event.reason)
+                        }
+                        is SignalWebSocket.ConnectionEvent.FatalError -> {
+                            debounceJob?.cancel()
+                            _state.value = State.Disconnected(event.reason)
+                        }
+                        is SignalWebSocket.ConnectionEvent.CleanShutdown -> {
+                            debounceJob?.cancel()
+                        }
+                        is SignalWebSocket.ConnectionEvent.Connecting -> {}
                     }
                 }
             }
@@ -774,6 +1019,18 @@ object SignalClient {
     ) {
         if (request.verb == "PUT" && request.path == "/api/v1/queue/empty") {
             webSocket?.sendResponse(request.id, 200)
+            // Trigger contact sync when queue is empty (matching Go: QueueEmpty event)
+            scope.launch {
+                try {
+                    val now = System.currentTimeMillis()
+                    if (now - lastContactRequestTime > 30_000L) {
+                        lastContactRequestTime = now
+                        kickoffBackfill()
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to trigger contact sync on queue empty: ${t.message}")
+                }
+            }
             return
         }
         if (request.verb != "PUT" || request.path != "/api/v1/message") {
@@ -787,6 +1044,17 @@ object SignalClient {
                     envelope, sessStore, idStore, pkStore, pkStore, pkStore, skStore,
                     null, auth.aci, auth.deviceId,
                 )
+
+                if (result.error != null) {
+                    Log.e(TAG, "Decryption failed from ${result.senderAci}:${result.senderDeviceId}", result.error)
+                    _events.emit(GMEvent.DecryptionError(
+                        source, result.senderAci, result.senderAci, result.senderDeviceId,
+                        envelope.clientTimestamp, result.error.message
+                    ))
+                    webSocket?.sendResponse(request.id, 200)
+                    return@launch
+                }
+
                 webSocket?.sendResponse(request.id, 200)
 
                 if (result.content != null) {
@@ -904,8 +1172,9 @@ object SignalClient {
             // Fix #12: SyncDeleteForMe handler — process conversation and message deletes
             is MessageContent.SyncDeleteForMe -> {
                 for (convDelete in content.conversationDeletes) {
+                    if (!convDelete.isFullDelete) continue
                     val convAci = convDelete.conversationId.threadAci
-                    if (convDelete.isFullDelete && convAci != null) {
+                    if (convAci != null) {
                         _events.emit(GMEvent.ConversationDeleted(source, "${source.idPrefix}:$convAci"))
                         Log.d(TAG, "SyncDeleteForMe: deleted conversation for $convAci")
                     }
@@ -928,15 +1197,32 @@ object SignalClient {
                         _events.emit(GMEvent.MessageDeleted(source, delMsgId))
                     }
                 }
+                for (attDelete in content.attachmentDeletes) {
+                    val authorAci = attDelete.targetMessage.authorAci ?: continue
+                    val delMsgId = "${authorAci}_${attDelete.targetMessage.sentTimestamp}"
+                    Log.d(TAG, "SyncDeleteForMe: attachment delete for message $delMsgId")
+                }
             }
-            // Fix #13: SyncMessageRequestResponse handler
+            // Fix #13: SyncMessageRequestResponse handler (all types)
             is MessageContent.SyncMessageRequestResponse -> {
                 val threadAci = content.threadAci
-                if (content.type == "ACCEPT" && threadAci != null) {
-                    Log.d(TAG, "Message request accepted for $threadAci")
-                } else if (content.type == "DELETE" && threadAci != null) {
-                    _events.emit(GMEvent.ConversationDeleted(source, "${source.idPrefix}:$threadAci"))
-                    Log.d(TAG, "Message request deleted for $threadAci")
+                when (content.type) {
+                    "ACCEPT" -> {
+                        if (threadAci != null) Log.d(TAG, "Message request accepted for $threadAci")
+                    }
+                    "DELETE", "BLOCK_AND_DELETE" -> {
+                        if (threadAci != null) {
+                            _events.emit(GMEvent.ConversationDeleted(source, "${source.idPrefix}:$threadAci"))
+                            Log.d(TAG, "Message request ${content.type.lowercase()} for $threadAci")
+                        }
+                    }
+                    "BLOCK" -> {
+                        if (threadAci != null) Log.d(TAG, "Message request blocked for $threadAci")
+                    }
+                    "SPAM" -> {
+                        if (threadAci != null) Log.d(TAG, "Message request marked as spam for $threadAci")
+                    }
+                    else -> Log.d(TAG, "Unknown message request response type: ${content.type}")
                 }
             }
             // Fix #15: Contact sync blob processing

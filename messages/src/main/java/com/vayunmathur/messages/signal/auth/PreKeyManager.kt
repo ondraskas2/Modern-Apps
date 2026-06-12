@@ -296,6 +296,9 @@ object PreKeyManager {
                         preKeyId, preKeyPublic,
                         signedPreKeyId, signedPublicKey, signatureBytes,
                         identityKey,
+                        -1,
+                        org.signal.libsignal.protocol.kem.KEMPublicKey(ByteArray(1568) { if (it == 0) 0x07 else 0x00 }),
+                        ByteArray(0),
                     )
                 }
             } else {
@@ -304,6 +307,9 @@ object PreKeyManager {
                     preKeyId, preKeyPublic,
                     signedPreKeyId, signedPublicKey, signatureBytes,
                     identityKey,
+                    -1,
+                    org.signal.libsignal.protocol.kem.KEMPublicKey(ByteArray(1568) { if (it == 0) 0x07 else 0x00 }),
+                    ByteArray(0),
                 )
             }
             val address = SignalProtocolAddress(theirServiceId, deviceId)

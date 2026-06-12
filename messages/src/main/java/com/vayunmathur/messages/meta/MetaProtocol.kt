@@ -49,6 +49,53 @@ object MetaProtocol {
     const val CONNECTION_REFUSED_UNAUTHORIZED = 5
     const val CONNECTION_REFUSED_UNKNOWN_24 = 24
 
+    // Thread types (from messagix/table/thread.go)
+    const val THREAD_TYPE_ONE_TO_ONE = 1
+    const val THREAD_TYPE_GROUP = 2
+    const val THREAD_TYPE_FOLDER = 3
+    const val THREAD_TYPE_MARKETPLACE = 4
+    const val THREAD_TYPE_ENCRYPTED_OVER_WA_ONE_TO_ONE = 5
+    const val THREAD_TYPE_ENCRYPTED_OVER_WA_GROUP = 6
+    const val THREAD_TYPE_COMMUNITY_GROUP = 7
+    const val THREAD_TYPE_UNKNOWN = 0
+
+    // Folder names (from connector/events.go)
+    const val FOLDER_INBOX = "inbox"
+    const val FOLDER_OTHER = "other"
+    const val FOLDER_SPAM = "spam"
+    const val FOLDER_PENDING = "pending"
+    const val FOLDER_MONTAGE = "montage"
+    const val FOLDER_HIDDEN = "hidden"
+    const val FOLDER_LEGACY = "legacy"
+    const val FOLDER_DISABLED = "disabled"
+    const val FOLDER_PAGE_BACKGROUND = "page_background"
+    const val FOLDER_PAGE_DONE = "page_done"
+    const val FOLDER_BLOCKED = "blocked"
+    const val FOLDER_COMMUNITY = "community"
+    const val FOLDER_RESTRICTED = "restricted"
+    const val FOLDER_BC_PARTNERSHIP = "bc_partnership"
+    const val FOLDER_E2EE_CUTOVER = "e2ee_cutover"
+    const val FOLDER_E2EE_CUTOVER_ARCHIVED = "e2ee_cutover_archived"
+    const val FOLDER_E2EE_CUTOVER_PENDING = "e2ee_cutover_pending"
+    const val FOLDER_E2EE_CUTOVER_OTHER = "e2ee_cutover_other"
+    const val FOLDER_INTEROP = "interop"
+    const val FOLDER_ARCHIVED = "archived"
+    const val FOLDER_AI_ACTIVE = "ai_active"
+    const val FOLDER_SALSA_RESTRICTED = "salsa_restricted"
+    const val FOLDER_MESSENGER_MARKETING_MESSAGE = "messenger_marketing_message"
+
+    // Capabilities (from connector/capabilities.go)
+    const val MAX_TEXT_LENGTH = 20000
+    const val MAX_FILE_SIZE = 25 * 1000 * 1000
+    const val MAX_FILE_SIZE_WITH_E2E = 100 * 1000 * 1000
+    const val MAX_IMAGE_SIZE = 8 * 1000 * 1000
+    const val EDIT_MAX_COUNT = 5
+    const val EDIT_MAX_AGE_MINUTES = 15
+
+    // Well-known Meta AI IDs (from connector/userinfo.go)
+    const val META_AI_INSTAGRAM_ID = 656175869434325L
+    const val META_AI_MESSENGER_ID = 156025504001094L
+
     // LS Request types (from messagix/socket.go)
     const val LS_REQUEST_TYPE_DB_QUERY = 1
     const val LS_REQUEST_TYPE_DB_QUERY_CURSOR = 2
@@ -190,7 +237,7 @@ object MetaProtocol {
     data class SendMessageTask(
         @SerialName("thread_id") val threadId: Long,
         @SerialName("otid") val otid: String,
-        val source: Int = 0,
+        val source: Int = 65537,
         @SerialName("send_type") val sendType: Int = 1,
         @SerialName("attachment_fbids") val attachmentFbIds: List<Long>? = null,
         @SerialName("sync_group") val syncGroup: Long = 1,
@@ -199,7 +246,7 @@ object MetaProtocol {
         val text: String = "",
         @SerialName("hot_emoji_size") val hotEmojiSize: Int = 0,
         @SerialName("sticker_id") val stickerId: Long = 0,
-        @SerialName("initiating_source") val initiatingSource: Int = 0,
+        @SerialName("initiating_source") val initiatingSource: Int = 1,
         @SerialName("skip_url_preview_gen") val skipUrlPreviewGen: Int = 0,
         @SerialName("text_has_links") val textHasLinks: Int = 0,
         @SerialName("strip_forwarded_msg_caption") val stripForwardedMsgCaption: Int = 0,
@@ -233,7 +280,7 @@ object MetaProtocol {
         val reaction: String,
         @SerialName("reaction_style") val reactionStyle: JsonElement = JsonNull,
         @SerialName("sync_group") val syncGroup: Int = 1,
-        @SerialName("send_attribution") val sendAttribution: Int = 0,
+        @SerialName("send_attribution") val sendAttribution: Int = 65537,
     )
 
     @Serializable
@@ -306,6 +353,7 @@ object MetaProtocol {
         "CreateCommunitySubThread" to "665",
         "FetchAdditionalThreadData" to "733",
         "EditMessageTask" to "742",
+        "AcceptMessageRequestTask" to "43",
     )
 
     // --- LS Request wrapper (from messagix/socket.go) ---
@@ -622,8 +670,9 @@ object MetaProtocol {
     fun buildDeleteThreadPayload(
         threadKey: Long,
         versionId: Long,
+        syncGroup: Long = 1,
     ): String {
-        val task = DeleteThreadTask(threadKey = threadKey)
+        val task = DeleteThreadTask(threadKey = threadKey, syncGroup = syncGroup)
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["DeleteThreadTask"] ?: "146",
@@ -696,9 +745,14 @@ object MetaProtocol {
     @Serializable
     data class SearchUserTask(
         val query: String,
-        @SerialName("supported_types") val supportedTypes: List<Int> = listOf(1, 2, 3, 4),
+        @SerialName("supported_types") val supportedTypes: List<Int> = listOf(1, 3, 4, 2, 6, 7, 8, 9),
+        @SerialName("session_id") val sessionId: JsonElement = JsonNull,
         @SerialName("surface_type") val surfaceType: Int = 15,
-        val secondary: Boolean = false,
+        @SerialName("selected_participants") val selectedParticipants: JsonElement = JsonNull,
+        @SerialName("group_id") val groupId: JsonElement = JsonNull,
+        @SerialName("community_id") val communityId: JsonElement = JsonNull,
+        @SerialName("query_id") val queryId: JsonElement = JsonNull,
+        @kotlinx.serialization.Transient val secondary: Boolean = false,
     )
 
     @Serializable
@@ -725,8 +779,9 @@ object MetaProtocol {
     @Serializable
     data class CreatePollTask(
         @SerialName("thread_key") val threadKey: Long,
-        val question: String,
+        @SerialName("question_text") val questionText: String,
         val options: List<String>,
+        @SerialName("sync_group") val syncGroup: Long = 1,
     )
 
     @Serializable
@@ -748,6 +803,8 @@ object MetaProtocol {
         @SerialName("attachment_fbids") val attachmentFbIds: List<Long>,
         @SerialName("sync_group") val syncGroup: Long = 1,
         val text: String = "",
+        @SerialName("mime_type") val mimeType: String? = null,
+        @SerialName("file_name") val fileName: String? = null,
         @SerialName("initiating_source") val initiatingSource: Int = 0,
         @SerialName("skip_url_preview_gen") val skipUrlPreviewGen: Int = 0,
         @SerialName("text_has_links") val textHasLinks: Int = 0,
@@ -771,18 +828,48 @@ object MetaProtocol {
         return buildTaskPayload(
             label = TASK_LABELS["RemoveParticipantTask"] ?: "140",
             taskPayloadJson = taskJson,
-            queueName = threadId.toString(),
+            queueName = "remove_participant_v2",
             versionId = versionId,
         )
     }
 
-    fun buildSearchUserPayload(query: String, versionId: Long): String {
-        val task = SearchUserTask(query = query)
+    fun buildSearchUserPayload(query: String, versionId: Long, isMessenger: Boolean = false): String {
+        val supportedTypes = if (isMessenger) {
+            listOf(1, 3, 4, 2, 6, 7, 8, 9, 13)
+        } else {
+            listOf(1, 3, 4, 2, 6, 7, 8, 9)
+        }
+        val task = SearchUserTask(
+            query = query,
+            supportedTypes = supportedTypes,
+            surfaceType = if (isMessenger) 5 else 15,
+        )
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["SearchUserTask"] ?: "30",
             taskPayloadJson = taskJson,
-            queueName = "search",
+            queueName = listOf("search_primary", System.currentTimeMillis().toString()),
+            versionId = versionId,
+        )
+    }
+
+    fun buildSearchUserSecondaryPayload(query: String, versionId: Long, isMessenger: Boolean = false): String {
+        val supportedTypes = if (isMessenger) {
+            listOf(1, 3, 4, 2, 6, 7, 8, 9, 13)
+        } else {
+            listOf(1, 3, 4, 2, 6, 7, 8, 9)
+        }
+        val task = SearchUserTask(
+            query = query,
+            supportedTypes = supportedTypes,
+            surfaceType = if (isMessenger) 5 else 15,
+            secondary = true,
+        )
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["SearchUserSecondaryTask"] ?: "31",
+            taskPayloadJson = taskJson,
+            queueName = "search_secondary",
             versionId = versionId,
         )
     }
@@ -793,7 +880,7 @@ object MetaProtocol {
         return buildTaskPayload(
             label = TASK_LABELS["SetThreadImageTask"] ?: "37",
             taskPayloadJson = taskJson,
-            queueName = threadKey.toString(),
+            queueName = "thread_image",
             versionId = versionId,
         )
     }
@@ -809,35 +896,43 @@ object MetaProtocol {
         return buildTaskPayload(
             label = TASK_LABELS["CreateGroupTask"] ?: "130",
             taskPayloadJson = taskJson,
-            queueName = "create_group",
+            queueName = threadId.toString(),
             versionId = versionId,
         )
     }
 
     fun buildCreatePollPayload(threadKey: Long, question: String, options: List<String>, versionId: Long): String {
-        val task = CreatePollTask(threadKey = threadKey, question = question, options = options)
+        val task = CreatePollTask(threadKey = threadKey, questionText = question, options = options)
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["CreatePollTask"] ?: "163",
             taskPayloadJson = taskJson,
-            queueName = threadKey.toString(),
+            queueName = "poll_creation",
             versionId = versionId,
         )
     }
 
-    fun buildTypingIndicatorPayload(threadKey: Long, isTyping: Boolean, isGroup: Boolean, versionId: Long): String {
+    @Serializable
+    data class StatelessTaskData(
+        val label: String,
+        val payload: String,
+        val version: String,
+    )
+
+    fun buildTypingIndicatorPayload(threadKey: Long, isTyping: Boolean, isGroup: Boolean, versionId: Long, threadType: Long = 0): String {
         val task = UpdatePresenceTask(
             threadKey = threadKey,
             isGroupThread = if (isGroup) 1L else 0L,
             isTyping = if (isTyping) 1L else 0L,
+            threadType = threadType,
         )
         val taskJson = json.encodeToString(task)
-        return buildTaskPayload(
+        val statelessPayload = StatelessTaskData(
             label = TASK_LABELS["UpdatePresence"] ?: "3",
-            taskPayloadJson = taskJson,
-            queueName = "ls_presence_send_typing_indicator",
-            versionId = versionId,
+            payload = taskJson,
+            version = versionId.toString(),
         )
+        return json.encodeToString(statelessPayload)
     }
 
     fun buildSendMediaPayload(threadId: Long, attachmentFbIds: List<Long>, text: String, versionId: Long): String {
@@ -857,8 +952,40 @@ object MetaProtocol {
         )
     }
 
+    fun buildSendMediaPayload(
+        threadId: Long,
+        attachmentFbIds: List<Long>,
+        text: String,
+        mimeType: String?,
+        fileName: String?,
+        versionId: Long,
+    ): String {
+        val otid = generateEpochId().toString()
+        val task = SendMediaTask(
+            threadId = threadId,
+            otid = otid,
+            attachmentFbIds = attachmentFbIds,
+            text = text,
+            mimeType = mimeType,
+            fileName = fileName,
+        )
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["SendMessageTask"] ?: "46",
+            taskPayloadJson = taskJson,
+            queueName = threadId.toString(),
+            versionId = versionId,
+        )
+    }
+
+    @Serializable
+    data class AcceptMessageRequestTask(
+        @SerialName("thread_key") val threadKey: Long,
+    )
+
     fun buildAcceptMessageRequestPayload(threadId: Long, versionId: Long): String {
-        val taskJson = """{"thread_key":$threadId}"""
+        val task = AcceptMessageRequestTask(threadKey = threadId)
+        val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["AcceptMessageRequestTask"] ?: "43",
             taskPayloadJson = taskJson,
@@ -918,6 +1045,22 @@ object MetaProtocol {
         data class ThreadMuteChanged(val threadId: String, val muteExpireTimeMs: Long) : IncomingEvent
         data class ThreadDeleted(val threadId: String) : IncomingEvent
         data class MessageRequestReceived(val threadId: String) : IncomingEvent
+        data class ThreadSynced(
+            val threadId: String,
+            val threadName: String?,
+            val lastActivityTimestampMs: Long,
+        ) : IncomingEvent
+        data class ThreadVerified(
+            val threadId: String,
+            val threadType: Int,
+            val folderName: String,
+        ) : IncomingEvent
+        data class FolderSynced(
+            val threadId: String,
+        ) : IncomingEvent
+        data class ThreadMovedToE2EECutover(
+            val threadId: String,
+        ) : IncomingEvent
     }
 
     fun parseAllEvents(events: List<LightspeedDecoder.DecodedEvent>): List<IncomingEvent> {
@@ -934,11 +1077,32 @@ object MetaProtocol {
         return when (event.procedureName) {
             "LSInsertNewMessageRange",
             "LSUpsertMessage",
-            "LSInsertMessage",
+            "LSInsertMessage" -> {
+                if (args.size < 5) return null
+                val text = args.getOrNull(0)?.toString() ?: ""
+                val threadId = args.getOrNull(1)?.toString() ?: return null
+                val messageId = args.getOrNull(2)?.toString() ?: return null
+                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
+                val senderId = args.getOrNull(4)?.toString() ?: ""
+                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
+                IncomingEvent.MessageReceived(
+                    MetaMessageEnriched(
+                        messageId = messageId,
+                        threadId = threadId,
+                        senderId = senderId,
+                        senderName = senderName,
+                        text = text,
+                        timestamp = timestamp,
+                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        replyToMessageId = replyToId,
+                    )
+                )
+            }
             "LSDeleteThenInsertMessage" -> {
                 if (args.size < 5) return null
                 val isUnsent = args.getOrNull(6) as? Boolean ?: false
-                if (event.procedureName == "LSDeleteThenInsertMessage" && isUnsent) {
+                if (isUnsent) {
                     val messageId = args.getOrNull(2)?.toString() ?: return null
                     val threadId = args.getOrNull(1)?.toString() ?: return null
                     return IncomingEvent.MessageDeleted(threadId, messageId)
@@ -960,7 +1124,28 @@ object MetaProtocol {
                         timestamp = timestamp,
                         isGroup = (threadId.toLongOrNull() ?: 0) < 0,
                         replyToMessageId = replyToId,
-                        isUnsent = isUnsent,
+                    )
+                )
+            }
+            "LSReplaceOptimsiticMessage" -> {
+                if (args.size < 5) return null
+                val text = args.getOrNull(0)?.toString() ?: ""
+                val threadId = args.getOrNull(1)?.toString() ?: return null
+                val messageId = args.getOrNull(2)?.toString() ?: return null
+                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
+                val senderId = args.getOrNull(4)?.toString() ?: ""
+                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
+                IncomingEvent.MessageReceived(
+                    MetaMessageEnriched(
+                        messageId = messageId,
+                        threadId = threadId,
+                        senderId = senderId,
+                        senderName = senderName,
+                        text = text,
+                        timestamp = timestamp,
+                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        replyToMessageId = replyToId,
                     )
                 )
             }
@@ -1031,6 +1216,20 @@ object MetaProtocol {
                 val participantId = args.getOrNull(1)?.toString() ?: return null
                 IncomingEvent.ParticipantRemoved(threadId, participantId)
             }
+            "LSVerifyThreadExists" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val threadType = (args.getOrNull(1) as? Long)?.toInt() ?: THREAD_TYPE_UNKNOWN
+                val folderName = args.getOrNull(2)?.toString() ?: FOLDER_INBOX
+                IncomingEvent.ThreadVerified(threadId, threadType, folderName)
+            }
+            "LSUpsertFolder" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                IncomingEvent.FolderSynced(threadId)
+            }
+            "LSMoveThreadToE2EECutoverFolder" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                IncomingEvent.ThreadMovedToE2EECutover(threadId)
+            }
             "LSUpdateThreadMuteSetting" -> {
                 val threadId = args.getOrNull(0)?.toString() ?: return null
                 val muteExpireTimeMs = (args.getOrNull(1) as? Long) ?: return null
@@ -1044,6 +1243,20 @@ object MetaProtocol {
                 val threadId = args.getOrNull(0)?.toString() ?: return null
                 IncomingEvent.MessageRequestReceived(threadId)
             }
+            "LSDeleteThenInsertThread" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val threadName = args.getOrNull(1)?.toString()
+                val lastActivityMs = (args.getOrNull(2) as? Long) ?: 0L
+                val folderName = args.getOrNull(3)?.toString()
+                if (folderName == FOLDER_SPAM) return null
+                IncomingEvent.ThreadSynced(threadId, threadName, lastActivityMs)
+            }
+            "LSUpdateOrInsertThread" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val threadName = args.getOrNull(1)?.toString()
+                val lastActivityMs = (args.getOrNull(2) as? Long) ?: 0L
+                IncomingEvent.ThreadSynced(threadId, threadName, lastActivityMs)
+            }
             else -> null
         }
     }
@@ -1054,9 +1267,33 @@ object MetaProtocol {
                 "LSInsertNewMessageRange",
                 "LSUpsertMessage",
                 "LSInsertMessage",
+                "LSReplaceOptimsiticMessage" -> {
+                    val args = event.args
+                    if (args.size < 5) continue
+                    val text = args.getOrNull(0)?.toString() ?: ""
+                    val threadId = args.getOrNull(1)?.toString() ?: continue
+                    val messageId = args.getOrNull(2)?.toString() ?: continue
+                    val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
+                    val senderId = args.getOrNull(4)?.toString() ?: ""
+                    val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                    val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
+
+                    return MetaMessageEnriched(
+                        messageId = messageId,
+                        threadId = threadId,
+                        senderId = senderId,
+                        senderName = senderName,
+                        text = text,
+                        timestamp = timestamp,
+                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        replyToMessageId = replyToId,
+                    )
+                }
                 "LSDeleteThenInsertMessage" -> {
                     val args = event.args
                     if (args.size < 5) continue
+                    val isUnsent = args.getOrNull(6) as? Boolean ?: false
+                    if (isUnsent) continue
                     val text = args.getOrNull(0)?.toString() ?: ""
                     val threadId = args.getOrNull(1)?.toString() ?: continue
                     val messageId = args.getOrNull(2)?.toString() ?: continue
@@ -1092,6 +1329,14 @@ object MetaProtocol {
 
     fun buildAppSettingsJson(versionId: Long): String {
         return json.encodeToString(AppSettingsPublish(schemaVersion = versionId.toString()))
+    }
+
+    fun removeVariationSelectors(s: String): String {
+        val sb = StringBuilder(s.length)
+        for (c in s) {
+            if (c !in '\uFE00'..'\uFE0F') sb.append(c)
+        }
+        return sb.toString()
     }
 
     fun generateEpochId(): Long = generateEpochId_internal()

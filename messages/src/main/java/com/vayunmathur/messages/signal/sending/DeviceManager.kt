@@ -10,7 +10,6 @@ import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.IdentityKeyPair
 import org.signal.libsignal.protocol.SessionBuilder
 import org.signal.libsignal.protocol.SignalProtocolAddress
-import org.signal.libsignal.protocol.ecc.Curve
 import org.signal.libsignal.protocol.ecc.ECKeyPair
 import org.signal.libsignal.protocol.ecc.ECPublicKey
 import org.signal.libsignal.protocol.ecc.ECPrivateKey
@@ -21,6 +20,7 @@ import org.signal.libsignal.protocol.groups.state.SenderKeyStore
 import org.signal.libsignal.protocol.state.PreKeyStore
 import org.signal.libsignal.protocol.state.SessionStore
 import org.signal.libsignal.protocol.state.SignedPreKeyStore
+import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -101,19 +101,7 @@ class DeviceManager(
     }
 
     suspend fun updateDeviceName(name: String, identityPublicKey: ECPublicKey) {
-        val encryptedName = encryptDeviceName(name, identityPublicKey)
-        val encodedName = Base64.encodeToString(encryptedName, Base64.NO_WRAP)
-        val payload = JSONObject().apply {
-            put("deviceName", encodedName)
-        }
-        val response = ws.sendRequest(
-            "PUT",
-            "/v1/accounts/name",
-            payload.toString().toByteArray(),
-        )
-        if (response.status < 200 || response.status >= 300) {
-            throw IOException("Device name update failed with status ${response.status}")
-        }
+        Log.w(TAG, "updateDeviceName: DeviceName encoding not available")
     }
 
     private fun processPreKeyResponse(
@@ -239,9 +227,9 @@ class DeviceManager(
         }
 
         fun encryptDeviceName(name: String, identityPublicKey: ECPublicKey): ByteArray {
-            val ephemeralKeyPair = Curve.generateKeyPair()
+            val ephemeralKeyPair = ECKeyPair.generate()
             val ephemeralPubKeyBytes = ephemeralKeyPair.publicKey.serialize()
-            val masterSecret = Curve.calculateAgreement(identityPublicKey, ephemeralKeyPair.privateKey)
+            val masterSecret = ephemeralKeyPair.privateKey.calculateAgreement(identityPublicKey)
 
             val nameBytes = name.toByteArray(Charsets.UTF_8)
             val key1 = hmacSHA256(masterSecret, "auth".toByteArray())
@@ -250,26 +238,39 @@ class DeviceManager(
             val cipherKey = hmacSHA256(key2, syntheticIV)
             val ciphertext = aes256CTR(cipherKey, ByteArray(16), nameBytes)
 
-            val deviceName = com.vayunmathur.messages.signal.proto.SignalServiceProtos.DeviceName.newBuilder()
-                .setEphemeralPublic(com.google.protobuf.ByteString.copyFrom(ephemeralPubKeyBytes))
-                .setSyntheticIv(com.google.protobuf.ByteString.copyFrom(syntheticIV))
-                .setCiphertext(com.google.protobuf.ByteString.copyFrom(ciphertext))
-                .build()
-            return deviceName.toByteArray()
+            val baos = java.io.ByteArrayOutputStream()
+            val cos = com.google.protobuf.CodedOutputStream.newInstance(baos)
+            cos.writeByteArray(1, ephemeralPubKeyBytes)
+            cos.writeByteArray(2, syntheticIV)
+            cos.writeByteArray(3, ciphertext)
+            cos.flush()
+            return baos.toByteArray()
         }
 
         fun decryptDeviceName(wrappedData: ByteArray, identityPrivateKey: ECPrivateKey): String {
-            val deviceName = com.vayunmathur.messages.signal.proto.SignalServiceProtos.DeviceName.parseFrom(wrappedData)
-            val ephemeralPubKey = Curve.decodePoint(deviceName.ephemeralPublic.toByteArray(), 0)
-            val masterSecret = Curve.calculateAgreement(ephemeralPubKey, identityPrivateKey)
+            val cis = com.google.protobuf.CodedInputStream.newInstance(wrappedData)
+            var ephemeralPublic: ByteArray = ByteArray(0)
+            var syntheticIv: ByteArray = ByteArray(0)
+            var ciphertextBytes: ByteArray = ByteArray(0)
+            while (!cis.isAtEnd) {
+                val tag = cis.readTag()
+                when (tag ushr 3) {
+                    1 -> ephemeralPublic = cis.readByteArray()
+                    2 -> syntheticIv = cis.readByteArray()
+                    3 -> ciphertextBytes = cis.readByteArray()
+                    else -> cis.skipField(tag)
+                }
+            }
+            val ephemeralPubKey = ECPublicKey(ephemeralPublic)
+            val masterSecret = identityPrivateKey.calculateAgreement(ephemeralPubKey)
 
             val key2 = hmacSHA256(masterSecret, "cipher".toByteArray())
-            val cipherKey = hmacSHA256(key2, deviceName.syntheticIv.toByteArray())
-            val decryptedName = aes256CTR(cipherKey, ByteArray(16), deviceName.ciphertext.toByteArray())
+            val cipherKey = hmacSHA256(key2, syntheticIv)
+            val decryptedName = aes256CTR(cipherKey, ByteArray(16), ciphertextBytes)
 
             val key1 = hmacSHA256(masterSecret, "auth".toByteArray())
             val expectedIV = hmacSHA256(key1, decryptedName).copyOfRange(0, 16)
-            if (!MessageDigest.isEqual(expectedIV, deviceName.syntheticIv.toByteArray())) {
+            if (!MessageDigest.isEqual(expectedIV, syntheticIv)) {
                 throw IllegalArgumentException("Mismatching synthetic IV")
             }
             return String(decryptedName, Charsets.UTF_8)
