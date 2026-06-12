@@ -129,4 +129,48 @@ object PairFlow {
     // Pairing.RefreshPhoneRelay, which only regenerates a fresh QR for
     // re-pairing). Token TTL is several days; for v1 we surface a
     // re-pair prompt if the user gets logged out.
+
+    /**
+     * Refresh the QR code by calling RefreshPhoneRelay. Returns a new
+     * QR URL. Port of Go's `Client.RefreshPhoneRelay` / `QRLoginProcess.Wait`.
+     */
+    suspend fun refreshPhoneRelay(
+        rpc: RpcClient,
+        auth: AuthData,
+    ): RegisterResult {
+        val pubKey = auth.refreshKey.publicKeyDer()
+        val tachyonToken = auth.tachyonToken() ?: error("no tachyon token for QR refresh")
+        val req = AuthenticationContainer.newBuilder()
+            .setAuthMessage(
+                AuthMessage.newBuilder()
+                    .setRequestID(UUID.randomUUID().toString())
+                    .setTachyonAuthToken(com.google.protobuf.ByteString.copyFrom(tachyonToken))
+                    .setNetwork(QrNetwork)
+                    .setConfigVersion(ConfigVersion)
+            )
+            .setBrowserDetails(BrowserDetails)
+            .build()
+
+        Log.i(TAG, "RefreshPhoneRelay …")
+        val resp = rpc.postProtobuf(
+            url = Endpoints.RefreshPhoneRelayUrl,
+            body = req,
+            responseTemplate = RegisterPhoneRelayResponse.getDefaultInstance(),
+        )
+        Log.i(TAG, "RefreshPhoneRelay OK")
+
+        val urlData = URLData.newBuilder()
+            .setPairingKey(resp.pairingKey)
+            .setAESKey(auth.crypto().aesKey.toByteString())
+            .setHMACKey(auth.crypto().hmacKey.toByteString())
+            .build()
+        val qrPayload = Base64.encodeToString(urlData.toByteArray(), Base64.NO_WRAP)
+        val qrUrl = Endpoints.QrCodeBaseUrl + qrPayload
+
+        return RegisterResult(
+            tachyonToken = resp.authKeyData.tachyonAuthToken.toByteArray(),
+            tachyonTtlUs = resp.authKeyData.ttl,
+            qrUrl = qrUrl,
+        )
+    }
 }

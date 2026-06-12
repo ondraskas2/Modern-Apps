@@ -36,6 +36,26 @@ data class UpdateReadChannelInbox(val channelId: Long, val maxId: Int, val pts: 
     override fun encode(buf: TlBuffer) {}
 }
 
+data class UpdateReadChannelOutbox(val channelId: Long, val maxId: Int) : TlObject {
+    override val typeId = 0xb75f99a9.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdateUserName(val userId: Long, val firstName: String, val lastName: String, val username: String) : TlObject {
+    override val typeId = 0xa7848924.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdateNotifySettings(val peer: TlObject, val muteUntil: Int) : TlObject {
+    override val typeId = 0xbec268ef.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class UpdatePinnedDialogs(val folderId: Int, val order: List<TlObject>) : TlObject {
+    override val typeId = 0xfa0f3ca2.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
 data class UpdateEditChannelMessage(val message: TlObject, val pts: Int, val ptsCount: Int) : TlObject {
     override val typeId = 0x1b3f4df7.toInt()
     override fun encode(buf: TlBuffer) {}

@@ -16,6 +16,7 @@ sealed interface MessageContent {
     data class TextMessage(val body: String, val timestamp: Long, val groupId: String? = null, val expireTimer: Int = 0, val isViewOnce: Boolean = false) : MessageContent
     data class Reaction(val emoji: String, val targetTimestamp: Long, val remove: Boolean, val targetAuthorAci: String? = null, val groupId: String? = null) : MessageContent
     data class Delete(val targetTimestamp: Long, val groupId: String? = null) : MessageContent
+    data class AdminDelete(val targetTimestamp: Long, val targetAuthorAci: String?, val groupId: String? = null) : MessageContent
     data class Edit(val targetTimestamp: Long, val newBody: String, val groupId: String? = null) : MessageContent
     data class ReadReceipt(val timestamps: List<Long>) : MessageContent
     data class ViewedReceipt(val timestamps: List<Long>) : MessageContent
@@ -25,15 +26,45 @@ sealed interface MessageContent {
     data class SyncRead(val messages: List<Pair<String, Long>>) : MessageContent
     data class SyncKeys(val masterKey: ByteArray?, val accountEntropyPool: String?) : MessageContent
     data class SyncFetchLatest(val type: String) : MessageContent
-    data class SyncDeleteForMe(val timestamp: Long) : MessageContent
+    data class SyncDeleteForMe(val timestamp: Long, val conversationDeletes: List<ConversationDelete> = emptyList(), val messageDeletes: List<MessageDelete> = emptyList()) : MessageContent
     data class SyncMessageRequestResponse(val threadAci: String?, val groupId: ByteArray?, val type: String) : MessageContent
+    data class SyncContacts(val blob: ByteArray) : MessageContent
     data class Call(val isRinging: Boolean, val groupId: String? = null) : MessageContent
     data class GroupCallUpdate(val eraId: String?, val groupId: String?) : MessageContent
+    data class GroupChange(val groupId: String?, val revision: Int, val changeBytes: ByteArray?) : MessageContent
     data class Attachment(val body: String?, val attachments: List<AttachmentPointer>, val groupId: String? = null, val expireTimer: Int = 0, val isViewOnce: Boolean = false) : MessageContent
     data class Sticker(val packId: ByteArray, val packKey: ByteArray, val stickerId: Int, val emoji: String?, val groupId: String? = null) : MessageContent
     data class ProfileKeyUpdate(val profileKey: ByteArray, val senderAci: String) : MessageContent
+    data class PollCreate(val question: String, val options: List<String>, val allowMultiple: Boolean, val groupId: String? = null) : MessageContent
+    data class PollVote(val targetTimestamp: Long, val targetAuthorAci: String?, val optionIndexes: List<Int>, val groupId: String? = null) : MessageContent
+    data class ExpirationTimerUpdate(val expirationSeconds: Int, val groupId: String? = null) : MessageContent
+    data class Payment(val groupId: String? = null) : MessageContent
+    data class GiftBadge(val groupId: String? = null) : MessageContent
+    data class ContactCard(val groupId: String? = null) : MessageContent
     data class Unknown(val description: String) : MessageContent
 }
+
+data class ConversationDelete(
+    val conversationId: ConversationIdentifier,
+    val isFullDelete: Boolean,
+    val mostRecentMessages: List<AddressableMsg> = emptyList(),
+    val mostRecentNonExpiringMessages: List<AddressableMsg> = emptyList(),
+)
+
+data class MessageDelete(
+    val conversationId: ConversationIdentifier,
+    val messages: List<AddressableMsg>,
+)
+
+data class ConversationIdentifier(
+    val threadAci: String? = null,
+    val threadGroupId: ByteArray? = null,
+)
+
+data class AddressableMsg(
+    val authorAci: String?,
+    val sentTimestamp: Long,
+)
 
 data class AttachmentPointer(
     val cdnId: Long,
@@ -92,8 +123,27 @@ object ContentDispatcher {
     private fun dispatchData(data: SignalServiceProtos.DataMessage, timestamp: Long, senderAci: String = ""): MessageContent {
         val groupId = extractGroupId(data)
 
+        // GroupChange processing (fix #3)
+        if (data.hasGroupV2() && data.groupV2.hasGroupChange()) {
+            return MessageContent.GroupChange(
+                groupId = groupId,
+                revision = data.groupV2.revision,
+                changeBytes = data.groupV2.groupChange.toByteArray(),
+            )
+        }
+
         if (data.hasDelete()) {
             return MessageContent.Delete(data.delete.targetSentTimestamp, groupId)
+        }
+
+        // AdminDelete handling (fix #19)
+        if (data.hasAdminDelete()) {
+            val ad = data.adminDelete
+            val targetAuthorAci = if (ad.targetAuthorAciBinary != null && ad.targetAuthorAciBinary.size() == 16) {
+                val buf = java.nio.ByteBuffer.wrap(ad.targetAuthorAciBinary.toByteArray())
+                java.util.UUID(buf.long, buf.long).toString()
+            } else null
+            return MessageContent.AdminDelete(ad.targetSentTimestamp, targetAuthorAci, groupId)
         }
 
         if (data.hasReaction()) {
@@ -140,6 +190,55 @@ object ContentDispatcher {
         if (data.hasGroupCallUpdate()) {
             return MessageContent.GroupCallUpdate(
                 eraId = if (data.groupCallUpdate.hasEraId()) data.groupCallUpdate.eraId else null,
+                groupId = groupId,
+            )
+        }
+
+        // Payment placeholder (fix #18)
+        if (data.hasPayment()) {
+            return MessageContent.Payment(groupId = groupId)
+        }
+
+        // GiftBadge placeholder (fix #18)
+        if (data.hasGiftBadge()) {
+            return MessageContent.GiftBadge(groupId = groupId)
+        }
+
+        // Contact card placeholder (fix #18)
+        if (data.contactCount > 0) {
+            return MessageContent.ContactCard(groupId = groupId)
+        }
+
+        // PollCreate (fix #7)
+        if (data.hasPollCreate()) {
+            val pc = data.pollCreate
+            return MessageContent.PollCreate(
+                question = pc.question,
+                options = pc.optionsList.toList(),
+                allowMultiple = pc.allowMultiple,
+                groupId = groupId,
+            )
+        }
+
+        // PollVote (fix #7)
+        if (data.hasPollVote()) {
+            val pv = data.pollVote
+            val targetAuthor = if (pv.targetAuthorAciBinary != null && pv.targetAuthorAciBinary.size() == 16) {
+                val buf = java.nio.ByteBuffer.wrap(pv.targetAuthorAciBinary.toByteArray())
+                java.util.UUID(buf.long, buf.long).toString()
+            } else null
+            return MessageContent.PollVote(
+                targetTimestamp = pv.targetSentTimestamp,
+                targetAuthorAci = targetAuthor,
+                optionIndexes = pv.optionIndexesList.map { it },
+                groupId = groupId,
+            )
+        }
+
+        // Expiration timer update (fix #6)
+        if (data.hasFlags() && (data.flags and SignalServiceProtos.DataMessage.Flags.EXPIRATION_TIMER_UPDATE_VALUE) != 0) {
+            return MessageContent.ExpirationTimerUpdate(
+                expirationSeconds = if (data.hasExpireTimer()) data.expireTimer else 0,
                 groupId = groupId,
             )
         }
@@ -211,8 +310,50 @@ object ContentDispatcher {
             return MessageContent.SyncFetchLatest(sync.fetchLatest.type.name)
         }
 
+        // SyncDeleteForMe — full parsing (fix #12)
         if (sync.hasDeleteForMe()) {
-            return MessageContent.SyncDeleteForMe(timestamp)
+            val dfm = sync.deleteForMe
+            val convDeletes = dfm.conversationDeletesList.map { cd ->
+                val mostRecent = cd.mostRecentMessagesList.map { am ->
+                    val authorAci = if (am.authorServiceIdBinary != null && am.authorServiceIdBinary.size() == 16) {
+                        val buf = java.nio.ByteBuffer.wrap(am.authorServiceIdBinary.toByteArray())
+                        java.util.UUID(buf.long, buf.long).toString()
+                    } else if (am.hasAuthorServiceId()) {
+                        am.authorServiceId
+                    } else null
+                    AddressableMsg(authorAci = authorAci, sentTimestamp = am.sentTimestamp)
+                }
+                val mostRecentNonExpiring = cd.mostRecentNonExpiringMessagesList.map { am ->
+                    val authorAci = if (am.authorServiceIdBinary != null && am.authorServiceIdBinary.size() == 16) {
+                        val buf = java.nio.ByteBuffer.wrap(am.authorServiceIdBinary.toByteArray())
+                        java.util.UUID(buf.long, buf.long).toString()
+                    } else if (am.hasAuthorServiceId()) {
+                        am.authorServiceId
+                    } else null
+                    AddressableMsg(authorAci = authorAci, sentTimestamp = am.sentTimestamp)
+                }
+                ConversationDelete(
+                    conversationId = parseConversationId(cd.conversation),
+                    isFullDelete = cd.isFullDelete,
+                    mostRecentMessages = mostRecent,
+                    mostRecentNonExpiringMessages = mostRecentNonExpiring,
+                )
+            }
+            val msgDeletes = dfm.messageDeletesList.map { md ->
+                MessageDelete(
+                    conversationId = parseConversationId(md.conversation),
+                    messages = md.messagesList.map { am ->
+                        val authorAci = if (am.authorServiceIdBinary != null && am.authorServiceIdBinary.size() == 16) {
+                            val buf = java.nio.ByteBuffer.wrap(am.authorServiceIdBinary.toByteArray())
+                            java.util.UUID(buf.long, buf.long).toString()
+                        } else if (am.hasAuthorServiceId()) {
+                            am.authorServiceId
+                        } else null
+                        AddressableMsg(authorAci = authorAci, sentTimestamp = am.sentTimestamp)
+                    }
+                )
+            }
+            return MessageContent.SyncDeleteForMe(timestamp, convDeletes, msgDeletes)
         }
 
         if (sync.hasMessageRequestResponse()) {
@@ -224,8 +365,14 @@ object ContentDispatcher {
             )
         }
 
+        // Contact sync blob processing (fix #15)
         if (sync.hasContacts()) {
-            return MessageContent.Unknown("Contacts sync")
+            val contactsBlob = sync.contacts
+            if (contactsBlob.hasBlob()) {
+                val blob = contactsBlob.blob
+                return MessageContent.SyncContacts(blob.toByteArray())
+            }
+            return MessageContent.Unknown("Contacts sync without blob")
         }
 
         if (sync.readCount > 0) {
@@ -234,6 +381,20 @@ object ContentDispatcher {
         }
 
         return MessageContent.Unknown("SyncMessage with no recognized fields")
+    }
+
+    private fun parseConversationId(conv: SignalServiceProtos.ConversationIdentifier?): ConversationIdentifier {
+        if (conv == null) return ConversationIdentifier()
+        val threadAci = when {
+            conv.hasThreadServiceIdBinary() && conv.threadServiceIdBinary.size() == 16 -> {
+                val buf = java.nio.ByteBuffer.wrap(conv.threadServiceIdBinary.toByteArray())
+                java.util.UUID(buf.long, buf.long).toString()
+            }
+            conv.hasThreadServiceId() -> conv.threadServiceId
+            else -> null
+        }
+        val threadGroupId = if (conv.hasThreadGroupId()) conv.threadGroupId.toByteArray() else null
+        return ConversationIdentifier(threadAci = threadAci, threadGroupId = threadGroupId)
     }
 
     private fun dispatchReceipt(receipt: SignalServiceProtos.ReceiptMessage): MessageContent {
@@ -260,7 +421,7 @@ object ContentDispatcher {
         return MessageContent.Call(isRinging = call.hasOffer())
     }
 
-    private fun extractGroupId(data: SignalServiceProtos.DataMessage): String? {
+    fun extractGroupId(data: SignalServiceProtos.DataMessage): String? {
         if (!data.hasGroupV2()) return null
         return try {
             val masterKey = data.groupV2.masterKey.toByteArray()

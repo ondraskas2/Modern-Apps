@@ -1234,7 +1234,249 @@ object WhatsAppProtocol {
 
     // -- Message parsing --
 
+    private fun formatDisappearingTimer(seconds: Int): String {
+        return when {
+            seconds >= 86400 * 90 -> "90 days"
+            seconds >= 86400 * 7 -> "7 days"
+            seconds >= 86400 -> "${seconds / 86400} days"
+            seconds >= 3600 -> "${seconds / 3600} hours"
+            seconds >= 60 -> "${seconds / 60} minutes"
+            else -> "$seconds seconds"
+        }
+    }
+
+    private fun extractContextInfo(
+        e2eMessage: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message
+    ): ContextInfoResult {
+        val ctx = when {
+            e2eMessage.hasExtendedTextMessage() -> e2eMessage.extendedTextMessage.contextInfo
+            e2eMessage.hasImageMessage() -> e2eMessage.imageMessage.contextInfo
+            e2eMessage.hasVideoMessage() -> e2eMessage.videoMessage.contextInfo
+            e2eMessage.hasPtvMessage() -> e2eMessage.ptvMessage.contextInfo
+            e2eMessage.hasAudioMessage() -> e2eMessage.audioMessage.contextInfo
+            e2eMessage.hasDocumentMessage() -> e2eMessage.documentMessage.contextInfo
+            e2eMessage.hasStickerMessage() -> e2eMessage.stickerMessage.contextInfo
+            e2eMessage.hasLocationMessage() -> e2eMessage.locationMessage.contextInfo
+            e2eMessage.hasContactMessage() -> e2eMessage.contactMessage.contextInfo
+            e2eMessage.hasLiveLocationMessage() -> e2eMessage.liveLocationMessage.contextInfo
+            else -> null
+        } ?: return ContextInfoResult()
+
+        return ContextInfoResult(
+            isForwarded = ctx.isForwarded,
+            forwardingScore = ctx.forwardingScore,
+            replyToId = ctx.stanzaId.ifEmpty { null },
+            mentionedJids = ctx.mentionedJidList.orEmpty(),
+        )
+    }
+
+    /**
+     * Build a poll creation message.
+     * From whatsmeow matrixpoll.go PollStartToWhatsApp()
+     */
+    fun buildPollCreationMessage(
+        chatJid: String,
+        question: String,
+        options: List<String>,
+        selectableCount: Int = 0,
+        id: String,
+    ): Node {
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto
+
+        val pollOptions = options.map { option ->
+            proto.PollCreationMessage.Option.newBuilder()
+                .setOptionName(option)
+                .build()
+        }
+
+        val messageSecret = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+
+        val pollCreation = proto.PollCreationMessage.newBuilder()
+            .setName(question)
+            .addAllOptions(pollOptions)
+            .setSelectableOptionsCount(selectableCount)
+            .build()
+
+        val e2eMessage = proto.Message.newBuilder()
+            .setPollCreationMessage(pollCreation)
+            .setMessageContextInfo(
+                proto.MessageContextInfo.newBuilder()
+                    .setMessageSecret(com.google.protobuf.ByteString.copyFrom(messageSecret))
+            )
+            .build()
+
+        val plaintext = e2eMessage.toByteArray()
+        return Node(
+            tag = "message",
+            attrs = mapOf("to" to chatJid, "id" to id, "type" to "text"),
+            content = listOf(
+                Node(tag = "enc", attrs = mapOf("v" to "2", "type" to "msg"), data = padMessage(plaintext))
+            )
+        )
+    }
+
+    /**
+     * Build a location message.
+     * From whatsmeow from-matrix.go location handling via parseGeoURI()
+     */
+    fun buildLocationMessage(
+        chatJid: String,
+        latitude: Double,
+        longitude: Double,
+        name: String? = null,
+        address: String? = null,
+        id: String,
+    ): Node {
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto
+
+        val locBuilder = proto.LocationMessage.newBuilder()
+            .setDegreesLatitude(latitude)
+            .setDegreesLongitude(longitude)
+        if (!name.isNullOrEmpty()) locBuilder.setName(name)
+        if (!address.isNullOrEmpty()) locBuilder.setAddress(address)
+
+        val e2eMessage = proto.Message.newBuilder()
+            .setLocationMessage(locBuilder.build())
+            .build()
+
+        val plaintext = e2eMessage.toByteArray()
+        return Node(
+            tag = "message",
+            attrs = mapOf("to" to chatJid, "id" to id, "type" to "text"),
+            content = listOf(
+                Node(tag = "enc", attrs = mapOf("v" to "2", "type" to "msg"), data = padMessage(plaintext))
+            )
+        )
+    }
+
+    /**
+     * Build a contact/vCard message.
+     * From whatsmeow wa-contact.go
+     */
+    fun buildContactMessage(
+        chatJid: String,
+        displayName: String,
+        vcard: String,
+        id: String,
+    ): Node {
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto
+
+        val contactMsg = proto.ContactMessage.newBuilder()
+            .setDisplayName(displayName)
+            .setVcard(vcard)
+            .build()
+
+        val e2eMessage = proto.Message.newBuilder()
+            .setContactMessage(contactMsg)
+            .build()
+
+        val plaintext = e2eMessage.toByteArray()
+        return Node(
+            tag = "message",
+            attrs = mapOf("to" to chatJid, "id" to id, "type" to "text"),
+            content = listOf(
+                Node(tag = "enc", attrs = mapOf("v" to "2", "type" to "msg"), data = padMessage(plaintext))
+            )
+        )
+    }
+
+    /**
+     * Build a disappearing timer change message.
+     * From whatsmeow handlematrix.go HandleMatrixDisappearingTimer()
+     * Allowed values: 0 (off), 86400 (24h), 604800 (7d), 7776000 (90d)
+     */
+    fun buildDisappearingTimerMessage(
+        chatJid: String,
+        timerSeconds: Long,
+        id: String,
+    ): Node {
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto
+
+        val protocolMsg = proto.ProtocolMessage.newBuilder()
+            .setType(proto.ProtocolMessage.Type.EPHEMERAL_SETTING)
+            .setEphemeralExpiration(timerSeconds.toInt())
+            .build()
+
+        val e2eMessage = proto.Message.newBuilder()
+            .setProtocolMessage(protocolMsg)
+            .build()
+
+        val plaintext = e2eMessage.toByteArray()
+        return Node(
+            tag = "message",
+            attrs = mapOf("to" to chatJid, "id" to id, "type" to "text"),
+            content = listOf(
+                Node(tag = "enc", attrs = mapOf("v" to "2", "type" to "msg"), data = padMessage(plaintext))
+            )
+        )
+    }
+
+    /**
+     * Build a group info change IQ node.
+     * From whatsmeow group.go SetGroupName/SetGroupTopic
+     */
+    fun buildGroupInfoChange(
+        groupJid: String,
+        field: String,
+        value: String,
+        id: String,
+        extraAttrs: Map<String, String> = emptyMap(),
+    ): Node {
+        val childAttrs = mutableMapOf<String, String>()
+        childAttrs.putAll(extraAttrs)
+        return Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to id,
+                "type" to "set",
+                "xmlns" to "w:g2",
+                "to" to groupJid,
+            ),
+            content = listOf(
+                Node(tag = field, attrs = childAttrs, content = listOf(), data = value.toByteArray(Charsets.UTF_8))
+            ),
+        )
+    }
+
+    /**
+     * Build a group participant change IQ node.
+     * From whatsmeow group.go UpdateGroupParticipants
+     */
+    fun buildGroupParticipantChange(
+        groupJid: String,
+        participantJids: List<String>,
+        action: String,
+        id: String,
+    ): Node {
+        val participants = participantJids.map { jid ->
+            Node(tag = "participant", attrs = mapOf("jid" to jid))
+        }
+        return Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to id,
+                "type" to "set",
+                "xmlns" to "w:g2",
+                "to" to groupJid,
+            ),
+            content = listOf(
+                Node(tag = action, content = participants)
+            ),
+        )
+    }
+
+    /**
+     * Reroute LID JIDs to phone number JIDs.
+     * From whatsmeow handlewhatsapp.go rerouteWAMessage()
+     */
+    fun rerouteLIDSender(senderJid: String, participants: Map<String, String>?): String {
+        if (!senderJid.contains("@lid")) return senderJid
+        val phoneJid = participants?.get(senderJid)
+        return phoneJid ?: senderJid
+    }
+
     fun getMessageType(e2eMessage: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message?): String {
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto
         return when {
             e2eMessage == null -> "ignore"
             e2eMessage.hasConversation() || e2eMessage.hasExtendedTextMessage() -> "text"
@@ -1249,26 +1491,34 @@ object WhatsAppProtocol {
             e2eMessage.hasLocationMessage() -> "location"
             e2eMessage.hasLiveLocationMessage() -> "live location start"
             e2eMessage.hasGroupInviteMessage() -> "group invite"
+            e2eMessage.hasGroupMentionedMessage() -> "group mention"
             e2eMessage.hasReactionMessage() -> {
                 if (e2eMessage.reactionMessage.text.isNullOrEmpty()) "reaction remove" else "reaction"
             }
+            e2eMessage.hasEncReactionMessage() -> "enc reaction"
+            e2eMessage.hasEncCommentMessage() -> "enc comment"
+            e2eMessage.hasCommentMessage() -> "comment"
             e2eMessage.hasPollCreationMessage() || e2eMessage.hasPollCreationMessageV2() || e2eMessage.hasPollCreationMessageV3() -> "poll create"
             e2eMessage.hasPollUpdateMessage() -> "poll update"
+            e2eMessage.hasEventMessage() -> "event"
+            e2eMessage.hasEventCoverImage() -> "event cover image"
             e2eMessage.hasProtocolMessage() -> {
                 when (e2eMessage.protocolMessage.type) {
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.REVOKE -> {
+                    proto.ProtocolMessage.Type.REVOKE -> {
                         if (e2eMessage.protocolMessage.hasKey()) "revoke" else "ignore"
                     }
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.MESSAGE_EDIT -> "edit"
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.EPHEMERAL_SETTING -> "disappearing timer change"
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE,
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION,
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC -> "ignore"
+                    proto.ProtocolMessage.Type.MESSAGE_EDIT -> "edit"
+                    proto.ProtocolMessage.Type.EPHEMERAL_SETTING -> "disappearing timer change"
+                    proto.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE,
+                    proto.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION,
+                    proto.ProtocolMessage.Type.INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC,
+                    proto.ProtocolMessage.Type.APP_STATE_FATAL_EXCEPTION_NOTIFICATION,
+                    proto.ProtocolMessage.Type.SHARE_PHONE_NUMBER,
+                    proto.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_MESSAGE,
+                    proto.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE -> "ignore"
                     else -> "unknown_protocol_${e2eMessage.protocolMessage.type.number}"
                 }
             }
-            e2eMessage.hasEventMessage() -> "event"
-            e2eMessage.hasCommentMessage() -> "comment"
             e2eMessage.hasOrderMessage() -> "order"
             e2eMessage.hasProductMessage() -> "product"
             e2eMessage.hasPaymentInviteMessage() -> "payment"
@@ -1277,8 +1527,18 @@ object WhatsAppProtocol {
             e2eMessage.hasButtonsMessage() -> "buttons"
             e2eMessage.hasButtonsResponseMessage() -> "buttons response"
             e2eMessage.hasTemplateMessage() -> "template"
+            e2eMessage.hasTemplateButtonReplyMessage() -> "template button reply"
+            e2eMessage.hasHighlyStructuredMessage() -> "highly structured"
             e2eMessage.hasInteractiveMessage() -> "interactive"
+            e2eMessage.hasInteractiveResponseMessage() -> "interactive response"
             e2eMessage.hasKeepInChatMessage() -> "keep in chat"
+            e2eMessage.hasPinInChatMessage() -> "pin in chat"
+            e2eMessage.hasNewsletterAdminInviteMessage() -> "newsletter admin invite"
+            e2eMessage.hasSecretEncryptedMessage() -> "secret encrypted"
+            e2eMessage.hasBotInvokeMessage() -> "bot invoke"
+            e2eMessage.hasStickerPackMessage() -> "sticker pack"
+            e2eMessage.hasSenderKeyDistributionMessage() -> "sender key distribution"
+            e2eMessage.hasMessageHistoryBundle() -> "message history bundle"
             else -> "unknown"
         }
     }
@@ -1312,32 +1572,149 @@ object WhatsAppProtocol {
                     e2eMessage.hasAudioMessage() -> "[Audio]"
                     e2eMessage.hasDocumentMessage() -> "[Document: ${e2eMessage.documentMessage.title}]"
                     e2eMessage.hasStickerMessage() -> "[Sticker]"
-                    e2eMessage.hasContactMessage() -> "[Contact: ${e2eMessage.contactMessage.displayName}]"
-                    e2eMessage.hasContactsArrayMessage() -> "[${e2eMessage.contactsArrayMessage.contactsCount} Contacts]"
-                    e2eMessage.hasLocationMessage() -> "[Location: ${e2eMessage.locationMessage.degreesLatitude}, ${e2eMessage.locationMessage.degreesLongitude}]"
-                    e2eMessage.hasLiveLocationMessage() -> "[Live Location]"
-                    e2eMessage.hasGroupInviteMessage() -> "[Group Invite: ${e2eMessage.groupInviteMessage.groupName}]"
+                    e2eMessage.hasContactMessage() -> {
+                        val c = e2eMessage.contactMessage
+                        "[Contact: ${c.displayName}]\n${c.vcard}"
+                    }
+                    e2eMessage.hasContactsArrayMessage() -> {
+                        val contacts = e2eMessage.contactsArrayMessage
+                        "[${contacts.contactsCount} Contacts: ${contacts.contactsList.joinToString(", ") { it.displayName }}]"
+                    }
+                    e2eMessage.hasLocationMessage() -> {
+                        val loc = e2eMessage.locationMessage
+                        val lat = loc.degreesLatitude
+                        val lng = loc.degreesLongitude
+                        val name = loc.name.ifEmpty { null }
+                        val address = loc.address.ifEmpty { null }
+                        val geoUri = "geo:%.5f,%.5f".format(lat, lng)
+                        val mapsUrl = "https://maps.google.com/maps?q=%.5f,%.5f".format(lat, lng)
+                        buildString {
+                            append("Location: ")
+                            if (name != null) append("$name\n")
+                            if (address != null) append("$address\n")
+                            append("$geoUri\n$mapsUrl")
+                        }
+                    }
+                    e2eMessage.hasLiveLocationMessage() -> {
+                        val loc = e2eMessage.liveLocationMessage
+                        "Live Location: geo:%.5f,%.5f".format(loc.degreesLatitude, loc.degreesLongitude)
+                    }
+                    e2eMessage.hasGroupInviteMessage() -> {
+                        val inv = e2eMessage.groupInviteMessage
+                        "[Group Invite: ${inv.groupName}]\nCode: ${inv.inviteCode}\nExpiry: ${inv.inviteExpiration}"
+                    }
                     e2eMessage.hasReactionMessage() -> e2eMessage.reactionMessage.text
-                    e2eMessage.hasPollCreationMessage() -> "[Poll: ${e2eMessage.pollCreationMessage.name}]"
-                    e2eMessage.hasPollCreationMessageV2() -> "[Poll: ${e2eMessage.pollCreationMessageV2.name}]"
-                    e2eMessage.hasPollCreationMessageV3() -> "[Poll: ${e2eMessage.pollCreationMessageV3.name}]"
+                    e2eMessage.hasPollCreationMessage() -> {
+                        val poll = e2eMessage.pollCreationMessage
+                        "[Poll: ${poll.name}]\n${poll.optionsList.joinToString("\n") { "• ${it.optionName}" }}"
+                    }
+                    e2eMessage.hasPollCreationMessageV2() -> {
+                        val poll = e2eMessage.pollCreationMessageV2
+                        "[Poll: ${poll.name}]\n${poll.optionsList.joinToString("\n") { "• ${it.optionName}" }}"
+                    }
+                    e2eMessage.hasPollCreationMessageV3() -> {
+                        val poll = e2eMessage.pollCreationMessageV3
+                        "[Poll: ${poll.name}]\n${poll.optionsList.joinToString("\n") { "• ${it.optionName}" }}"
+                    }
                     e2eMessage.hasPollUpdateMessage() -> "[Poll Vote]"
-                    e2eMessage.hasEventMessage() -> "[Event: ${e2eMessage.eventMessage.name}]"
+                    e2eMessage.hasEventMessage() -> {
+                        val evt = e2eMessage.eventMessage
+                        buildString {
+                            append("[Event: ${evt.name}]")
+                            if (evt.description.isNotEmpty()) append("\n${evt.description}")
+                            if (evt.location?.name?.isNotEmpty() == true) append("\nAt: ${evt.location.name}")
+                        }
+                    }
                     e2eMessage.hasCommentMessage() -> e2eMessage.commentMessage.message?.conversation ?: "[Comment]"
                     e2eMessage.hasProtocolMessage() -> {
                         when (parsedType) {
                             "revoke" -> "[Message Deleted]"
                             "edit" -> e2eMessage.protocolMessage.editedMessage?.conversation ?: "[Edited]"
-                            "disappearing timer change" -> "[Disappearing Timer Changed]"
+                            "disappearing timer change" -> {
+                                val timer = e2eMessage.protocolMessage.ephemeralExpiration
+                                if (timer == 0) "[Disappearing Messages Disabled]"
+                                else "[Disappearing Messages: ${formatDisappearingTimer(timer)}]"
+                            }
                             else -> ""
                         }
                     }
                     e2eMessage.hasOrderMessage() -> "[Order]"
                     e2eMessage.hasProductMessage() -> "[Product]"
-                    e2eMessage.hasListMessage() -> e2eMessage.listMessage.title.ifEmpty { "[List]" }
-                    e2eMessage.hasButtonsMessage() -> e2eMessage.buttonsMessage.contentText.ifEmpty { "[Buttons]" }
-                    e2eMessage.hasTemplateMessage() -> "[Template]"
-                    e2eMessage.hasInteractiveMessage() -> "[Interactive]"
+                    e2eMessage.hasListMessage() -> {
+                        val list = e2eMessage.listMessage
+                        buildString {
+                            append(list.title.ifEmpty { "[List]" })
+                            if (list.description.isNotEmpty()) append("\n${list.description}")
+                            list.sectionsList.forEach { section ->
+                                if (section.title.isNotEmpty()) append("\n**${section.title}**")
+                                section.rowsList.forEach { row ->
+                                    append("\n• ${row.title}")
+                                    if (row.description.isNotEmpty()) append(" - ${row.description}")
+                                }
+                            }
+                        }
+                    }
+                    e2eMessage.hasListResponseMessage() -> {
+                        val resp = e2eMessage.listResponseMessage
+                        "[Selected: ${resp.title}]"
+                    }
+                    e2eMessage.hasButtonsMessage() -> {
+                        val btns = e2eMessage.buttonsMessage
+                        buildString {
+                            append(btns.contentText.ifEmpty { "[Buttons]" })
+                            btns.buttonsList.forEach { btn ->
+                                append("\n[${btn.buttonText.displayText}]")
+                            }
+                        }
+                    }
+                    e2eMessage.hasButtonsResponseMessage() -> {
+                        "[Button: ${e2eMessage.buttonsResponseMessage.selectedDisplayText}]"
+                    }
+                    e2eMessage.hasTemplateMessage() -> {
+                        val tmpl = e2eMessage.templateMessage
+                        if (tmpl.hasHydratedTemplate()) {
+                            val hydrated = tmpl.hydratedTemplate
+                            buildString {
+                                append(hydrated.hydratedContentText.ifEmpty { "[Template]" })
+                                if (hydrated.hydratedFooterText.isNotEmpty()) append("\n_${hydrated.hydratedFooterText}_")
+                                hydrated.hydratedButtonsList.forEach { btn ->
+                                    when {
+                                        btn.hasQuickReplyButton() -> append("\n[${btn.quickReplyButton.displayText}]")
+                                        btn.hasUrlButton() -> append("\n[${btn.urlButton.displayText}: ${btn.urlButton.url}]")
+                                        btn.hasCallButton() -> append("\n[Call: ${btn.callButton.displayText}]")
+                                    }
+                                }
+                            }
+                        } else "[Template]"
+                    }
+                    e2eMessage.hasInteractiveMessage() -> {
+                        val inter = e2eMessage.interactiveMessage
+                        buildString {
+                            if (inter.hasBody()) append(inter.body.text)
+                            else append("[Interactive]")
+                            if (inter.hasFooter()) append("\n_${inter.footer.text}_")
+                            if (inter.hasNativeFlowMessage()) {
+                                inter.nativeFlowMessage.buttonsList.forEach { btn ->
+                                    append("\n[${btn.name}]")
+                                }
+                            }
+                        }
+                    }
+                    e2eMessage.hasKeepInChatMessage() -> "[Keep in Chat]"
+                    e2eMessage.hasPinInChatMessage() -> "[Pin in Chat]"
+                    e2eMessage.hasEncReactionMessage() -> {
+                        val encReaction = e2eMessage.encReactionMessage
+                        if (encReaction.hasTargetMessageKey()) {
+                            val targetId = encReaction.targetMessageKey.id
+                            "[Reaction to $targetId]"
+                        } else {
+                            "[Encrypted Reaction]"
+                        }
+                    }
+                    e2eMessage.hasEncCommentMessage() -> "[Encrypted Comment]"
+                    e2eMessage.hasNewsletterAdminInviteMessage() -> "[Newsletter Admin Invite]"
+                    e2eMessage.hasSecretEncryptedMessage() -> "[Secret Encrypted Message]"
+                    e2eMessage.hasBotInvokeMessage() -> "[Bot Message]"
                     else -> ""
                 }
                 val mediaUrl = when {
@@ -1353,6 +1730,60 @@ object WhatsAppProtocol {
                 val revokeTargetId = if (isRevoke) e2eMessage.protocolMessage.key.id else null
                 val isEdit = parsedType == "edit"
                 val editTargetId = if (isEdit) e2eMessage.protocolMessage.key.id else null
+
+                val locationData = when {
+                    e2eMessage.hasLocationMessage() -> LocationData(
+                        latitude = e2eMessage.locationMessage.degreesLatitude,
+                        longitude = e2eMessage.locationMessage.degreesLongitude,
+                        name = e2eMessage.locationMessage.name.ifEmpty { null },
+                        address = e2eMessage.locationMessage.address.ifEmpty { null },
+                        url = e2eMessage.locationMessage.url.ifEmpty { null },
+                    )
+                    e2eMessage.hasLiveLocationMessage() -> LocationData(
+                        latitude = e2eMessage.liveLocationMessage.degreesLatitude,
+                        longitude = e2eMessage.liveLocationMessage.degreesLongitude,
+                        isLive = true,
+                    )
+                    else -> null
+                }
+
+                val contactData = when {
+                    e2eMessage.hasContactMessage() -> ContactData(
+                        displayName = e2eMessage.contactMessage.displayName,
+                        vcard = e2eMessage.contactMessage.vcard,
+                    )
+                    else -> null
+                }
+
+                val pollData = when {
+                    e2eMessage.hasPollCreationMessage() -> PollData.fromCreation(e2eMessage.pollCreationMessage)
+                    e2eMessage.hasPollCreationMessageV2() -> PollData.fromCreationV2(e2eMessage.pollCreationMessageV2)
+                    e2eMessage.hasPollCreationMessageV3() -> PollData.fromCreationV3(e2eMessage.pollCreationMessageV3)
+                    e2eMessage.hasPollUpdateMessage() -> PollData(
+                        isPollVote = true,
+                        pollCreationMessageKey = e2eMessage.pollUpdateMessage.pollCreationMessageKey?.id,
+                        encPayload = e2eMessage.pollUpdateMessage.vote?.selectedOptions?.map { it.toByteArray() },
+                    )
+                    else -> null
+                }
+
+                val groupInviteData = if (e2eMessage.hasGroupInviteMessage()) {
+                    val inv = e2eMessage.groupInviteMessage
+                    GroupInviteMeta(
+                        jid = inv.groupJid ?: "",
+                        code = inv.inviteCode ?: "",
+                        expiration = inv.inviteExpiration,
+                        inviter = participant ?: from,
+                        groupName = inv.groupName ?: "",
+                    )
+                } else null
+
+                val disappearingTimer = if (parsedType == "disappearing timer change") {
+                    e2eMessage.protocolMessage.ephemeralExpiration.toLong()
+                } else null
+
+                val contextInfo = extractContextInfo(e2eMessage)
+
                 WhatsAppMessage(
                     id = id,
                     from = from,
@@ -1369,6 +1800,16 @@ object WhatsAppProtocol {
                     isEdit = isEdit,
                     editTargetId = editTargetId,
                     messageType = parsedType,
+                    locationData = locationData,
+                    contactData = contactData,
+                    pollData = pollData,
+                    groupInviteData = groupInviteData,
+                    disappearingTimer = disappearingTimer,
+                    isForwarded = contextInfo.isForwarded,
+                    forwardingScore = contextInfo.forwardingScore,
+                    replyToId = contextInfo.replyToId,
+                    mentionedJids = contextInfo.mentionedJids,
+                    e2eMessage = e2eMessage,
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to parse E2E message", e)
@@ -1408,4 +1849,71 @@ data class WhatsAppMessage(
     val isEdit: Boolean = false,
     val editTargetId: String? = null,
     val messageType: String = "unknown",
+    val locationData: LocationData? = null,
+    val contactData: ContactData? = null,
+    val pollData: PollData? = null,
+    val groupInviteData: GroupInviteMeta? = null,
+    val disappearingTimer: Long? = null,
+    val isForwarded: Boolean = false,
+    val forwardingScore: Int = 0,
+    val replyToId: String? = null,
+    val mentionedJids: List<String> = emptyList(),
+    val e2eMessage: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message? = null,
+)
+
+data class LocationData(
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val name: String? = null,
+    val address: String? = null,
+    val url: String? = null,
+    val isLive: Boolean = false,
+) {
+    fun toGeoUri(): String = "geo:%.5f,%.5f".format(latitude, longitude)
+    fun toMapsUrl(): String = "https://maps.google.com/maps?q=%.5f,%.5f".format(latitude, longitude)
+}
+
+data class ContactData(
+    val displayName: String = "",
+    val vcard: String = "",
+)
+
+data class PollData(
+    val question: String = "",
+    val options: List<String> = emptyList(),
+    val selectableOptionCount: Int = 0,
+    val isPollVote: Boolean = false,
+    val pollCreationMessageKey: String? = null,
+    val encPayload: List<ByteArray>? = null,
+) {
+    companion object {
+        fun fromCreation(poll: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.PollCreationMessage): PollData {
+            return PollData(
+                question = poll.name,
+                options = poll.optionsList.map { it.optionName },
+                selectableOptionCount = poll.selectableOptionsCount,
+            )
+        }
+        fun fromCreationV2(poll: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.PollCreationMessage): PollData {
+            return PollData(
+                question = poll.name,
+                options = poll.optionsList.map { it.optionName },
+                selectableOptionCount = poll.selectableOptionsCount,
+            )
+        }
+        fun fromCreationV3(poll: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.PollCreationMessage): PollData {
+            return PollData(
+                question = poll.name,
+                options = poll.optionsList.map { it.optionName },
+                selectableOptionCount = poll.selectableOptionsCount,
+            )
+        }
+    }
+}
+
+data class ContextInfoResult(
+    val isForwarded: Boolean = false,
+    val forwardingScore: Int = 0,
+    val replyToId: String? = null,
+    val mentionedJids: List<String> = emptyList(),
 )

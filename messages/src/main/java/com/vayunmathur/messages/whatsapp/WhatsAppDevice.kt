@@ -107,6 +107,7 @@ enum class MessageErrorType {
     NO_ERROR,
     DECRYPTION_FAILED,
     MEDIA_NOT_FOUND,
+    UNDECRYPTABLE,
 }
 
 /**
@@ -132,4 +133,16 @@ data class GhostMetadata(
  */
 data class ReactionMetadata(
     val senderDeviceId: Int = 0,
+)
+
+/**
+ * Group invite metadata matching Go's waid.GroupInviteMeta.
+ */
+data class GroupInviteMeta(
+    val jid: String,
+    val code: String,
+    val expiration: Long,
+    val inviter: String,
+    val groupName: String,
+    val isParentGroup: Boolean = false,
 )

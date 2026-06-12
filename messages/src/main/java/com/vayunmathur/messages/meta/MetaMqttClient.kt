@@ -31,7 +31,9 @@ class MetaMqttClient(
         const val TAG = "MetaMqttClient"
         const val PING_INTERVAL_MS = 10000L
         const val PONG_TIMEOUT_MS = 30000L
-        const val RECONNECT_DELAY_MS = 5000L
+        const val INITIAL_RECONNECT_DELAY_MS = 1000L
+        const val MAX_RECONNECT_DELAY_MS = 60000L
+        const val MAX_RECONNECT_ATTEMPTS = 10
         const val ACK_TIMEOUT_MS = 30000L
     }
 
@@ -45,6 +47,7 @@ class MetaMqttClient(
     private var reconnectJob: Job? = null
     private var pingJob: Job? = null
     private var pongTimeoutJob: Job? = null
+    private var reconnectAttempts = 0
 
     private val packetsSent = AtomicInteger(0)
     private val sessionId = MetaProtocol.generateSessionId()
@@ -135,10 +138,19 @@ class MetaMqttClient(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure", t)
                 cancelAllPending()
-                scope.launch {
-                    _connectionState.emit(ConnectionState.Disconnected("Failure: ${t.message}"))
+                // Issue #4: Detect HTTP auth/consent errors from WebSocket handshake failure
+                val statusCode = response?.code
+                val reason = when {
+                    statusCode == 401 || statusCode == 403 -> "TokenExpired"
+                    t.message?.contains("consent", ignoreCase = true) == true -> "ConsentRequired"
+                    else -> "Failure: ${t.message}"
                 }
-                scheduleReconnect()
+                scope.launch {
+                    _connectionState.emit(ConnectionState.Disconnected(reason))
+                }
+                if (reason != "TokenExpired" && reason != "ConsentRequired") {
+                    scheduleReconnect()
+                }
             }
         })
     }
@@ -206,8 +218,13 @@ class MetaMqttClient(
     private fun handleConnAck(connAck: MqttFraming.MqttResponse.ConnAck) {
         if (connAck.connectionCode != MetaProtocol.CONNECTION_ACCEPTED) {
             Log.e(TAG, "Connection refused: code=${connAck.connectionCode}")
+            // Issue #4: Detect authentication and consent errors for specific recovery
+            val reason = when (connAck.connectionCode) {
+                4, 5 -> "TokenExpired"    // 4=bad credentials, 5=not authorized
+                else -> "Connection refused: ${connAck.connectionCode}"
+            }
             scope.launch {
-                _connectionState.emit(ConnectionState.Disconnected("Connection refused: ${connAck.connectionCode}"))
+                _connectionState.emit(ConnectionState.Disconnected(reason))
             }
             return
         }
@@ -224,6 +241,7 @@ class MetaMqttClient(
     }
 
     private suspend fun handleReady() {
+        reconnectAttempts = 0
         if (previouslyConnected) {
             _connectionState.emit(ConnectionState.Connected)
             startPing()
@@ -235,9 +253,13 @@ class MetaMqttClient(
         val packetId = safePacketId()
         sendPublishPacket(MetaProtocol.TOPIC_LS_APP_SETTINGS, appSettingsJson, packetId)
 
-        // Subscribe to required topics (from messagix/events.go handleReadyEvent)
+        // Subscribe to required topics (from messagix/events.go handleReadyEvent + Go bridge)
         sendSubscribePacket(MetaProtocol.TOPIC_LS_FOREGROUND_STATE, MqttPackets.QOS_LEVEL_0)
         sendSubscribePacket(MetaProtocol.TOPIC_LS_RESP, MqttPackets.QOS_LEVEL_0)
+        sendSubscribePacket("/t_ms", MqttPackets.QOS_LEVEL_0)
+        sendSubscribePacket(MetaProtocol.TOPIC_THREAD_TYPING, MqttPackets.QOS_LEVEL_0)
+        sendSubscribePacket(MetaProtocol.TOPIC_ORCA_TYPING_NOTIFICATIONS, MqttPackets.QOS_LEVEL_0)
+        sendSubscribePacket("/orca_presence", MqttPackets.QOS_LEVEL_0)
 
         _connectionState.emit(ConnectionState.Connected)
         startPing()
@@ -411,9 +433,19 @@ class MetaMqttClient(
 
     private fun scheduleReconnect() {
         reconnectJob?.cancel()
+        reconnectAttempts++
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            Log.e(TAG, "Max reconnect attempts ($MAX_RECONNECT_ATTEMPTS) reached for ${authData.platform}")
+            scope.launch {
+                _connectionState.emit(ConnectionState.Disconnected("Max reconnect attempts reached"))
+            }
+            return
+        }
+        val delayMs = (INITIAL_RECONNECT_DELAY_MS * (1L shl (reconnectAttempts - 1).coerceAtMost(6)))
+            .coerceAtMost(MAX_RECONNECT_DELAY_MS)
         reconnectJob = scope.launch {
-            delay(RECONNECT_DELAY_MS)
-            Log.i(TAG, "Attempting reconnect for ${authData.platform}")
+            Log.i(TAG, "Reconnect attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS in ${delayMs}ms for ${authData.platform}")
+            delay(delayMs)
             connect()
         }
     }

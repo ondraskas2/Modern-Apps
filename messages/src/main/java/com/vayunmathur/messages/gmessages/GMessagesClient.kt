@@ -51,8 +51,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import client.Client.ReplyPayload
+import conversations.Conversations.MessageStatusType
+import conversations.Conversations.ConversationSendMode
+import conversations.Conversations.ConversationStatus
+import conversations.Conversations.ConversationType
+import events.Events.AlertType
+import events.Events.TypingTypes
 import rpc.Rpc.ActionType
 import rpc.Rpc.MessageType
+import settings.SettingsOuterClass
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -125,7 +133,35 @@ object GMessagesClient {
 
     @Volatile private var conversationsFetchedOnce = false
 
-    // --- Message deduplication ring buffer (port of Go's recentUpdates) ---
+    // --- Bridge state tracking (port of Go connector's GMClient fields) ---
+    @Volatile private var browserInactiveType: String = ""
+    @Volatile private var ready = false
+    @Volatile private var phoneResponding = true
+    @Volatile private var noDataReceivedRecently = false
+    @Volatile private var lastDataReceived = System.currentTimeMillis()
+    @Volatile private var batteryLow = false
+    @Volatile private var mobileData = false
+    @Volatile private var switchedToGoogleLogin = false
+    @Volatile private var sessionId = ""
+    @Volatile private var aggressiveReconnect = true
+    private var cachedContacts: List<com.vayunmathur.messages.util.ContactSuggestion>? = null
+    private var contactsFetchedAt = 0L
+    private val contactsFetchLock = Mutex()
+    private val pendingOutgoing = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Volatile private var defaultSimPayload: SettingsOuterClass.SIMPayload? = null
+    private val conversationTypes = java.util.concurrent.ConcurrentHashMap<String, ConversationType>()
+    private val conversationSendModes = java.util.concurrent.ConcurrentHashMap<String, ConversationSendMode>()
+    private val conversationForceRcs = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private var qrRetryCount = 0
+    private const val MAX_QR_RETRIES = 6
+
+    // Issue 2: message edit detection — track content hashes per message ID
+    private val messageContentHashes = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    // Issue 5: reaction sync per-user — track (messageId, userId) → emoji to prevent duplicate events
+    private val reactionState = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, String>()
+
+    // --- Message deduplication ring buffer
     private data class UpdateDedupItem(val id: String, val hash: ByteArray)
     private val recentUpdates = arrayOfNulls<UpdateDedupItem>(8)
     private var recentUpdatesPtr = 0
@@ -165,34 +201,82 @@ object GMessagesClient {
         scope.launch { freshAuth.save(appContext) }
         outgoingIds.clear()
         conversationsFetchedOnce = false
+        browserInactiveType = ""
+        ready = false
+        phoneResponding = true
+        noDataReceivedRecently = false
+        batteryLow = false
+        mobileData = false
+        switchedToGoogleLogin = false
+        sessionId = ""
+        cachedContacts = null
+        contactsFetchedAt = 0L
+        pendingOutgoing.clear()
+        defaultSimPayload = null
+        conversationTypes.clear()
+        conversationSendModes.clear()
+        conversationForceRcs.clear()
+        messageContentHashes.clear()
+        reactionState.clear()
+        qrRetryCount = 0
         rpc.close()
         media.close()
         _state.value = State.Idle
     }
 
     suspend fun startPair(): String {
+        qrRetryCount = 0
+        return startPairAttempt()
+    }
+
+    private suspend fun startPairAttempt(): String {
         try {
             val qrUrl = authMutex.withLock {
-                // Fresh keys for a fresh pair.
-                auth = AuthData.generateInitial()
-                val result = PairFlow.registerAndBuildQrUrl(rpc, auth)
-                val ttlUs = result.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
-                auth = auth.copy(
-                    tachyonAuthTokenB64 = android.util.Base64.encodeToString(result.tachyonToken, android.util.Base64.NO_WRAP),
-                    tachyonTtlUs = ttlUs,
-                    tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
-                )
-                result.qrUrl
+                if (qrRetryCount == 0) {
+                    auth = AuthData.generateInitial()
+                    val result = PairFlow.registerAndBuildQrUrl(rpc, auth)
+                    val ttlUs = result.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
+                    auth = auth.copy(
+                        tachyonAuthTokenB64 = android.util.Base64.encodeToString(result.tachyonToken, android.util.Base64.NO_WRAP),
+                        tachyonTtlUs = ttlUs,
+                        tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
+                    )
+                    result.qrUrl
+                } else {
+                    val result = PairFlow.refreshPhoneRelay(rpc, auth)
+                    val ttlUs = result.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
+                    auth = auth.copy(
+                        tachyonAuthTokenB64 = android.util.Base64.encodeToString(result.tachyonToken, android.util.Base64.NO_WRAP),
+                        tachyonTtlUs = ttlUs,
+                        tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
+                    )
+                    result.qrUrl
+                }
             }
-            // Open the long-poll now so we receive the Paired event when the
-            // user finishes scanning.
-            longPoll.start(scope)
+            if (qrRetryCount == 0) {
+                longPoll.start(scope)
+            }
             _state.value = State.Pairing(qrUrl)
+            qrRetryCount++
             return qrUrl
         } catch (t: Throwable) {
-            Log.e(TAG, "startPair failed", t)
+            Log.e(TAG, "startPair failed (attempt $qrRetryCount)", t)
             _state.value = State.Disconnected("Pair failed: ${t.message}")
             throw t
+        }
+    }
+
+    /** Refresh the QR code (up to MAX_QR_RETRIES). Returns the new QR URL. */
+    suspend fun refreshQr(): String? {
+        if (qrRetryCount >= MAX_QR_RETRIES) {
+            Log.w(TAG, "QR refresh exhausted ($qrRetryCount/$MAX_QR_RETRIES)")
+            return null
+        }
+        return try {
+            startPairAttempt()
+        } catch (t: Throwable) {
+            Log.e(TAG, "QR refresh failed", t)
+            null
         }
     }
 
@@ -207,13 +291,19 @@ object GMessagesClient {
      *
      * Returns `true` iff the relay reports `SUCCESS`.
      */
-    suspend fun sendMessage(conversationId: String, body: String): Boolean {
+    suspend fun sendMessage(
+        conversationId: String,
+        body: String,
+        replyToMessageId: String? = null,
+        isEmote: Boolean = false,
+    ): Boolean {
         if (_state.value !is State.Connected) return false
         val webId = conversationId.substringAfter(':', conversationId)
+        val text = if (isEmote) "/me $body" else body
         val info = MessageInfo.newBuilder()
-            .setMessageContent(MessageContent.newBuilder().setContent(body))
+            .setMessageContent(MessageContent.newBuilder().setContent(text))
             .build()
-        return sendWithInfos(webId, listOf(info))
+        return sendWithInfos(webId, listOf(info), replyToMessageId = replyToMessageId)
     }
 
     /**
@@ -246,11 +336,15 @@ object GMessagesClient {
                 .setMessageContent(MessageContent.newBuilder().setContent(caption))
                 .build()
         }
-        return sendWithInfos(webId, infos)
+        return sendWithInfos(webId, infos, replyToMessageId = null)
     }
 
     /** Common SEND_MESSAGE plumbing — builds the envelope and awaits a response. */
-    private suspend fun sendWithInfos(webId: String, infos: List<MessageInfo>): Boolean {
+    private suspend fun sendWithInfos(
+        webId: String,
+        infos: List<MessageInfo>,
+        replyToMessageId: String? = null,
+    ): Boolean {
         val tmpId = "tmp_${kotlin.random.Random.nextLong(1_000_000_000_000L).toString().padStart(12, '0')}"
         val participantId = outgoingIds[webId].orEmpty()
         val payload = MessagePayload.newBuilder()
@@ -260,17 +354,40 @@ object GMessagesClient {
             .setTmpID2(tmpId)
             .addAllMessageInfo(infos)
             .build()
-        val req = SendMessageRequest.newBuilder()
+        val reqBuilder = SendMessageRequest.newBuilder()
             .setConversationID(webId)
             .setMessagePayload(payload)
             .setTmpID(tmpId)
-            .build()
+        // SIM payload (item 4)
+        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        // ForceRCS flag (item 20)
+        val convType = conversationTypes[webId]
+        val sendMode = conversationSendModes[webId]
+        val forceRcs = conversationForceRcs[webId] == true
+        if (convType == ConversationType.RCS &&
+            sendMode == ConversationSendMode.SEND_MODE_AUTO && forceRcs) {
+            reqBuilder.setForceRCS(true)
+        }
+        // Reply support (item 5)
+        if (replyToMessageId != null) {
+            val replyWebId = replyToMessageId.substringAfter(':', replyToMessageId)
+            reqBuilder.setReply(ReplyPayload.newBuilder().setMessageID(replyWebId))
+        }
+        // Track for remote echo (item 23)
+        pendingOutgoing[tmpId] = webId
+        val req = reqBuilder.build()
         val resp = sessionHandler.sendAndWait(ActionType.SEND_MESSAGE, req)
-            ?: return false.also { Log.w(TAG, "SEND_MESSAGE timed out") }
-        val data = resp.decryptedData ?: return false
+            ?: return false.also {
+                Log.w(TAG, "SEND_MESSAGE timed out")
+                pendingOutgoing.remove(tmpId)
+            }
+        val data = resp.decryptedData ?: return false.also { pendingOutgoing.remove(tmpId) }
         val parsed = runCatching { SendMessageResponse.parseFrom(data) }.getOrNull()
-            ?: return false
+            ?: return false.also { pendingOutgoing.remove(tmpId) }
         Log.i(TAG, "SEND_MESSAGE status=${parsed.status}")
+        if (parsed.status != SendMessageResponse.Status.SUCCESS) {
+            pendingOutgoing.remove(tmpId)
+        }
         return parsed.status == SendMessageResponse.Status.SUCCESS
     }
 
@@ -329,11 +446,13 @@ object GMessagesClient {
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val msgWebId = messageId.substringAfter(':', messageId)
-        val req = SendReactionRequest.newBuilder()
+        val qualifiedEmoji = fullyQualifyEmoji(emoji)
+        val reqBuilder = SendReactionRequest.newBuilder()
             .setMessageID(msgWebId)
             .setAction(action)
-            .setReactionData(ReactionData.newBuilder().setUnicode(emoji))
-            .build()
+            .setReactionData(ReactionData.newBuilder().setUnicode(qualifiedEmoji))
+        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        val req = reqBuilder.build()
         val resp = sessionHandler.sendAndWait(ActionType.SEND_REACTION, req) ?: return false
         val body = resp.decryptedData ?: return false
         val parsed = runCatching { SendReactionResponse.parseFrom(body) }.getOrNull()
@@ -347,14 +466,28 @@ object GMessagesClient {
     suspend fun sendTyping(conversationId: String): Boolean {
         if (_state.value !is State.Connected) return false
         val webId = conversationId.substringAfter(':', conversationId)
-        val req = TypingUpdateRequest.newBuilder()
+        val reqBuilder = TypingUpdateRequest.newBuilder()
             .setData(
                 TypingUpdateRequest.Data.newBuilder()
                     .setConversationID(webId)
                     .setTyping(true)
             )
-            .build()
-        return sessionHandler.sendNoWait(ActionType.TYPING_UPDATES, req)
+        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        return sessionHandler.sendNoWait(ActionType.TYPING_UPDATES, reqBuilder.build())
+    }
+
+    /** Stop-typing support (item 9). Fire-and-forget. */
+    suspend fun sendStopTyping(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val webId = conversationId.substringAfter(':', conversationId)
+        val reqBuilder = TypingUpdateRequest.newBuilder()
+            .setData(
+                TypingUpdateRequest.Data.newBuilder()
+                    .setConversationID(webId)
+                    .setTyping(false)
+            )
+        defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
+        return sessionHandler.sendNoWait(ActionType.TYPING_UPDATES, reqBuilder.build())
     }
 
     /**
@@ -414,11 +547,10 @@ object GMessagesClient {
         }.getOrNull() ?: return null
 
         if (parsed.status == GetOrCreateConversationResponse.Status.CREATE_RCS) {
-            // The server is telling us "you asked for RCS but this set
-            // of participants isn't RCS-capable — try again without".
-            // The bridge does the same retry (handlematrix.go).
-            Log.i(TAG, "getOrCreate: CREATE_RCS — retrying with SMS")
-            return getOrCreateConversation(numbers, rcsGroupName = null, createRcsGroup = false)
+            // Server says "retry with createRcsGroup = true". Port of
+            // Go startchat.go: reqData.CreateRCSGroup = ptr.Ptr(true)
+            Log.i(TAG, "getOrCreate: CREATE_RCS — retrying with createRcsGroup=true")
+            return getOrCreateConversation(numbers, rcsGroupName = rcsGroupName ?: "", createRcsGroup = true)
         }
         if (!parsed.hasConversation()) {
             Log.w(TAG, "getOrCreate: status=${parsed.status} but no conversation")
@@ -441,17 +573,26 @@ object GMessagesClient {
      */
     suspend fun listContacts(): List<com.vayunmathur.messages.util.ContactSuggestion> {
         if (_state.value !is State.Connected) return emptyList()
-        val req = ListContactsRequest.newBuilder()
-            .setI1(1)
-            .setI2(350)
-            .setI3(50)
-            .build()
-        val resp = sessionHandler.sendAndWait(ActionType.LIST_CONTACTS, req) ?: return emptyList()
-        val parsed = runCatching {
-            ListContactsResponse.parseFrom(resp.decryptedData ?: return emptyList())
-        }.getOrNull() ?: return emptyList()
-        return (0 until parsed.contactsCount).mapNotNull { i ->
-            parsed.getContacts(i).toSuggestion()
+        contactsFetchLock.withLock {
+            val cached = cachedContacts
+            if (cached != null && System.currentTimeMillis() - contactsFetchedAt < 5 * 60 * 1000L) {
+                return cached
+            }
+            val req = ListContactsRequest.newBuilder()
+                .setI1(1)
+                .setI2(350)
+                .setI3(50)
+                .build()
+            val resp = sessionHandler.sendAndWait(ActionType.LIST_CONTACTS, req) ?: return cached ?: emptyList()
+            val parsed = runCatching {
+                ListContactsResponse.parseFrom(resp.decryptedData ?: return cached ?: emptyList())
+            }.getOrNull() ?: return cached ?: emptyList()
+            val result = (0 until parsed.contactsCount).mapNotNull { i ->
+                parsed.getContacts(i).toSuggestion()
+            }
+            cachedContacts = result
+            contactsFetchedAt = System.currentTimeMillis()
+            return result
         }
     }
 
@@ -512,6 +653,8 @@ object GMessagesClient {
             updates.hasMessageEvent() -> {
                 val msgs = updates.messageEvent.dataList
                 Log.i(TAG, "GET_UPDATES: ${msgs.size} message event(s)")
+                noDataReceivedRecently = false
+                lastDataReceived = System.currentTimeMillis()
                 msgs.forEach { msg ->
                     if (deduplicateUpdate(msg.messageID, data)) return
                     emitMessage(msg)
@@ -520,6 +663,8 @@ object GMessagesClient {
             updates.hasConversationEvent() -> {
                 val convs = updates.conversationEvent.dataList
                 Log.i(TAG, "GET_UPDATES: ${convs.size} conversation event(s)")
+                noDataReceivedRecently = false
+                lastDataReceived = System.currentTimeMillis()
                 convs.forEach { conv ->
                     if (deduplicateUpdate(conv.conversationID, data)) return
                     if (isOld) {
@@ -531,22 +676,35 @@ object GMessagesClient {
             }
             updates.hasTypingEvent() -> {
                 if (isOld) return
-                val data2 = updates.typingEvent.data
-                Log.d(TAG, "GET_UPDATES typing conv=${data2.conversationID} type=${data2.type}")
+                val typingData = updates.typingEvent.data
+                val convId = typingData.conversationID
+                val isTyping = typingData.type == TypingTypes.STARTED_TYPING
+                val senderId = typingData.user?.number.orEmpty()
+                Log.d(TAG, "GET_UPDATES typing conv=$convId typing=$isTyping sender=$senderId")
+                _events.emit(
+                    GMEvent.TypingIndicator(
+                        source = source,
+                        conversationId = convId,
+                        senderId = senderId,
+                        isTyping = isTyping,
+                    )
+                )
             }
             updates.hasUserAlertEvent() -> {
                 if (isOld) return
-                Log.d(TAG, "GET_UPDATES user-alert: ${updates.userAlertEvent.alertType}")
+                if (!noDataReceivedRecently) lastDataReceived = System.currentTimeMillis()
+                handleUserAlert(updates.userAlertEvent.alertType)
             }
             updates.hasSettingsEvent() -> {
-                Log.d(TAG, "GET_UPDATES settings event")
+                if (!noDataReceivedRecently) lastDataReceived = System.currentTimeMillis()
+                handleSettings(data)
             }
             updates.hasBrowserPresenceCheckEvent() -> {
                 Log.d(TAG, "GET_UPDATES: browser presence check, sending ack")
                 scope.launch { ackBrowserPresence() }
             }
             updates.hasAccountChange() -> {
-                Log.d(TAG, "GET_UPDATES: account change event")
+                handleAccountChange(data)
             }
             else -> Log.d(TAG, "GET_UPDATES: unhandled event kind")
         }
@@ -556,6 +714,134 @@ object GMessagesClient {
         sessionHandler.sendMessageNoResponse(SendMessageParams(
             action = ActionType.ACK_BROWSER_PRESENCE,
         ))
+    }
+
+    /** Port of Go's handleUserAlert (handlegmessages.go:256-337). */
+    private fun handleUserAlert(alertType: AlertType) {
+        Log.d(TAG, "handleUserAlert: $alertType")
+        when (alertType) {
+            AlertType.BROWSER_INACTIVE,
+            AlertType.BROWSER_INACTIVE_FROM_TIMEOUT,
+            AlertType.BROWSER_INACTIVE_FROM_INACTIVITY -> {
+                browserInactiveType = alertType.name
+                Log.i(TAG, "Browser became inactive: $alertType")
+            }
+            AlertType.BROWSER_ACTIVE -> {
+                val wasInactive = browserInactiveType.isNotEmpty() || !ready
+                browserInactiveType = ""
+                ready = true
+                val newSessionId = sessionHandler.currentSessionId()
+                val sessionIdChanged = sessionId.isNotEmpty() && sessionId != newSessionId
+                if (sessionIdChanged || wasInactive || noDataReceivedRecently) {
+                    Log.i(TAG, "BROWSER_ACTIVE: resyncing (sessionChanged=$sessionIdChanged wasInactive=$wasInactive noData=$noDataReceivedRecently)")
+                    sessionId = newSessionId
+                    scope.launch { kickoffBackfill() }
+                } else {
+                    sessionId = newSessionId
+                }
+                noDataReceivedRecently = false
+                lastDataReceived = System.currentTimeMillis()
+            }
+            AlertType.MOBILE_DATA_CONNECTION -> {
+                mobileData = true
+                Log.d(TAG, "Phone connected to mobile data")
+            }
+            AlertType.MOBILE_WIFI_CONNECTION -> {
+                mobileData = false
+                Log.d(TAG, "Phone connected to WiFi")
+            }
+            AlertType.MOBILE_BATTERY_LOW -> {
+                batteryLow = true
+                Log.d(TAG, "Phone battery low")
+            }
+            AlertType.MOBILE_BATTERY_RESTORED -> {
+                batteryLow = false
+                Log.d(TAG, "Phone battery restored")
+            }
+            AlertType.MOBILE_DATABASE_SYNC_STARTED,
+            AlertType.MOBILE_DATABASE_PARTIAL_SYNC_STARTED -> {
+                Log.d(TAG, "Mobile database sync started")
+            }
+            AlertType.MOBILE_DATABASE_SYNC_COMPLETE,
+            AlertType.MOBILE_DATABASE_PARTIAL_SYNC_COMPLETED -> {
+                Log.d(TAG, "Mobile database sync complete, triggering backfill")
+                scope.launch { kickoffBackfill() }
+            }
+            AlertType.MOBILE_DATABASE_SYNCING -> {
+                Log.d(TAG, "Mobile database syncing")
+            }
+            AlertType.RCS_CONNECTION -> {
+                Log.d(TAG, "RCS connection established")
+            }
+            else -> Log.d(TAG, "Unhandled alert type: $alertType")
+        }
+    }
+
+    /** Port of Go's handleSettings (handlegmessages.go:361-395). */
+    private fun handleSettings(data: ByteArray) {
+        try {
+            val updates = UpdateEvents.parseFrom(data)
+            if (updates.hasSettingsEvent()) {
+                val settingsProto = updates.settingsEvent
+                if (settingsProto.sIMCardsCount > 0) {
+                    val firstSim = settingsProto.getSIMCards(0)
+                    if (firstSim.hasSIMData()) {
+                        defaultSimPayload = firstSim.sIMData.sIMPayload
+                        Log.d(TAG, "handleSettings: stored SIM payload (${settingsProto.sIMCardsCount} SIMs)")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "handleSettings: could not parse settings: ${e.message}")
+        }
+    }
+
+    /** Port of Go's handleAccountChange (handlegmessages.go:236-254). */
+    private fun handleAccountChange(data: ByteArray) {
+        try {
+            val updates = UpdateEvents.parseFrom(data)
+            if (updates.hasAccountChange()) {
+                val change = updates.accountChange
+                switchedToGoogleLogin = change.enabled
+                Log.i(TAG, "handleAccountChange: account=${change.account} switchedToGoogle=$switchedToGoogleLogin")
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "handleAccountChange: ${e.message}")
+        }
+    }
+
+    /**
+     * Port of Go's aggressiveSetActive (handlegmessages.go:339-359).
+     * Called when the phone seems unresponsive — retries SetActiveSession
+     * with escalating delays.
+     */
+    private fun aggressiveSetActive() {
+        if (!aggressiveReconnect) return
+        scope.launch {
+            val sleepTimes = longArrayOf(5_000, 10_000, 30_000)
+            for (sleepMs in sleepTimes) {
+                if (!phoneResponding) {
+                    Log.i(TAG, "aggressiveSetActive: sleeping ${sleepMs}ms")
+                    kotlinx.coroutines.delay(sleepMs)
+                    if (!phoneResponding) {
+                        try {
+                            sessionHandler.setActiveSession()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "aggressiveSetActive failed: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Variation selector: ensure emoji is fully qualified with VS16 (issue 4). */
+    private fun fullyQualifyEmoji(emoji: String): String {
+        if (emoji.isEmpty() || emoji.contains('\uFE0F')) return emoji
+        // Only append VS16 to single-codepoint emoji that aren't already qualified
+        val codePointCount = emoji.codePointCount(0, emoji.length)
+        if (codePointCount == 1) return "$emoji\uFE0F"
+        return emoji
     }
 
     /** SHA-256 based deduplication ring buffer. Port of Go's deduplicateUpdate. */
@@ -587,15 +873,16 @@ object GMessagesClient {
      * Strip the source prefix because the relay only knows Google's
      * thread id.
      */
-    fun fetchMessages(conversationId: String, count: Int = 100) {
+    fun fetchMessages(conversationId: String, count: Int = 100, cursor: client.Client.Cursor? = null) {
         if (_state.value !is State.Connected) return
         scope.launch {
             val webId = conversationId.substringAfter(':', conversationId)
-            Log.i(TAG, "fetchMessages convId=$webId count=$count")
-            val req = ListMessagesRequest.newBuilder()
+            Log.i(TAG, "fetchMessages convId=$webId count=$count cursor=${cursor != null}")
+            val reqBuilder = ListMessagesRequest.newBuilder()
                 .setConversationID(webId)
                 .setCount(count.toLong())
-                .build()
+            cursor?.let { reqBuilder.setCursor(it) }
+            val req = reqBuilder.build()
             val resp = sessionHandler.sendAndWait(ActionType.LIST_MESSAGES, req)
             if (resp == null) Log.w(TAG, "fetchMessages: no response")
         }
@@ -822,12 +1109,12 @@ object GMessagesClient {
     }
 
     private suspend fun emitConversation(c: conversations.Conversations.Conversation) {
-        // Capture defaultOutgoingID so the SEND_MESSAGE path can route
-        // the outgoing through the right SIM. Keyed by web ID (no prefix).
         c.defaultOutgoingID.takeIf { it.isNotBlank() }?.let { outgoingIds[c.conversationID] = it }
 
-        // Collect the non-self participants — used for both phone-lookup
-        // (1:1 chats) and group-display labeling.
+        // Track conversation type/sendMode/forceRCS for outbound message routing
+        conversationTypes[c.conversationID] = c.type
+        conversationSendModes[c.conversationID] = c.sendMode
+
         val otherParticipants = (0 until c.participantsCount)
             .map { c.getParticipants(it) }
             .filter { !it.isMe }
@@ -835,9 +1122,6 @@ object GMessagesClient {
         val isGroup = c.isGroupChat || otherParticipants.size > 1
         val peerPhone = otherParticipants.firstOrNull { it.id.number.isNotBlank() }?.id?.number
 
-        // Always prefer the device's contact database for naming + photos
-        // (1:1 only). For groups we synthesize a "Alice, Bob & 2 others"
-        // style label below.
         val contact = if (!isGroup) {
             peerPhone?.let { ContactResolver.lookup(appContext, it) }
         } else null
@@ -848,8 +1132,8 @@ object GMessagesClient {
         }
 
         val type = when (c.type) {
-            conversations.Conversations.ConversationType.SMS -> "SMS"
-            conversations.Conversations.ConversationType.RCS -> "RCS"
+            ConversationType.SMS -> "SMS"
+            ConversationType.RCS -> "RCS"
             else -> null
         }
 
@@ -972,21 +1256,122 @@ object GMessagesClient {
     }
 
     private suspend fun emitMessage(m: conversations.Conversations.Message) {
+        val outgoing = m.hasSenderParticipant() && m.senderParticipant.isMe
+
+        // Remote echo handling (item 23): if this is an outgoing message
+        // matching a pending tmpId, it's the server echo of our send.
+        if (outgoing && m.tmpID.isNotBlank()) {
+            pendingOutgoing.remove(m.tmpID)
+        }
+
+        // Issue 1: full message status state machine (ref handlegmessages.go:968-1162)
+        val statusType = m.messageStatus.status
+
+        // MESSAGE_DELETED: emit delete event and return early
+        if (statusType == MessageStatusType.MESSAGE_DELETED) {
+            Log.d(TAG, "emitMessage: MESSAGE_DELETED id=${m.messageID}")
+            messageContentHashes.remove(m.messageID)
+            _events.emit(
+                GMEvent.MessageDeleted(
+                    source = source,
+                    messageId = m.messageID,
+                    conversationId = m.conversationID,
+                    timestamp = toMillis(m.timestamp),
+                )
+            )
+            return
+        }
+
+        // Map status for downstream consumers
+        val statusStr = when (statusType) {
+            MessageStatusType.OUTGOING_DELIVERED -> "delivered"
+            MessageStatusType.OUTGOING_DISPLAYED -> "read"
+            MessageStatusType.OUTGOING_COMPLETE -> "sent"
+            MessageStatusType.INCOMING_AUTO_DOWNLOADING -> "downloading"
+            MessageStatusType.INCOMING_DOWNLOAD_FAILED -> "download_failed"
+            MessageStatusType.INCOMING_MANUAL_DOWNLOADING -> "downloading"
+            MessageStatusType.INCOMING_RETRYING_AUTO_DOWNLOAD -> "downloading"
+            MessageStatusType.INCOMING_DOWNLOAD_FAILED_SIM_HAS_NO_DATA -> "download_failed_no_data"
+            MessageStatusType.INCOMING_DOWNLOAD_CANCELED -> "download_canceled"
+            else -> null
+        }
+
+        // OUTGOING_DELIVERED: emit delivery receipt
+        if (statusType == MessageStatusType.OUTGOING_DELIVERED) {
+            _events.emit(
+                GMEvent.ReadReceipt(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = m.messageID,
+                    timestamp = toMillis(m.timestamp),
+                )
+            )
+        }
+
+        // OUTGOING_DISPLAYED: emit read receipt
+        if (statusType == MessageStatusType.OUTGOING_DISPLAYED) {
+            _events.emit(
+                GMEvent.ReadReceipt(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = m.messageID,
+                    timestamp = toMillis(m.timestamp),
+                )
+            )
+        }
+
+        // Build message body + attempt media download
+        var mediaBytes: ByteArray? = null
+        var mediaMime: String? = null
+        var mediaName: String? = null
         val body = (0 until m.messageInfoCount)
             .mapNotNull { idx ->
                 val info = m.getMessageInfo(idx)
                 when {
                     info.hasMessageContent() -> info.messageContent.content
-                    info.hasMediaContent() -> mediaLabel(info.mediaContent)
+                    info.hasMediaContent() -> {
+                        val mc = info.mediaContent
+                        if (mc.mediaID.isNotBlank() && mc.decryptionKey.size() > 0) {
+                            try {
+                                // TODO: OGG audio should ideally be converted to opus via ffmpeg on Android
+                                val downloaded = media.download(mc.mediaID, mc.decryptionKey.toByteArray())
+                                mediaBytes = downloaded
+                                mediaMime = mc.mimeType
+                                mediaName = mc.mediaName.takeIf { it.isNotBlank() }
+                                mc.mediaName.takeIf { it.isNotBlank() } ?: "[media]"
+                            } catch (e: Exception) {
+                                Log.w(TAG, "media download failed: ${e.message}")
+                                mediaLabel(mc)
+                            }
+                        } else {
+                            mediaLabel(mc)
+                        }
+                    }
                     else -> null
                 }
             }
             .joinToString("\n")
             .ifBlank { "" }
-        // The Message proto has no top-level fromMe boolean, but its
-        // senderParticipant carries an `isMe` flag the relay populates
-        // for outgoing messages. Falls back to incoming when missing.
-        val outgoing = m.hasSenderParticipant() && m.senderParticipant.isMe
+
+        // Issue 2: message edit detection (ref handlegmessages.go:910-954)
+        val contentHash = computeContentHash(m)
+        val previousHash = messageContentHashes.put(m.messageID, contentHash)
+        if (previousHash != null && previousHash != contentHash) {
+            Log.d(TAG, "emitMessage: edit detected id=${m.messageID}")
+            _events.emit(
+                GMEvent.MessageEdited(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = m.messageID,
+                    newBody = body,
+                    timestamp = toMillis(m.timestamp),
+                )
+            )
+        }
+
+        // Issue 5: reaction sync per-user — emit per-user reaction events
+        syncReactions(m)
+
         _events.emit(
             GMEvent.MessageUpdate(
                 source = source,
@@ -1000,6 +1385,10 @@ object GMessagesClient {
                         ?: m.senderParticipant.firstName.takeIf { it.isNotBlank() }
                 } else null,
                 reactionsJson = extractReactionsJson(m),
+                mediaData = mediaBytes,
+                mediaMime = mediaMime,
+                mediaName = mediaName,
+                statusType = statusStr,
             )
         )
         if (!outgoing && body.isNotEmpty()) {
@@ -1016,6 +1405,65 @@ object GMessagesClient {
                         m.senderParticipant.id.number.takeIf { it.isNotBlank() }
                     } else null,
                     timestamp = toMillis(m.timestamp),
+                )
+            )
+        }
+    }
+
+    /** Compute a hash of text + media IDs for edit detection. */
+    private fun computeContentHash(m: conversations.Conversations.Message): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (i in 0 until m.messageInfoCount) {
+            val info = m.getMessageInfo(i)
+            if (info.hasMessageContent()) {
+                digest.update(info.messageContent.content.toByteArray(Charsets.UTF_8))
+            }
+            if (info.hasMediaContent()) {
+                val mediaId = info.mediaContent.mediaID.ifBlank { info.mediaContent.thumbnailMediaID }
+                digest.update(mediaId.toByteArray(Charsets.UTF_8))
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Emit per-user reaction add/remove events, deduplicating via [reactionState]. */
+    private suspend fun syncReactions(m: conversations.Conversations.Message) {
+        val currentReactions = mutableMapOf<Pair<String, String>, String>()
+        for (i in 0 until m.reactionsCount) {
+            val entry = m.getReactions(i)
+            val emoji = entry.data.unicode.takeIf { it.isNotBlank() } ?: continue
+            for (j in 0 until entry.participantIDsCount) {
+                val userId = entry.getParticipantIDs(j)
+                currentReactions[Pair(m.messageID, userId)] = emoji
+            }
+        }
+        // Detect new or changed reactions
+        for ((key, emoji) in currentReactions) {
+            val prev = reactionState.put(key, emoji)
+            if (prev == null || prev != emoji) {
+                _events.emit(
+                    GMEvent.ReactionReceived(
+                        source = source,
+                        conversationId = m.conversationID,
+                        messageId = key.first,
+                        senderId = key.second,
+                        emoji = emoji,
+                    )
+                )
+            }
+        }
+        // Detect removed reactions
+        val removedKeys = reactionState.keys.filter {
+            it.first == m.messageID && it !in currentReactions
+        }
+        for (key in removedKeys) {
+            reactionState.remove(key)
+            _events.emit(
+                GMEvent.ReactionRemoved(
+                    source = source,
+                    conversationId = m.conversationID,
+                    messageId = key.first,
+                    senderId = key.second,
                 )
             )
         }

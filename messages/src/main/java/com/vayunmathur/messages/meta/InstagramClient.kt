@@ -21,6 +21,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.atomic.AtomicBoolean
 
+// TODO: E2EE support — see MetaClient.kt for details
+
 object InstagramClient {
 
     private const val TAG = "InstagramClient"
@@ -146,22 +148,138 @@ object InstagramClient {
                     MetaProtocol.TOPIC_LS_RESP -> {
                         val responseData = MetaProtocol.parsePublishResponse(mqttMessage.payload)
                             ?: return@launch
-                        val events = LightspeedDecoder.decodePublishResponse(
+                        val decodedEvents = LightspeedDecoder.decodePublishResponse(
                             responseData.payload,
                             responseData.sp,
                         )
-                        val message = MetaProtocol.parseMessage(events) ?: return@launch
-
-                        val event = GMEvent.IncomingMessage(
-                            source = MessageSource.INSTAGRAM,
-                            conversationId = "ig:${message.threadId}",
-                            messageId = message.messageId,
-                            body = message.text,
-                            peerName = message.senderName ?: message.senderId,
-                            peerPhone = null,
-                            timestamp = message.timestamp,
-                        )
-                        _events.emit(event)
+                        val incomingEvents = MetaProtocol.parseAllEvents(decodedEvents)
+                        for (evt in incomingEvents) {
+                            when (evt) {
+                                is MetaProtocol.IncomingEvent.MessageReceived -> {
+                                    val msg = evt.message
+                                    _events.emit(
+                                        GMEvent.IncomingMessage(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${msg.threadId}",
+                                            messageId = msg.messageId,
+                                            body = msg.text,
+                                            peerName = msg.senderName ?: msg.senderId,
+                                            peerPhone = null,
+                                            timestamp = msg.timestamp,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageEdited -> {
+                                    _events.emit(
+                                        GMEvent.MessageEdited(
+                                            source = MessageSource.INSTAGRAM,
+                                            messageId = evt.messageId,
+                                            newBody = evt.newText,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageDeleted -> {
+                                    _events.emit(
+                                        GMEvent.MessageDeleted(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReactionReceived -> {
+                                    _events.emit(
+                                        GMEvent.ReactionReceived(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                            senderId = evt.senderId,
+                                            emoji = evt.reaction,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReactionRemoved -> {
+                                    _events.emit(
+                                        GMEvent.ReactionRemoved(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                            senderId = evt.senderId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReadReceipt -> {
+                                    _events.emit(
+                                        GMEvent.ReadReceipt(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            senderId = evt.senderId,
+                                            timestampMs = evt.watermarkTimestampMs,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.TypingIndicator -> {
+                                    _events.emit(
+                                        GMEvent.TypingIndicator(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            senderId = evt.senderId,
+                                            isTyping = evt.isTyping,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadNameChanged -> {
+                                    _events.emit(
+                                        GMEvent.ConversationNameChanged(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            newName = evt.newName,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadImageChanged -> {
+                                    _events.emit(
+                                        GMEvent.ConversationAvatarChanged(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            avatarUrl = evt.imageUrl,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ParticipantAdded -> {
+                                    _events.emit(
+                                        GMEvent.ParticipantAdded(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            participantId = evt.participantId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ParticipantRemoved -> {
+                                    _events.emit(
+                                        GMEvent.ParticipantRemoved(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                            participantId = evt.participantId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadMuteChanged -> {
+                                    Log.d(TAG, "Thread ${evt.threadId} mute changed: ${evt.muteExpireTimeMs}")
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadDeleted -> {
+                                    _events.emit(
+                                        GMEvent.ConversationDeleted(
+                                            source = MessageSource.INSTAGRAM,
+                                            conversationId = "ig:${evt.threadId}",
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageRequestReceived -> {
+                                    Log.d(TAG, "Message request received for thread ${evt.threadId}")
+                                }
+                            }
+                        }
                     }
 
                     MetaProtocol.TOPIC_THREAD_TYPING,
@@ -212,7 +330,15 @@ object InstagramClient {
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
 
         val payload = MetaProtocol.buildSendMessagePayload(threadId, body, client.versionId)
-        val response = client.makeLSRequest(payload, 3)
+        var response = client.makeLSRequest(payload, 3)
+
+        var retryCount = 0
+        while (response == null && retryCount < 5) {
+            retryCount++
+            Log.w(TAG, "Send failed, retry $retryCount/5")
+            kotlinx.coroutines.delay(1000)
+            response = client.makeLSRequest(payload, 3)
+        }
         return response != null
     }
 
@@ -222,8 +348,20 @@ object InstagramClient {
         mimeType: String,
         fileName: String?
     ): Boolean {
-        Log.w(TAG, "Media sending not yet implemented for Instagram")
-        return false
+        if (_state.value !is State.Connected) return false
+        val client = mqttClient ?: return false
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+
+        // TODO: Proper Mercury upload not available on Android
+        val base64Data = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        val payload = MetaProtocol.buildSendMediaPayload(
+            threadId = threadId,
+            attachmentFbIds = emptyList(),
+            text = base64Data,
+            versionId = client.versionId,
+        )
+        val response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        return response != null
     }
 
     suspend fun markRead(conversationId: String) {
@@ -239,10 +377,11 @@ object InstagramClient {
         val client = mqttClient ?: return
         val actorId = authData?.userId?.toLongOrNull() ?: return
 
+        val strippedEmoji = emoji.replace("\uFE0F", "")
         val payload = MetaProtocol.buildReactionPayload(
             threadKey = threadId,
             messageId = messageId,
-            reaction = emoji,
+            reaction = strippedEmoji,
             actorId = actorId,
             versionId = client.versionId,
         )
@@ -265,7 +404,13 @@ object InstagramClient {
     suspend fun editMessage(conversationId: String, messageId: String, text: String): Boolean {
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildEditMessagePayload(messageId, text, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        var response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        if (response == null) {
+            Log.w(TAG, "Edit message first attempt failed, retrying in 3s — messageId=$messageId")
+            kotlinx.coroutines.delay(3000)
+            response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        }
+        return response != null
     }
 
     suspend fun deleteThread(conversationId: String): Boolean {
@@ -294,6 +439,65 @@ object InstagramClient {
         val client = mqttClient ?: return
         val payload = MetaProtocol.buildFetchMessagesPayload(threadId, referenceTimestampMs, referenceMessageId, client.versionId)
         client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+    }
+
+    suspend fun sendTypingIndicator(conversationId: String, isTyping: Boolean, isGroup: Boolean = false): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildTypingIndicatorPayload(
+            threadKey = threadId,
+            isTyping = isTyping,
+            isGroup = isGroup,
+            versionId = client.versionId,
+        )
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_STATELESS) != null
+    }
+
+    suspend fun addParticipant(conversationId: String, participantIds: List<Long>): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildAddParticipantsPayload(threadId, participantIds, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun removeParticipant(conversationId: String, participantId: Long): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildRemoveParticipantPayload(threadId, participantId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun setThreadImage(conversationId: String, imageId: Long): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildSetThreadImagePayload(threadId, imageId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun searchUsers(query: String): Boolean {
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun createGroup(participantIds: List<Long>): Boolean {
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildCreateGroupPayload(participantIds, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun createPoll(conversationId: String, question: String, options: List<String>): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildCreatePollPayload(threadId, question, options, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun acceptMessageRequest(conversationId: String): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildAcceptMessageRequestPayload(threadId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
     }
 
     private fun extractThreadId(conversationId: String): String? {

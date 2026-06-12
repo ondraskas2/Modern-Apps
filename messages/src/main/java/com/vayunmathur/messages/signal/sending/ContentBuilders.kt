@@ -56,7 +56,7 @@ object ContentBuilders {
             .build()
     }
 
-    fun typingMessage(isTyping: Boolean, timestamp: Long): SignalServiceProtos.Content {
+    fun typingMessage(isTyping: Boolean, timestamp: Long, groupId: ByteArray? = null): SignalServiceProtos.Content {
         val action = if (isTyping) {
             SignalServiceProtos.TypingMessage.Action.STARTED
         } else {
@@ -66,6 +66,10 @@ object ContentBuilders {
         val typing = SignalServiceProtos.TypingMessage.newBuilder()
             .setTimestamp(timestamp)
             .setAction(action)
+
+        if (groupId != null) {
+            typing.setGroupId(ByteString.copyFrom(groupId))
+        }
 
         return SignalServiceProtos.Content.newBuilder()
             .setTypingMessage(typing.build())
@@ -163,5 +167,101 @@ object ContentBuilders {
         return SignalServiceProtos.Content.newBuilder()
             .setSyncMessage(syncWithPadding.build())
             .build()
+    }
+
+    fun disappearingTimerMessage(
+        expirationSeconds: Int,
+        timestamp: Long,
+    ): SignalServiceProtos.Content {
+        val dm = SignalServiceProtos.DataMessage.newBuilder()
+            .setTimestamp(timestamp)
+            .setFlags(SignalServiceProtos.DataMessage.Flags.EXPIRATION_TIMER_UPDATE_VALUE)
+            .setExpireTimer(expirationSeconds)
+
+        return SignalServiceProtos.Content.newBuilder()
+            .setDataMessage(dm.build())
+            .build()
+    }
+
+    fun pollCreateMessage(
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+        timestamp: Long,
+    ): SignalServiceProtos.Content {
+        val pollCreate = SignalServiceProtos.DataMessage.PollCreate.newBuilder()
+            .setQuestion(question)
+            .setAllowMultiple(allowMultiple)
+        options.forEach { pollCreate.addOptions(it) }
+
+        val dm = SignalServiceProtos.DataMessage.newBuilder()
+            .setPollCreate(pollCreate.build())
+            .setTimestamp(timestamp)
+
+        return SignalServiceProtos.Content.newBuilder()
+            .setDataMessage(dm.build())
+            .build()
+    }
+
+    fun pollVoteMessage(
+        targetAuthorAci: ByteArray,
+        targetTimestamp: Long,
+        optionIndexes: List<Int>,
+        timestamp: Long,
+    ): SignalServiceProtos.Content {
+        val pollVote = SignalServiceProtos.DataMessage.PollVote.newBuilder()
+            .setTargetAuthorAciBinary(ByteString.copyFrom(targetAuthorAci))
+            .setTargetSentTimestamp(targetTimestamp)
+            .setVoteCount(1)
+        optionIndexes.forEach { pollVote.addOptionIndexes(it) }
+
+        val dm = SignalServiceProtos.DataMessage.newBuilder()
+            .setPollVote(pollVote.build())
+            .setTimestamp(timestamp)
+
+        return SignalServiceProtos.Content.newBuilder()
+            .setDataMessage(dm.build())
+            .build()
+    }
+
+    fun deleteForMeSyncMessage(
+        conversationId: SignalServiceProtos.ConversationIdentifier,
+        mostRecentMessages: List<SignalServiceProtos.AddressableMessage>,
+        isFullDelete: Boolean = true,
+    ): SignalServiceProtos.Content {
+        val deleteForMe = SignalServiceProtos.SyncMessage.DeleteForMe.newBuilder()
+            .addConversationDeletes(
+                SignalServiceProtos.SyncMessage.DeleteForMe.ConversationDelete.newBuilder()
+                    .setConversation(conversationId)
+                    .addAllMostRecentMessages(mostRecentMessages)
+                    .setIsFullDelete(isFullDelete)
+                    .build()
+            )
+
+        val sync = SignalServiceProtos.SyncMessage.newBuilder()
+            .setDeleteForMe(deleteForMe.build())
+
+        return wrapSyncMessage(sync.build())
+    }
+
+    fun messageRequestResponseSync(
+        threadAci: String? = null,
+        groupId: ByteArray? = null,
+        type: SignalServiceProtos.SyncMessage.MessageRequestResponse.Type,
+    ): SignalServiceProtos.Content {
+        val mrr = SignalServiceProtos.SyncMessage.MessageRequestResponse.newBuilder()
+            .setType(type)
+        if (threadAci != null) {
+            val uuidBytes = MessageSender.uuidToBytes(threadAci)
+            mrr.setThreadAciBinary(ByteString.copyFrom(uuidBytes))
+        }
+        if (groupId != null) {
+            mrr.setGroupId(ByteString.copyFrom(groupId))
+        }
+
+        val sync = SignalServiceProtos.SyncMessage.newBuilder()
+            .setMessageRequestResponse(mrr.build())
+
+        return wrapSyncMessage(sync.build())
     }
 }

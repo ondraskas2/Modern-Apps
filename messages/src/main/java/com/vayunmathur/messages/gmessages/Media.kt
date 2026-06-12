@@ -4,6 +4,8 @@ import android.util.Base64
 import android.util.Log
 import authentication.Authentication
 import authentication.Authentication.AuthMessage
+import client.Client.AttachmentInfo
+import client.Client.DownloadAttachmentRequest
 import client.Client.StartMediaUploadRequest
 import client.Client.UploadMediaResponse
 import conversations.Conversations.MediaContent
@@ -73,6 +75,47 @@ class Media(private val authProvider: () -> AuthData) {
             .setDecryptionKey(com.google.protobuf.ByteString.copyFrom(key))
             .setMimeType(mime)
             .build()
+    }
+
+    /**
+     * Download and decrypt incoming media. Port of Go's `Client.DownloadMedia`.
+     *
+     * Sends a GET to the upload URL with an `x-goog-download-metadata` header
+     * containing a base64-encoded [DownloadAttachmentRequest] proto. The
+     * response body is AES-GCM encrypted bytes which we decrypt with [key].
+     */
+    suspend fun download(mediaId: String, key: ByteArray): ByteArray {
+        val auth = authProvider()
+        val downloadReq = DownloadAttachmentRequest.newBuilder()
+            .setInfo(
+                AttachmentInfo.newBuilder()
+                    .setAttachmentID(mediaId)
+                    .setEncrypted(true)
+            )
+            .setAuthData(
+                AuthMessage.newBuilder()
+                    .setRequestID(java.util.UUID.randomUUID().toString())
+                    .setTachyonAuthToken(
+                        com.google.protobuf.ByteString.copyFrom(
+                            auth.tachyonToken()
+                                ?: error("tachyon token is null — not paired or token expired")
+                        )
+                    )
+                    .setNetwork(auth.authNetwork())
+                    .setConfigVersion(PairFlow.ConfigVersion)
+            )
+            .build()
+        val metadata = Base64.encodeToString(downloadReq.toByteArray(), Base64.NO_WRAP)
+        val resp: HttpResponse = http.request(Endpoints.UploadMediaUrl) {
+            method = HttpMethod.Get
+            downloadHeaders(metadata)
+        }
+        if (resp.status.value !in 200..299) {
+            error("media download HTTP ${resp.status.value}")
+        }
+        val encryptedBytes = resp.bodyAsBytes()
+        val cipher = AesGcm(key)
+        return cipher.decryptData(encryptedBytes)
     }
 
     /** Encode + base64 a StartMediaUploadRequest envelope. */
@@ -175,6 +218,25 @@ class Media(private val authProvider: () -> AuthData) {
             append("content-type", "application/x-www-form-urlencoded;charset=UTF-8")
             if (command != null) append("x-goog-upload-command", command)
             if (offset != null) append("x-goog-upload-offset", offset)
+            append("sec-ch-ua-platform", "\"${Endpoints.UAPlatform}\"")
+            append("accept", "*/*")
+            append("origin", "https://messages.google.com")
+            append("sec-fetch-site", "cross-site")
+            append("sec-fetch-mode", "cors")
+            append("sec-fetch-dest", "empty")
+            append("referer", "https://messages.google.com/")
+            append("accept-encoding", "gzip, deflate, br")
+            append("accept-language", "en-US,en;q=0.9")
+        }
+    }
+
+    /** Port of util/func.go.BuildUploadHeaders — used for media download. */
+    private fun io.ktor.client.request.HttpRequestBuilder.downloadHeaders(metadata: String) {
+        headers {
+            append("x-goog-download-metadata", metadata)
+            append("sec-ch-ua", Endpoints.SecUA)
+            append("sec-ch-ua-mobile", Endpoints.SecUAMobile)
+            append("user-agent", Endpoints.UserAgent)
             append("sec-ch-ua-platform", "\"${Endpoints.UAPlatform}\"")
             append("accept", "*/*")
             append("origin", "https://messages.google.com")

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicLong
 
 object MetaProtocol {
@@ -132,6 +133,10 @@ object MetaProtocol {
             )
             if (TOPIC_LS_FOREGROUND_STATE !in topics) topics.add(TOPIC_LS_FOREGROUND_STATE)
             if (TOPIC_LS_RESP !in topics) topics.add(TOPIC_LS_RESP)
+            if ("/t_ms" !in topics) topics.add("/t_ms")
+            if (TOPIC_THREAD_TYPING !in topics) topics.add(TOPIC_THREAD_TYPING)
+            if (TOPIC_ORCA_TYPING_NOTIFICATIONS !in topics) topics.add(TOPIC_ORCA_TYPING_NOTIFICATIONS)
+            if ("/orca_presence" !in topics) topics.add("/orca_presence")
         }
 
         val connectPayload = ConnectJson(
@@ -673,15 +678,429 @@ object MetaProtocol {
         )
     }
 
+    // --- Additional task data classes (from Go bridge socket/*.go) ---
+
+    @Serializable
+    data class AddParticipantsTask(
+        @SerialName("thread_key") val threadKey: Long,
+        @SerialName("contact_ids") val contactIds: List<Long>,
+        @SerialName("sync_group") val syncGroup: Long = 1,
+    )
+
+    @Serializable
+    data class RemoveParticipantTask(
+        @SerialName("thread_id") val threadId: Long,
+        @SerialName("contact_id") val contactId: Long,
+    )
+
+    @Serializable
+    data class SearchUserTask(
+        val query: String,
+        @SerialName("supported_types") val supportedTypes: List<Int> = listOf(1, 2, 3, 4),
+        @SerialName("surface_type") val surfaceType: Int = 15,
+        val secondary: Boolean = false,
+    )
+
+    @Serializable
+    data class SetThreadImageTask(
+        @SerialName("thread_key") val threadKey: Long,
+        @SerialName("image_id") val imageId: Long,
+        @SerialName("sync_group") val syncGroup: Long = 1,
+    )
+
+    @Serializable
+    data class CreateGroupTask(
+        val participants: List<Long>,
+        @SerialName("send_payload") val sendPayload: CreateGroupPayload,
+    )
+
+    @Serializable
+    data class CreateGroupPayload(
+        @SerialName("thread_id") val threadId: Long,
+        @SerialName("otid") val otid: String,
+        val source: Int = 0,
+        @SerialName("send_type") val sendType: Int = 8,
+    )
+
+    @Serializable
+    data class CreatePollTask(
+        @SerialName("thread_key") val threadKey: Long,
+        val question: String,
+        val options: List<String>,
+    )
+
+    @Serializable
+    data class UpdatePresenceTask(
+        @SerialName("thread_key") val threadKey: Long,
+        @SerialName("is_group_thread") val isGroupThread: Long,
+        @SerialName("is_typing") val isTyping: Long,
+        val attribution: Long = 0,
+        @SerialName("sync_group") val syncGroup: Long = 1,
+        @SerialName("thread_type") val threadType: Long = 0,
+    )
+
+    @Serializable
+    data class SendMediaTask(
+        @SerialName("thread_id") val threadId: Long,
+        @SerialName("otid") val otid: String,
+        val source: Int = 0,
+        @SerialName("send_type") val sendType: Int = 3,
+        @SerialName("attachment_fbids") val attachmentFbIds: List<Long>,
+        @SerialName("sync_group") val syncGroup: Long = 1,
+        val text: String = "",
+        @SerialName("initiating_source") val initiatingSource: Int = 0,
+        @SerialName("skip_url_preview_gen") val skipUrlPreviewGen: Int = 0,
+        @SerialName("text_has_links") val textHasLinks: Int = 0,
+        @SerialName("multitab_env") val multitabEnv: Int = 0,
+    )
+
+    fun buildAddParticipantsPayload(threadKey: Long, contactIds: List<Long>, versionId: Long): String {
+        val task = AddParticipantsTask(threadKey = threadKey, contactIds = contactIds)
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["AddParticipantsTask"] ?: "23",
+            taskPayloadJson = taskJson,
+            queueName = threadKey.toString(),
+            versionId = versionId,
+        )
+    }
+
+    fun buildRemoveParticipantPayload(threadId: Long, contactId: Long, versionId: Long): String {
+        val task = RemoveParticipantTask(threadId = threadId, contactId = contactId)
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["RemoveParticipantTask"] ?: "140",
+            taskPayloadJson = taskJson,
+            queueName = threadId.toString(),
+            versionId = versionId,
+        )
+    }
+
+    fun buildSearchUserPayload(query: String, versionId: Long): String {
+        val task = SearchUserTask(query = query)
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["SearchUserTask"] ?: "30",
+            taskPayloadJson = taskJson,
+            queueName = "search",
+            versionId = versionId,
+        )
+    }
+
+    fun buildSetThreadImagePayload(threadKey: Long, imageId: Long, versionId: Long): String {
+        val task = SetThreadImageTask(threadKey = threadKey, imageId = imageId)
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["SetThreadImageTask"] ?: "37",
+            taskPayloadJson = taskJson,
+            queueName = threadKey.toString(),
+            versionId = versionId,
+        )
+    }
+
+    fun buildCreateGroupPayload(participants: List<Long>, versionId: Long): String {
+        val threadId = generateEpochId()
+        val otid = generateEpochId().toString()
+        val task = CreateGroupTask(
+            participants = participants,
+            sendPayload = CreateGroupPayload(threadId = threadId, otid = otid),
+        )
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["CreateGroupTask"] ?: "130",
+            taskPayloadJson = taskJson,
+            queueName = "create_group",
+            versionId = versionId,
+        )
+    }
+
+    fun buildCreatePollPayload(threadKey: Long, question: String, options: List<String>, versionId: Long): String {
+        val task = CreatePollTask(threadKey = threadKey, question = question, options = options)
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["CreatePollTask"] ?: "163",
+            taskPayloadJson = taskJson,
+            queueName = threadKey.toString(),
+            versionId = versionId,
+        )
+    }
+
+    fun buildTypingIndicatorPayload(threadKey: Long, isTyping: Boolean, isGroup: Boolean, versionId: Long): String {
+        val task = UpdatePresenceTask(
+            threadKey = threadKey,
+            isGroupThread = if (isGroup) 1L else 0L,
+            isTyping = if (isTyping) 1L else 0L,
+        )
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["UpdatePresence"] ?: "3",
+            taskPayloadJson = taskJson,
+            queueName = "ls_presence_send_typing_indicator",
+            versionId = versionId,
+        )
+    }
+
+    fun buildSendMediaPayload(threadId: Long, attachmentFbIds: List<Long>, text: String, versionId: Long): String {
+        val otid = generateEpochId().toString()
+        val task = SendMediaTask(
+            threadId = threadId,
+            otid = otid,
+            attachmentFbIds = attachmentFbIds,
+            text = text,
+        )
+        val taskJson = json.encodeToString(task)
+        return buildTaskPayload(
+            label = TASK_LABELS["SendMessageTask"] ?: "46",
+            taskPayloadJson = taskJson,
+            queueName = threadId.toString(),
+            versionId = versionId,
+        )
+    }
+
+    fun buildAcceptMessageRequestPayload(threadId: Long, versionId: Long): String {
+        val taskJson = """{"thread_key":$threadId}"""
+        return buildTaskPayload(
+            label = TASK_LABELS["AcceptMessageRequestTask"] ?: "43",
+            taskPayloadJson = taskJson,
+            queueName = threadId.toString(),
+            versionId = versionId,
+        )
+    }
+
+    // --- Enriched message model (from Go bridge table/wrapped_message.go) ---
+
+    data class MessageAttachment(
+        val id: String,
+        val mimeType: String?,
+        val fileName: String?,
+        val url: String?,
+        val size: Long?,
+    )
+
+    data class MetaMessageEnriched(
+        val messageId: String,
+        val threadId: String,
+        val senderId: String,
+        val senderName: String?,
+        val text: String,
+        val timestamp: Long,
+        val isGroup: Boolean,
+        val attachments: List<MessageAttachment> = emptyList(),
+        val replyToMessageId: String? = null,
+        val mentions: List<String> = emptyList(),
+        val editCount: Long = 0,
+        val isUnsent: Boolean = false,
+    )
+
+    // --- Incoming event types (from Go bridge handlemeta.go parseTable) ---
+
+    sealed interface IncomingEvent {
+        data class MessageReceived(val message: MetaMessageEnriched) : IncomingEvent
+        data class MessageEdited(val messageId: String, val newText: String, val editCount: Long) : IncomingEvent
+        data class MessageDeleted(val threadId: String, val messageId: String) : IncomingEvent
+        data class ReactionReceived(
+            val threadId: String,
+            val messageId: String,
+            val senderId: String,
+            val reaction: String,
+        ) : IncomingEvent
+        data class ReactionRemoved(
+            val threadId: String,
+            val messageId: String,
+            val senderId: String,
+        ) : IncomingEvent
+        data class ReadReceipt(val threadId: String, val senderId: String, val watermarkTimestampMs: Long) : IncomingEvent
+        data class TypingIndicator(val threadId: String, val senderId: String, val isTyping: Boolean) : IncomingEvent
+        data class ThreadNameChanged(val threadId: String, val newName: String) : IncomingEvent
+        data class ThreadImageChanged(val threadId: String, val imageUrl: String?) : IncomingEvent
+        data class ParticipantAdded(val threadId: String, val participantId: String) : IncomingEvent
+        data class ParticipantRemoved(val threadId: String, val participantId: String) : IncomingEvent
+        data class ThreadMuteChanged(val threadId: String, val muteExpireTimeMs: Long) : IncomingEvent
+        data class ThreadDeleted(val threadId: String) : IncomingEvent
+        data class MessageRequestReceived(val threadId: String) : IncomingEvent
+    }
+
+    fun parseAllEvents(events: List<LightspeedDecoder.DecodedEvent>): List<IncomingEvent> {
+        val result = mutableListOf<IncomingEvent>()
+        for (event in events) {
+            val parsed = parseSingleEvent(event)
+            if (parsed != null) result.add(parsed)
+        }
+        return result
+    }
+
+    private fun parseSingleEvent(event: LightspeedDecoder.DecodedEvent): IncomingEvent? {
+        val args = event.args
+        return when (event.procedureName) {
+            "LSInsertNewMessageRange",
+            "LSUpsertMessage",
+            "LSInsertMessage",
+            "LSDeleteThenInsertMessage" -> {
+                if (args.size < 5) return null
+                val isUnsent = args.getOrNull(6) as? Boolean ?: false
+                if (event.procedureName == "LSDeleteThenInsertMessage" && isUnsent) {
+                    val messageId = args.getOrNull(2)?.toString() ?: return null
+                    val threadId = args.getOrNull(1)?.toString() ?: return null
+                    return IncomingEvent.MessageDeleted(threadId, messageId)
+                }
+                val text = args.getOrNull(0)?.toString() ?: ""
+                val threadId = args.getOrNull(1)?.toString() ?: return null
+                val messageId = args.getOrNull(2)?.toString() ?: return null
+                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
+                val senderId = args.getOrNull(4)?.toString() ?: ""
+                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
+                IncomingEvent.MessageReceived(
+                    MetaMessageEnriched(
+                        messageId = messageId,
+                        threadId = threadId,
+                        senderId = senderId,
+                        senderName = senderName,
+                        text = text,
+                        timestamp = timestamp,
+                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        replyToMessageId = replyToId,
+                        isUnsent = isUnsent,
+                    )
+                )
+            }
+            "LSEditMessage" -> {
+                val messageId = args.getOrNull(0)?.toString() ?: return null
+                val newText = args.getOrNull(1)?.toString() ?: return null
+                val editCount = (args.getOrNull(2) as? Long) ?: 1L
+                IncomingEvent.MessageEdited(messageId, newText, editCount)
+            }
+            "LSDeleteMessage" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val messageId = args.getOrNull(1)?.toString() ?: return null
+                IncomingEvent.MessageDeleted(threadId, messageId)
+            }
+            "LSUpsertReaction",
+            "LSReplaceOptimisticReaction" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val messageId = args.getOrNull(1)?.toString() ?: return null
+                val senderId = args.getOrNull(2)?.toString() ?: return null
+                val reaction = args.getOrNull(3)?.toString() ?: return null
+                if (reaction.isBlank()) {
+                    IncomingEvent.ReactionRemoved(threadId, messageId, senderId)
+                } else {
+                    IncomingEvent.ReactionReceived(threadId, messageId, senderId, reaction)
+                }
+            }
+            "LSDeleteReaction" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val messageId = args.getOrNull(1)?.toString() ?: return null
+                val senderId = args.getOrNull(2)?.toString() ?: return null
+                IncomingEvent.ReactionRemoved(threadId, messageId, senderId)
+            }
+            "LSUpdateReadReceipt" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val senderId = args.getOrNull(1)?.toString() ?: return null
+                val watermark = (args.getOrNull(2) as? Long) ?: return null
+                IncomingEvent.ReadReceipt(threadId, senderId, watermark)
+            }
+            "LSMarkThreadRead",
+            "LSMarkThreadReadV2" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val watermark = (args.getOrNull(1) as? Long) ?: return null
+                IncomingEvent.ReadReceipt(threadId, "self", watermark)
+            }
+            "LSUpdateTypingIndicator" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val senderId = args.getOrNull(1)?.toString() ?: return null
+                val isTyping = args.getOrNull(2) == true || args.getOrNull(2) == 1L
+                IncomingEvent.TypingIndicator(threadId, senderId, isTyping)
+            }
+            "LSSyncUpdateThreadName" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val newName = args.getOrNull(1)?.toString() ?: return null
+                IncomingEvent.ThreadNameChanged(threadId, newName)
+            }
+            "LSSetThreadImageURL" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val imageUrl = args.getOrNull(1)?.toString()
+                IncomingEvent.ThreadImageChanged(threadId, imageUrl)
+            }
+            "LSAddParticipantIdToGroupThread" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val participantId = args.getOrNull(1)?.toString() ?: return null
+                IncomingEvent.ParticipantAdded(threadId, participantId)
+            }
+            "LSRemoveParticipantFromThread" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val participantId = args.getOrNull(1)?.toString() ?: return null
+                IncomingEvent.ParticipantRemoved(threadId, participantId)
+            }
+            "LSUpdateThreadMuteSetting" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                val muteExpireTimeMs = (args.getOrNull(1) as? Long) ?: return null
+                IncomingEvent.ThreadMuteChanged(threadId, muteExpireTimeMs)
+            }
+            "LSDeleteThread" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                IncomingEvent.ThreadDeleted(threadId)
+            }
+            "LSDeleteThenInsertMessageRequest" -> {
+                val threadId = args.getOrNull(0)?.toString() ?: return null
+                IncomingEvent.MessageRequestReceived(threadId)
+            }
+            else -> null
+        }
+    }
+
+    fun parseMessageEnriched(events: List<LightspeedDecoder.DecodedEvent>): MetaMessageEnriched? {
+        for (event in events) {
+            when (event.procedureName) {
+                "LSInsertNewMessageRange",
+                "LSUpsertMessage",
+                "LSInsertMessage",
+                "LSDeleteThenInsertMessage" -> {
+                    val args = event.args
+                    if (args.size < 5) continue
+                    val text = args.getOrNull(0)?.toString() ?: ""
+                    val threadId = args.getOrNull(1)?.toString() ?: continue
+                    val messageId = args.getOrNull(2)?.toString() ?: continue
+                    val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
+                    val senderId = args.getOrNull(4)?.toString() ?: ""
+                    val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
+                    val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
+
+                    return MetaMessageEnriched(
+                        messageId = messageId,
+                        threadId = threadId,
+                        senderId = senderId,
+                        senderName = senderName,
+                        text = text,
+                        timestamp = timestamp,
+                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        replyToMessageId = replyToId,
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    fun parseMessageId(messageId: String): Long? {
+        return try {
+            val idLong = messageId.replace("mid.", "").toLongOrNull() ?: return null
+            idLong ushr 22
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun buildAppSettingsJson(versionId: Long): String {
         return json.encodeToString(AppSettingsPublish(schemaVersion = versionId.toString()))
     }
+
+    fun generateEpochId(): Long = generateEpochId_internal()
 
     private var lastTimestamp = 0L
     private var epochCounter = 0L
     private val epochLock = Any()
 
-    fun generateEpochId(): Long {
+    private fun generateEpochId_internal(): Long {
         synchronized(epochLock) {
             val timestamp = System.currentTimeMillis()
             if (timestamp == lastTimestamp) {
@@ -690,13 +1109,17 @@ object MetaProtocol {
                 lastTimestamp = timestamp
                 epochCounter = 0
             }
-            return (timestamp shl 22) or (epochCounter shl 12) or 42
+            return (timestamp shl 22) or (epochCounter shl 12) or SecureRandom().nextInt(4096).toLong()
         }
     }
+
+    @Deprecated("Use generateEpochId()", ReplaceWith("generateEpochId()"))
+    fun generateEpochID(): Long = generateEpochId()
 
     fun generateSessionId(): Long {
         val min = 2171078810009599L
         val max = 4613554604867583L
-        return min + (Math.random() * (max - min + 1)).toLong()
+        val range = max - min + 1
+        return min + (SecureRandom().nextLong().ushr(1) % range)
     }
 }

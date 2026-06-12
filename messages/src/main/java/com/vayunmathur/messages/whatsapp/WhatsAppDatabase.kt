@@ -26,8 +26,9 @@ import androidx.room.TypeConverters
         WhatsAppConversation::class,
         WhatsAppMediaRequest::class,
         WhatsAppAvatarCache::class,
+        WhatsAppPollOption::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(WhatsAppTypeConverters::class)
@@ -37,6 +38,7 @@ abstract class WhatsAppDatabase : RoomDatabase() {
     abstract fun conversationDao(): WhatsAppConversationDao
     abstract fun mediaRequestDao(): WhatsAppMediaRequestDao
     abstract fun avatarCacheDao(): WhatsAppAvatarCacheDao
+    abstract fun pollOptionDao(): WhatsAppPollOptionDao
 
     companion object {
         @Volatile
@@ -161,4 +163,33 @@ interface WhatsAppAvatarCacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(entry: WhatsAppAvatarCache)
+}
+
+/**
+ * Poll option hash mapping, matching Go wadb.PollOption.
+ * Maps SHA256 option hashes to option string IDs for poll vote resolution.
+ */
+@Entity(tableName = "whatsapp_poll_option", primaryKeys = ["msgId", "optionHash"])
+data class WhatsAppPollOption(
+    val msgId: String,
+    val optionHash: String,
+    val optionName: String,
+)
+
+@Dao
+interface WhatsAppPollOptionDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(option: WhatsAppPollOption)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(options: List<WhatsAppPollOption>)
+
+    @Query("SELECT * FROM whatsapp_poll_option WHERE msgId = :msgId")
+    suspend fun getByMessageId(msgId: String): List<WhatsAppPollOption>
+
+    @Query("SELECT * FROM whatsapp_poll_option WHERE msgId = :msgId AND optionHash = :hash")
+    suspend fun getByHash(msgId: String, hash: String): WhatsAppPollOption?
+
+    @Query("DELETE FROM whatsapp_poll_option WHERE msgId = :msgId")
+    suspend fun deleteByMessageId(msgId: String)
 }

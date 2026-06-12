@@ -42,6 +42,12 @@ sealed interface GMEvent {
         val timestamp: Long,
         val senderName: String?,
         val reactionsJson: String? = null,
+        /** Downloaded media bytes (null if no media or download failed). */
+        val mediaData: ByteArray? = null,
+        val mediaMime: String? = null,
+        val mediaName: String? = null,
+        /** Wire status type string for status tracking. */
+        val statusType: String? = null,
     ) : GMEvent
 
     /** A NEW inbound message just arrived. Distinct from MessageUpdate
@@ -67,18 +73,20 @@ sealed interface GMEvent {
     /** A message was edited on the remote side. */
     data class MessageEdited(
         override val source: MessageSource,
-        val conversationId: String,
+        val conversationId: String? = null,
         val messageId: String,
         val newBody: String,
-        val timestamp: Long,
+        val timestamp: Long = 0L,
     ) : GMEvent
 
     /** A read receipt was received. */
     data class ReadReceipt(
         override val source: MessageSource,
         val conversationId: String,
-        val messageId: String,
-        val timestamp: Long,
+        val messageId: String? = null,
+        val senderId: String? = null,
+        val timestampMs: Long = 0L,
+        val timestamp: Long = 0L,
     ) : GMEvent
 
     /** A conversation was deleted on the remote side. */
@@ -93,5 +101,50 @@ sealed interface GMEvent {
         val conversationId: String,
         val senderId: String,
         val isTyping: Boolean,
+    ) : GMEvent
+
+    /** A reaction was added to a message. */
+    data class ReactionReceived(
+        override val source: MessageSource,
+        val conversationId: String,
+        val messageId: String,
+        val senderId: String,
+        val emoji: String,
+    ) : GMEvent
+
+    /** A reaction was removed from a message. */
+    data class ReactionRemoved(
+        override val source: MessageSource,
+        val conversationId: String,
+        val messageId: String,
+        val senderId: String,
+    ) : GMEvent
+
+    /** A conversation was renamed. */
+    data class ConversationNameChanged(
+        override val source: MessageSource,
+        val conversationId: String,
+        val newName: String,
+    ) : GMEvent
+
+    /** A conversation avatar was changed. */
+    data class ConversationAvatarChanged(
+        override val source: MessageSource,
+        val conversationId: String,
+        val avatarUrl: String?,
+    ) : GMEvent
+
+    /** A participant was added to a group. */
+    data class ParticipantAdded(
+        override val source: MessageSource,
+        val conversationId: String,
+        val participantId: String,
+    ) : GMEvent
+
+    /** A participant was removed from a group. */
+    data class ParticipantRemoved(
+        override val source: MessageSource,
+        val conversationId: String,
+        val participantId: String,
     ) : GMEvent
 }

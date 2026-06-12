@@ -44,6 +44,8 @@ data class WhatsAppAuthData(
     val phoneLastPinged: Long = 0L,
     // Platform type (from Go store.DeviceProps.PlatformType)
     val platformType: String = "WEB",
+    // LID (Linked Identity) JID for this device
+    val lid: String = "",
 ) {
     companion object {
         private const val PREFS_NAME = "whatsapp_auth"

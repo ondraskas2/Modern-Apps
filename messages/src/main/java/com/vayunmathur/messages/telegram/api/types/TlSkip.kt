@@ -560,6 +560,10 @@ object TlSkip {
 
     fun skipMessageEntity(buf: TlBuffer) {
         val typeId = buf.int32()
+        skipMessageEntity(buf, typeId)
+    }
+
+    fun skipMessageEntity(buf: TlBuffer, typeId: Int) {
         when (typeId) {
             // Simple: offset length
             0xbb92ba95.toInt(), // unknown
@@ -584,6 +588,7 @@ object TlSkip {
             0xdc7b1140.toInt() -> { buf.int32(); buf.int32(); buf.int64() } // mentionName: offset length user_id
             0xc8cf05f8.toInt() -> { buf.int32(); buf.int32(); buf.int64() } // customEmoji: offset length document_id
             0xf1ccaaac.toInt() -> { Fields.decode(buf); buf.int32(); buf.int32() } // blockquote: flags offset length
+            0x020df5d0.toInt() -> { buf.int32(); buf.int32() } // blockquote (old): offset length
 
             else -> {
                 Log.w(TAG, "Unknown MessageEntity 0x${typeId.toUInt().toString(16)}, assuming offset+length")
@@ -969,6 +974,10 @@ object TlSkip {
 
     fun skipMessageAction(buf: TlBuffer) {
         val typeId = buf.int32()
+        skipMessageAction(buf, typeId)
+    }
+
+    fun skipMessageAction(buf: TlBuffer, typeId: Int) {
         when (typeId) {
             0xb6aef7b0.toInt() -> {} // messageActionEmpty
             0xbd47cbad.toInt() -> { // messageActionChatCreate
@@ -997,6 +1006,23 @@ object TlSkip {
                 val flags = Fields.decode(buf)
                 buf.int32() // period
                 if (flags.has(0)) buf.int64() // auto_setting_from
+            }
+            0x992a3a2b.toInt() -> { // messageActionChatCreate (new)
+                buf.string() // title
+                skipVector(buf) { it.int64() } // users (long)
+            }
+            0xc7848867.toInt() -> buf.int64() // messageActionChatDeleteUser (new - long)
+            0x99d79498.toInt() -> buf.int64() // messageActionChatJoinedByLink (new - long)
+            0x0d999256.toInt() -> { // messageActionTopicCreate
+                val tFlags = Fields.decode(buf)
+                buf.string() // title
+                buf.int32() // icon_color
+                if (tFlags.has(0)) buf.int64() // icon_emoji_id
+            }
+            0x7a0d7f42.toInt() -> { // messageActionGroupCall
+                val gFlags = Fields.decode(buf)
+                skipBoxedType(buf) // call
+                if (gFlags.has(0)) buf.int32() // duration
             }
             else -> Log.w(TAG, "Unknown MessageAction: 0x${typeId.toUInt().toString(16)}")
         }

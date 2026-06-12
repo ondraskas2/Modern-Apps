@@ -3,6 +3,7 @@ package com.vayunmathur.messages.signal.sending
 import android.util.Base64
 import android.util.Log
 import com.vayunmathur.messages.signal.proto.SignalServiceProtos
+import com.vayunmathur.messages.signal.groups.SenderKeyManager
 import com.vayunmathur.messages.signal.store.SignalGroupStore
 import com.vayunmathur.messages.signal.store.SignalProtocolStoreImpl
 import com.vayunmathur.messages.signal.web.SignalWebSocket
@@ -43,6 +44,15 @@ class MessageSender(
 ) {
     private val protocolStore = SignalProtocolStoreImpl(
         sessionStore, identityKeyStore, preKeyStore, signedPreKeyStore, kyberPreKeyStore, senderKeyStore
+    )
+
+    // Issue #14: Pending message dedup — track in-flight timestamps
+    private val pendingTimestamps = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Long, Boolean>())
+
+    val senderKeyManager = SenderKeyManager(
+        senderKeyStore as com.vayunmathur.messages.signal.store.SignalSenderKeyStore,
+        selfAci,
+        selfDeviceId,
     )
 
     @Volatile
@@ -91,26 +101,38 @@ class MessageSender(
         content: SignalServiceProtos.Content,
         timestamp: Long,
     ): SendResult {
-        val contentWithProfileKey = if (content.hasDataMessage() && !content.dataMessage.hasProfileKey()) {
+        // Issue #14: Dedup — skip if this timestamp is already in-flight
+        if (!pendingTimestamps.add(timestamp)) {
+            Log.w(TAG, "Duplicate send attempt for timestamp $timestamp, skipping")
+            return SendResult(success = true)
+        }
+
+        // Issue #13: Set DataMessage timestamp and use as transaction ID
+        val contentWithTimestamp = if (content.hasDataMessage() && content.dataMessage.timestamp == 0L) {
+            val dm = content.dataMessage.toBuilder().setTimestamp(timestamp).build()
+            content.toBuilder().setDataMessage(dm).build()
+        } else content
+
+        val contentWithProfileKey = if (contentWithTimestamp.hasDataMessage() && !contentWithTimestamp.dataMessage.hasProfileKey()) {
             val profileKey = recipientStore?.getRecipient(selfAci)?.profileKey
             if (profileKey != null) {
-                val dm = content.dataMessage.toBuilder()
+                val dm = contentWithTimestamp.dataMessage.toBuilder()
                     .setProfileKey(com.google.protobuf.ByteString.copyFrom(profileKey))
                     .build()
-                content.toBuilder().setDataMessage(dm).build()
-            } else content
-        } else content
+                contentWithTimestamp.toBuilder().setDataMessage(dm).build()
+            } else contentWithTimestamp
+        } else contentWithTimestamp
 
         val isTypingOrReceipt = contentWithProfileKey.hasTypingMessage() ||
             contentWithProfileKey.hasReceiptMessage()
 
-        // Gate typing indicators on account settings
+        // Gate typing indicators on account settings (fix #20)
         if (contentWithProfileKey.hasTypingMessage() && accountRecord != null && !accountRecord.typingIndicators) {
             Log.d(TAG, "Not sending typing message as typing indicators are disabled")
             return SendResult(success = true)
         }
 
-        // Gate read receipts on account settings
+        // Gate read receipts on account settings (fix #20)
         if (contentWithProfileKey.hasReceiptMessage() &&
             contentWithProfileKey.receiptMessage.type == SignalServiceProtos.ReceiptMessage.Type.READ &&
             accountRecord != null && !accountRecord.readReceipts) {
@@ -145,6 +167,9 @@ class MessageSender(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send message to $recipientAci", e)
             SendResult(success = false, error = e.message)
+        } finally {
+            // Issue #14: Always remove from pending set
+            pendingTimestamps.remove(timestamp)
         }
     }
 
@@ -161,7 +186,7 @@ class MessageSender(
         if (!recipient.needsPniSignature) return content
 
         Log.d(TAG, "Including PNI signature in message to $recipientAci")
-        val sig = pniIdentityKeyPair.signAlternateIdentity(aciIdentityKeyPair.publicKey)
+        val sig = pniIdentityKeyPair.privateKey.calculateSignature(aciIdentityKeyPair.publicKey.serialize())
         val pniBytes = uuidToBytes(selfPni)
 
         recipientStore.storeRecipient(recipient.copy(needsPniSignature = false))
@@ -215,15 +240,38 @@ class MessageSender(
         }
     }
 
+    // Fix #1: Refactored to use SenderKeyManager for sender key distribution
     suspend fun sendGroupMessage(
         groupId: String,
         memberAcis: List<String>,
         content: SignalServiceProtos.Content,
         timestamp: Long,
     ): List<SendResult> {
-        // Decorate with GroupV2 context
         val decoratedContent = decorateWithGroupContext(groupId, content)
 
+        // Step 1: Create sender key distribution message for this group
+        val distributionMessage = senderKeyManager.createDistributionMessage(groupId)
+
+        // Step 2: Distribute sender key to members who need it
+        for (aci in memberAcis) {
+            if (aci == selfAci) continue
+            try {
+                val deviceIds = deviceManager.getDeviceIds(aci)
+                if (senderKeyManager.needsDistribution(groupId, aci, deviceIds)) {
+                    val skdmContent = SignalServiceProtos.Content.newBuilder()
+                        .setSenderKeyDistributionMessage(
+                            com.google.protobuf.ByteString.copyFrom(distributionMessage.serialize())
+                        ).build()
+                    val paddedSkdm = padContent(skdmContent.toByteArray())
+                    sendToRecipient(aci, paddedSkdm, timestamp, urgent = false)
+                    senderKeyManager.markDistributed(groupId, aci, deviceIds)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to distribute sender key to $aci", e)
+            }
+        }
+
+        // Step 3: Send the actual message to all members individually
         val paddedContent = padContent(decoratedContent.toByteArray())
         val results = memberAcis.map { aci ->
             if (aci == selfAci) return@map SendResult(success = true)
@@ -266,6 +314,7 @@ class MessageSender(
                 builder.setEditMessage(content.editMessage.toBuilder().setDataMessage(editDm))
             }
             content.hasTypingMessage() -> {
+                // Fix #10: Include GroupIdentifier in typing messages
                 val groupIdBytes = Base64.decode(groupId, Base64.DEFAULT)
                 builder.setTypingMessage(
                     content.typingMessage.toBuilder()
@@ -409,7 +458,7 @@ class MessageSender(
         return Triple(type, regId, Base64.encodeToString(ciphertext.serialize(), Base64.NO_WRAP))
     }
 
-    private suspend fun sendSyncMessage(
+    suspend fun sendSyncMessage(
         recipientAci: String?,
         content: SignalServiceProtos.Content,
         timestamp: Long,
@@ -485,6 +534,40 @@ class MessageSender(
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send sync to device $deviceId", e)
+            }
+        }
+    }
+
+    // Send a raw sync message to self (for DeleteForMe, MessageRequestResponse, etc.)
+    suspend fun sendSelfSyncMessage(content: SignalServiceProtos.Content, timestamp: Long) {
+        val paddedContent = padContent(content.toByteArray())
+        val selfDevices = deviceManager.getDeviceIds(selfAci)
+        for (deviceId in selfDevices) {
+            if (deviceId == selfDeviceId) continue
+            try {
+                deviceManager.ensureSession(selfAci, deviceId)
+                val address = SignalProtocolAddress(selfAci, deviceId)
+                val encrypted = encryptFor(address, paddedContent)
+                val messages = JSONArray().put(JSONObject().apply {
+                    put("type", encrypted.first)
+                    put("destinationDeviceId", deviceId)
+                    put("destinationRegistrationId", encrypted.second)
+                    put("content", encrypted.third)
+                })
+                val payload = JSONObject().apply {
+                    put("timestamp", timestamp)
+                    put("online", false)
+                    put("urgent", false)
+                    put("messages", messages)
+                }
+                ws.sendRequest(
+                    "PUT",
+                    "/v1/messages/$selfAci",
+                    payload.toString().toByteArray(),
+                    mapOf("Content-Type" to "application/json")
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to send self sync to device $deviceId", e)
             }
         }
     }

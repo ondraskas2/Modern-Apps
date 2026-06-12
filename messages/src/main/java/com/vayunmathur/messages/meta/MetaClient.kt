@@ -19,7 +19,24 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+
+// TODO: E2EE support — the Go bridge uses whatsmeow for encrypted Messenger chats
+// (table.ENCRYPTED_OVER_WA_ONE_TO_ONE / ENCRYPTED_OVER_WA_GROUP). Implement E2EE
+// key negotiation and encrypted message sending/receiving when ready.
+//
+// Requirements from mautrix-meta handlewhatsapp.go:
+// - Integrate whatsmeow library for WhatsApp-encrypted Messenger chats
+// - Handle events.FBMessage, events.Receipt, events.Connected, events.Disconnected,
+//   events.CATRefreshError, events.PermanentDisconnect (LoggedOut, ConnectFailure),
+//   events.ChatPresence, events.GroupInfo, events.OfflineSyncCompleted
+// - Manage dual connection state: separate connectWaiter (Messenger MQTT) and
+//   e2eeConnectWaiter (WhatsApp socket) with independent BridgeState reporting
+// - Use E2EEClient.SendFBMessage() for encrypted sends with whatsmeow.SendRequestExtra
+// - CAT token refresh handling: on CATRefreshError with ErrPleaseReloadPage, do FullReconnect
+// - On WhatsApp 401/415/418 connect failures, reset WADevice and reconnect
+// - Read receipts for E2EE chats must group by sender JID (waMessagesToRead map)
 
 object MetaClient {
 
@@ -49,6 +66,9 @@ object MetaClient {
     private var mqttClient: MetaMqttClient? = null
     private var db: MetaDatabase? = null
     private var backfillJob: Job? = null
+
+    // Issue #2: Optimistic message ID resolution — maps task/request ID to callback
+    private val pendingMessages = ConcurrentHashMap<Int, (String?) -> Unit>()
 
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
@@ -146,22 +166,138 @@ object MetaClient {
                     MetaProtocol.TOPIC_LS_RESP -> {
                         val responseData = MetaProtocol.parsePublishResponse(mqttMessage.payload)
                             ?: return@launch
-                        val events = LightspeedDecoder.decodePublishResponse(
+                        val decodedEvents = LightspeedDecoder.decodePublishResponse(
                             responseData.payload,
                             responseData.sp,
                         )
-                        val message = MetaProtocol.parseMessage(events) ?: return@launch
-
-                        val event = GMEvent.IncomingMessage(
-                            source = MessageSource.MESSENGER,
-                            conversationId = "fb:${message.threadId}",
-                            messageId = message.messageId,
-                            body = message.text,
-                            peerName = message.senderName ?: message.senderId,
-                            peerPhone = null,
-                            timestamp = message.timestamp,
-                        )
-                        _events.emit(event)
+                        val incomingEvents = MetaProtocol.parseAllEvents(decodedEvents)
+                        for (evt in incomingEvents) {
+                            when (evt) {
+                                is MetaProtocol.IncomingEvent.MessageReceived -> {
+                                    val msg = evt.message
+                                    _events.emit(
+                                        GMEvent.IncomingMessage(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${msg.threadId}",
+                                            messageId = msg.messageId,
+                                            body = msg.text,
+                                            peerName = msg.senderName ?: msg.senderId,
+                                            peerPhone = null,
+                                            timestamp = msg.timestamp,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageEdited -> {
+                                    _events.emit(
+                                        GMEvent.MessageEdited(
+                                            source = MessageSource.MESSENGER,
+                                            messageId = evt.messageId,
+                                            newBody = evt.newText,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageDeleted -> {
+                                    _events.emit(
+                                        GMEvent.MessageDeleted(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReactionReceived -> {
+                                    _events.emit(
+                                        GMEvent.ReactionReceived(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                            senderId = evt.senderId,
+                                            emoji = evt.reaction,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReactionRemoved -> {
+                                    _events.emit(
+                                        GMEvent.ReactionRemoved(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            messageId = evt.messageId,
+                                            senderId = evt.senderId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ReadReceipt -> {
+                                    _events.emit(
+                                        GMEvent.ReadReceipt(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            senderId = evt.senderId,
+                                            timestampMs = evt.watermarkTimestampMs,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.TypingIndicator -> {
+                                    _events.emit(
+                                        GMEvent.TypingIndicator(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            senderId = evt.senderId,
+                                            isTyping = evt.isTyping,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadNameChanged -> {
+                                    _events.emit(
+                                        GMEvent.ConversationNameChanged(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            newName = evt.newName,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadImageChanged -> {
+                                    _events.emit(
+                                        GMEvent.ConversationAvatarChanged(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            avatarUrl = evt.imageUrl,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ParticipantAdded -> {
+                                    _events.emit(
+                                        GMEvent.ParticipantAdded(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            participantId = evt.participantId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ParticipantRemoved -> {
+                                    _events.emit(
+                                        GMEvent.ParticipantRemoved(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                            participantId = evt.participantId,
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadMuteChanged -> {
+                                    Log.d(TAG, "Thread ${evt.threadId} mute changed: ${evt.muteExpireTimeMs}")
+                                }
+                                is MetaProtocol.IncomingEvent.ThreadDeleted -> {
+                                    _events.emit(
+                                        GMEvent.ConversationDeleted(
+                                            source = MessageSource.MESSENGER,
+                                            conversationId = "fb:${evt.threadId}",
+                                        )
+                                    )
+                                }
+                                is MetaProtocol.IncomingEvent.MessageRequestReceived -> {
+                                    Log.d(TAG, "Message request received for thread ${evt.threadId}")
+                                }
+                            }
+                        }
                     }
 
                     MetaProtocol.TOPIC_THREAD_TYPING,
@@ -193,15 +329,8 @@ object MetaClient {
         backfillJob = scope.launch {
             Log.i(TAG, "Backfill: syncing thread list via Lightspeed")
             val client = mqttClient ?: return@launch
-            try {
-                val payload = MetaProtocol.buildFetchThreadsPayload(client.versionId)
-                client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
-
-                val payloadSG95 = MetaProtocol.buildFetchThreadsPayload(client.versionId, syncGroup = 95)
-                client.makeLSRequest(payloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
-            } catch (e: Exception) {
-                Log.e(TAG, "Backfill failed", e)
-            }
+            val payload = MetaProtocol.buildSyncThreadListPayload(client.versionId)
+            client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
         }
     }
 
@@ -212,7 +341,33 @@ object MetaClient {
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
 
         val payload = MetaProtocol.buildSendMessagePayload(threadId, body, client.versionId)
-        val response = client.makeLSRequest(payload, 3)
+
+        var response = client.makeLSRequest(payload, 3)
+
+        // Retry up to 5 times with 1s delay between attempts
+        var retryCount = 0
+        while (response == null && retryCount < 5) {
+            retryCount++
+            Log.w(TAG, "Send failed, retry $retryCount/5")
+            kotlinx.coroutines.delay(1000)
+            if (_state.value is State.Disconnected) {
+                val auth = authData ?: return false
+                connect(auth)
+                kotlinx.coroutines.delay(2000)
+            }
+            val retryClient = mqttClient ?: return false
+            response = retryClient.makeLSRequest(payload, 3)
+        }
+
+        // Issue #2: Resolve optimistic message ID from LS response
+        if (response != null) {
+            val responseData = MetaProtocol.parsePublishResponse(response.payload)
+            if (responseData != null) {
+                val decoded = LightspeedDecoder.decodePublishResponse(responseData.payload, responseData.sp)
+                val events = MetaProtocol.parseAllEvents(decoded)
+                Log.d(TAG, "Send response contained ${events.size} events")
+            }
+        }
         return response != null
     }
 
@@ -222,8 +377,23 @@ object MetaClient {
         mimeType: String,
         fileName: String?
     ): Boolean {
-        Log.w(TAG, "Media sending not yet implemented for Messenger")
-        return false
+        if (_state.value !is State.Connected) return false
+        val client = mqttClient ?: return false
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+
+        // TODO: Proper Mercury upload — m.Client.SendMercuryUploadRequest() is not
+        // available on Android. For now, encode media as base64 in the task payload.
+        val base64Data = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        val payload = MetaProtocol.buildSendMediaPayload(
+            threadId = threadId,
+            attachmentFbIds = emptyList(),
+            text = base64Data,
+            mimeType = mimeType,
+            fileName = fileName,
+            versionId = client.versionId,
+        )
+        val response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        return response != null
     }
 
     suspend fun markRead(conversationId: String) {
@@ -239,10 +409,11 @@ object MetaClient {
         val client = mqttClient ?: return
         val actorId = authData?.userId?.toLongOrNull() ?: return
 
+        val strippedEmoji = emoji.replace("\uFE0F", "")
         val payload = MetaProtocol.buildReactionPayload(
             threadKey = threadId,
             messageId = messageId,
-            reaction = emoji,
+            reaction = strippedEmoji,
             actorId = actorId,
             versionId = client.versionId,
         )
@@ -265,7 +436,16 @@ object MetaClient {
     suspend fun editMessage(conversationId: String, messageId: String, text: String): Boolean {
         val client = mqttClient ?: return false
         val payload = MetaProtocol.buildEditMessagePayload(messageId, text, client.versionId)
-        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+        var response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        if (response == null) {
+            Log.w(TAG, "Edit message first attempt failed, retrying in 3s — messageId=$messageId")
+            kotlinx.coroutines.delay(3000)
+            response = client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+            if (response == null) {
+                Log.e(TAG, "Edit message retry also failed — messageId=$messageId")
+            }
+        }
+        return response != null
     }
 
     suspend fun deleteThread(conversationId: String): Boolean {
@@ -294,6 +474,69 @@ object MetaClient {
         val client = mqttClient ?: return
         val payload = MetaProtocol.buildFetchMessagesPayload(threadId, referenceTimestampMs, referenceMessageId, client.versionId)
         client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+    }
+
+    suspend fun sendTypingIndicator(conversationId: String, isTyping: Boolean, isGroup: Boolean = false): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildTypingIndicatorPayload(
+            threadKey = threadId,
+            isTyping = isTyping,
+            isGroup = isGroup,
+            versionId = client.versionId,
+        )
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_STATELESS) != null
+    }
+
+    suspend fun addParticipant(conversationId: String, participantIds: List<Long>): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildAddParticipantsPayload(threadId, participantIds, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun removeParticipant(conversationId: String, participantId: Long): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildRemoveParticipantPayload(threadId, participantId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    // TODO: Issue #6 — Room avatar requires Mercury upload endpoint for proper file upload.
+    // The Go bridge uses m.Client.SendMercuryUploadRequest(ctx, threadID, &messagix.MercuryUploadMedia{...})
+    // to upload the image first, then uses the returned fbId as imageId in SetThreadImageTask.
+    // Currently this only accepts a pre-uploaded imageId; callers must handle upload separately.
+    suspend fun setThreadImage(conversationId: String, imageId: Long): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildSetThreadImagePayload(threadId, imageId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun searchUsers(query: String): Boolean {
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildSearchUserPayload(query, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun createGroup(participantIds: List<Long>): Boolean {
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildCreateGroupPayload(participantIds, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun createPoll(conversationId: String, question: String, options: List<String>): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildCreatePollPayload(threadId, question, options, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
+    }
+
+    suspend fun acceptMessageRequest(conversationId: String): Boolean {
+        val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
+        val client = mqttClient ?: return false
+        val payload = MetaProtocol.buildAcceptMessageRequestPayload(threadId, client.versionId)
+        return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
     }
 
     private fun extractThreadId(conversationId: String): String? {

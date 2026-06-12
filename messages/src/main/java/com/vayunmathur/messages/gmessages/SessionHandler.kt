@@ -45,6 +45,8 @@ class SessionHandler(
     @Volatile
     private var currentSessionId: String = UUID.randomUUID().toString()
 
+    fun currentSessionId(): String = currentSessionId
+
     // --- Ack interval (port of Go's ackMap + ackTicker) ---
     private val ackMapMutex = Mutex()
     private val ackMap = mutableListOf<String>()

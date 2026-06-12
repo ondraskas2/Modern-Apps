@@ -3,33 +3,19 @@ package com.vayunmathur.messages.telegram
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import com.vayunmathur.messages.data.ContactSuggestion
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.gmessages.GMEvent
-import com.vayunmathur.messages.telegram.api.TlRegistry
 import com.vayunmathur.messages.telegram.api.functions.*
 import com.vayunmathur.messages.telegram.api.types.*
-import com.vayunmathur.messages.telegram.mtproto.TelegramApiClient
-import com.vayunmathur.messages.telegram.mtproto.crypto.Srp
-import com.vayunmathur.messages.telegram.mtproto.rpc.RpcException
-import com.vayunmathur.messages.telegram.mtproto.tl.TlBuffer
 import com.vayunmathur.messages.telegram.mtproto.tl.TlObject
-import com.vayunmathur.messages.util.ContactSuggestion
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import com.vayunmathur.messages.telegram.mtproto.tl.TlRegistry
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 object TelegramClient {
 
@@ -40,10 +26,10 @@ object TelegramClient {
     sealed interface State {
         data object Idle : State
         data object NeedsSetup : State
-        data class AwaitingCode(val phone: String) : State
-        data class AwaitingPassword(val phone: String, val hint: String) : State
         data object Connecting : State
         data object Connected : State
+        data class AwaitingCode(val phone: String) : State
+        data class AwaitingPassword(val phone: String, val hint: String) : State
         data class Disconnected(val reason: String) : State
     }
 
@@ -68,7 +54,16 @@ object TelegramClient {
 
     private val peerCache = ConcurrentHashMap<Long, TlObject>()
     private val userNameCache = ConcurrentHashMap<Long, String>()
+    private val channelMetaCache = ConcurrentHashMap<Long, Channel>()
     private var reconnectAttempt = 0
+    private var isPremium = false
+
+    private companion object {
+        const val MAX_CAPTION_LENGTH = 2048
+        const val MAX_CAPTION_LENGTH_PREMIUM = 4096
+        const val MAX_IMAGE_FILE_SIZE = 10 * 1024 * 1024
+        const val MAX_IMAGE_ASPECT_RATIO = 20.0
+    }
 
     private var currentPts = 0
     private var currentQts = 0
@@ -113,6 +108,7 @@ object TelegramClient {
         phoneCodeHash = null
         peerCache.clear()
         userNameCache.clear()
+        channelMetaCache.clear()
         scope.launch { TelegramAuthData.clear(appContext) }
         _state.value = State.NeedsSetup
     }
@@ -152,28 +148,27 @@ object TelegramClient {
             try {
                 val client = apiClient ?: return@launch
                 val result = client.invoke(AuthSignIn(phone, hash, code)) { TlRegistry.decode(it) }
-                if (result is AuthAuthorization) {
-                    onAuthorized(result.user)
-                }
-            } catch (e: RpcException) {
-                if (e.message.contains("SESSION_PASSWORD_NEEDED")) {
-                    try {
-                        val client = apiClient ?: return@launch
-                        val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) }
-                        if (pwd is AuthPassword) {
-                            _state.value = State.AwaitingPassword(phone, pwd.hint)
-                        }
-                    } catch (e2: Exception) {
-                        Log.e(TAG, "getPassword failed: ${e2.message}")
-                        _state.value = State.AwaitingCode(phone)
+                when (result) {
+                    is AuthAuthorization -> onAuthorized(result.user)
+                    is AuthPassword -> {
+                        val hint = try {
+                            val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) }
+                            if (pwd is Password) pwd.hint else ""
+                        } catch (_: Exception) { "" }
+                        _state.value = State.AwaitingPassword(phone, hint)
                     }
-                } else {
-                    Log.e(TAG, "submitCode failed: ${e.message}")
-                    _state.value = State.AwaitingCode(phone)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "submitCode failed: ${e.message}")
-                _state.value = State.AwaitingCode(phone)
+                if (e.message?.contains("SESSION_PASSWORD_NEEDED") == true) {
+                    val hint = try {
+                        val pwd = apiClient?.invoke(AccountGetPassword) { TlRegistry.decode(it) }
+                        if (pwd is Password) pwd.hint else ""
+                    } catch (_: Exception) { "" }
+                    _state.value = State.AwaitingPassword(phone, hint)
+                } else {
+                    _state.value = State.AwaitingCode(phone)
+                }
             }
         }
     }
@@ -183,20 +178,9 @@ object TelegramClient {
         scope.launch {
             try {
                 val client = apiClient ?: return@launch
-                val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) } as? AuthPassword
-                    ?: return@launch
-                val algo = pwd.currentAlgo ?: return@launch
-                val randomBytes = ByteArray(256)
-                random.nextBytes(randomBytes)
-                val answer = Srp.computeAnswer(
-                    password = password.toByteArray(Charsets.UTF_8),
-                    srpB = pwd.srpB,
-                    randomA = randomBytes,
-                    salt1 = algo.salt1,
-                    salt2 = algo.salt2,
-                    g = algo.g,
-                    p = algo.p,
-                )
+                val pwd = client.invoke(AccountGetPassword) { TlRegistry.decode(it) }
+                if (pwd !is Password) return@launch
+                val answer = SRPHelper.computeSRP(password, pwd)
                 val inputPassword = InputCheckPasswordSRP(pwd.srpId, answer.a, answer.m1)
                 val result = client.invoke(AuthCheckPassword(inputPassword)) { TlRegistry.decode(it) }
                 if (result is AuthAuthorization) {
@@ -214,28 +198,45 @@ object TelegramClient {
         kickoffBackfill()
     }
 
-    suspend fun sendMessage(conversationId: String, body: String): Boolean {
+    suspend fun sendMessage(
+        conversationId: String,
+        body: String,
+        noWebpage: Boolean = false,
+        entities: List<MessageEntity> = emptyList(),
+        replyToMsgId: Int = 0,
+    ): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        // Parse markdown entities from body if none provided (Issue 13)
+        val resolvedEntities = entities.ifEmpty { parseMarkdownEntities(body) }
+        val cleanBody = if (entities.isEmpty() && resolvedEntities.isNotEmpty()) stripMarkdown(body) else body
+        // Include topic ID in replyTo for forums (Issue 12)
+        val topicReplyId = extractTopicId(conversationId) ?: replyToMsgId
         return try {
-            client.invoke(MessagesSendMessage(peer, body, random.nextLong())) { TlRegistry.decode(it) }
+            client.invoke(MessagesSendMessage(peer, cleanBody, random.nextLong(), noWebpage, resolvedEntities, topicReplyId)) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "sendMessage failed: ${t.message}")
+            Log.w(TAG, "sendMessage failed: ${humanizeError(t)}")
             false
         }
     }
 
-    suspend fun editMessage(conversationId: String, messageId: Int, newText: String): Boolean {
+    suspend fun editMessage(
+        conversationId: String,
+        messageId: Int,
+        newText: String,
+        noWebpage: Boolean = false,
+        entities: List<MessageEntity> = emptyList(),
+    ): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
         return try {
-            client.invoke(MessagesEditMessage(peer, messageId, newText)) { TlRegistry.decode(it) }
+            client.invoke(MessagesEditMessage(peer, messageId, newText, noWebpage, entities)) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "editMessage failed: ${t.message}")
+            Log.w(TAG, "editMessage failed: ${humanizeError(t)}")
             false
         }
     }
@@ -250,6 +251,16 @@ object TelegramClient {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+
+        // Truncate caption to max length (Issue 19)
+        val maxLen = if (isPremium) MAX_CAPTION_LENGTH_PREMIUM else MAX_CAPTION_LENGTH
+        val truncatedCaption = caption?.let {
+            if (it.length > maxLen) {
+                Log.w(TAG, "Caption truncated from ${it.length} to $maxLen chars")
+                it.take(maxLen)
+            } else it
+        }
+
         return try {
             val fileId = random.nextLong()
             val partSize = 512 * 1024
@@ -270,42 +281,94 @@ object TelegramClient {
             val inputFile: TlObject = if (useBig) InputFileBig(fileId, parts, fileName)
             else InputFile(fileId, parts, fileName)
 
-            val media: TlObject = if (mime.startsWith("image/")) {
+            // Check image-as-file threshold (Issue 16)
+            val media: TlObject = if (mime.startsWith("image/") && !shouldSendImageAsFile(bytes, mime)) {
                 InputMediaUploadedPhoto(inputFile)
             } else {
                 InputMediaUploadedDocument(inputFile, mime, listOf(DocumentAttributeFilename(fileName)))
             }
 
-            client.invoke(MessagesSendMedia(peer, media, caption ?: "", random.nextLong())) { TlRegistry.decode(it) }
+            client.invoke(MessagesSendMedia(peer, media, truncatedCaption ?: "", random.nextLong())) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "sendMedia failed: ${t.message}")
+            Log.w(TAG, "sendMedia failed: ${humanizeError(t)}")
             false
         }
     }
 
-    suspend fun markRead(conversationId: String): Boolean {
+    private fun shouldSendImageAsFile(bytes: ByteArray, mime: String): Boolean {
+        if (bytes.size > MAX_IMAGE_FILE_SIZE) return true
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        val w = opts.outWidth
+        val h = opts.outHeight
+        if (w <= 0 || h <= 0) return false
+        val ratio = w.toDouble() / h.toDouble()
+        return ratio > MAX_IMAGE_ASPECT_RATIO || ratio < (1.0 / MAX_IMAGE_ASPECT_RATIO)
+    }
+
+    suspend fun markRead(conversationId: String, maxId: Int = Int.MAX_VALUE): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
         return try {
-            client.invoke(MessagesReadHistory(peer, Int.MAX_VALUE)) { TlRegistry.decode(it) }
+            when (peer) {
+                is InputPeerChannel -> {
+                    val inputChannel = InputChannel(peer.channelId, peer.accessHash)
+                    client.invoke(ChannelsReadHistory(inputChannel, maxId)) { TlRegistry.decode(it) }
+                    // Also read mentions and reactions in parallel (Issue 14)
+                    scope.launch {
+                        try { client.invoke(MessagesReadMentions(peer)) { TlRegistry.decode(it) } }
+                        catch (t: Throwable) { Log.d(TAG, "readMentions: ${t.message}") }
+                    }
+                    scope.launch {
+                        try { client.invoke(MessagesReadReactions(peer)) { TlRegistry.decode(it) } }
+                        catch (t: Throwable) { Log.d(TAG, "readReactions: ${t.message}") }
+                    }
+                }
+                else -> {
+                    client.invoke(MessagesReadHistory(peer, maxId)) { TlRegistry.decode(it) }
+                }
+            }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "markRead failed: ${t.message}")
+            Log.w(TAG, "markRead failed: ${humanizeError(t)}")
             false
         }
     }
 
-    suspend fun deleteThread(conversationId: String): Boolean {
+    suspend fun deleteThread(conversationId: String, revoke: Boolean = false): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
+        // Check for topic-based deletion (Issue 15)
+        val topicId = extractTopicId(conversationId)
         return try {
-            client.invoke(MessagesDeleteHistory(peer)) { TlRegistry.decode(it) }
+            when {
+                topicId != null && peer is InputPeerChannel -> {
+                    val inputChannel = InputChannel(peer.channelId, peer.accessHash)
+                    client.invoke(ChannelsDeleteTopicHistory(inputChannel, topicId)) { TlRegistry.decode(it) }
+                }
+                peer is InputPeerUser -> {
+                    client.invoke(MessagesDeleteHistory(peer, revoke = revoke)) { TlRegistry.decode(it) }
+                }
+                peer is InputPeerChat -> {
+                    client.invoke(MessagesDeleteHistory(peer, revoke = revoke)) { TlRegistry.decode(it) }
+                    client.invoke(MessagesDeleteChat(peer.chatId)) { TlRegistry.decode(it) }
+                }
+                peer is InputPeerChannel -> {
+                    client.invoke(ChannelsLeaveChannel(
+                        InputChannel(peer.channelId, peer.accessHash)
+                    )) { TlRegistry.decode(it) }
+                }
+                else -> {
+                    client.invoke(MessagesDeleteHistory(peer, revoke = revoke)) { TlRegistry.decode(it) }
+                }
+            }
+            _events.emit(GMEvent.ConversationDeleted(source, conversationId.substringAfter(':', conversationId)))
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "deleteThread failed: ${t.message}")
+            Log.w(TAG, "deleteThread failed: ${humanizeError(t)}")
             false
         }
     }
@@ -321,24 +384,111 @@ object TelegramClient {
         val peer = resolvePeer(conversationId) ?: return false
         val msgId = messageId.substringAfterLast('_').toIntOrNull() ?: return false
         return try {
-            val reactions = if (add) listOf(InputMessageReactionEmoji(emoji)) else emptyList<TlObject>()
+            val reactions = if (add) {
+                if (emoji.startsWith("custom:")) {
+                    val docId = emoji.removePrefix("custom:").toLongOrNull() ?: 0L
+                    listOf(InputMessageReactionCustomEmoji(docId))
+                } else {
+                    listOf(InputMessageReactionEmoji(fullyQualifyEmoji(emoji)))
+                }
+            } else emptyList<TlObject>()
             client.invoke(MessagesSendReaction(peer, msgId, reactions)) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "sendReaction failed: ${t.message}")
+            Log.w(TAG, "sendReaction failed: ${humanizeError(t)}")
             false
         }
     }
 
-    suspend fun sendTyping(conversationId: String): Boolean {
+    suspend fun sendTyping(conversationId: String, action: TlObject? = null): Boolean {
         if (_state.value !is State.Connected) return false
         val client = apiClient ?: return false
         val peer = resolvePeer(conversationId) ?: return false
         return try {
-            client.invoke(MessagesSetTyping(peer)) { TlRegistry.decode(it) }
+            client.invoke(MessagesSetTyping(peer, action)) { TlRegistry.decode(it) }
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "sendTyping failed: ${t.message}")
+            Log.w(TAG, "sendTyping failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun setDisappearingTimer(conversationId: String, seconds: Int): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        // Topics don't support disappearing timer (Issue 20)
+        if (isTopicConversation(conversationId)) {
+            Log.d(TAG, "Disappearing timer not supported for topics")
+            return false
+        }
+        return try {
+            client.invoke(MessagesSetHistoryTTL(peer, seconds)) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "setDisappearingTimer failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun setGroupName(conversationId: String, newName: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            when (peer) {
+                is InputPeerChat -> {
+                    client.invoke(MessagesEditChatTitle(peer.chatId, newName)) { TlRegistry.decode(it) }
+                }
+                is InputPeerChannel -> {
+                    client.invoke(ChannelsEditTitle(InputChannel(peer.channelId, peer.accessHash), newName)) { TlRegistry.decode(it) }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "setGroupName failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun togglePin(conversationId: String, pinned: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        // Topics don't support pin (Issue 21)
+        if (isTopicConversation(conversationId)) {
+            Log.d(TAG, "Pin not supported for topics")
+            return false
+        }
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            client.invoke(MessagesToggleDialogPin(peer, pinned)) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "togglePin failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun setMute(conversationId: String, muteUntil: Int): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            // Use InputNotifyForumTopic for topics (Issue 21)
+            if (isTopicConversation(conversationId)) {
+                val topicId = extractTopicId(conversationId)
+                if (topicId != null) {
+                    client.invoke(AccountUpdateNotifyForumTopic(peer, topicId, muteUntil, muteUntil > 0)) { TlRegistry.decode(it) }
+                } else {
+                    client.invoke(AccountUpdateNotifySettings(peer, muteUntil, muteUntil > 0)) { TlRegistry.decode(it) }
+                }
+            } else {
+                client.invoke(AccountUpdateNotifySettings(peer, muteUntil, muteUntil > 0)) { TlRegistry.decode(it) }
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "setMute failed: ${humanizeError(t)}")
             false
         }
     }
@@ -353,8 +503,9 @@ object TelegramClient {
                 val result = client.invoke(MessagesGetHistory(peer, limit = count)) { TlRegistry.decode(it) }
                 val messages = extractMessages(result)
                 for (msg in messages) {
-                    if (msg is Message) {
-                        _events.emit(msg.toMessageUpdate(chatIdStr))
+                    when (msg) {
+                        is Message -> _events.emit(msg.toMessageUpdate(chatIdStr))
+                        is MessageService -> handleServiceMessageEvent(msg, chatIdStr)
                     }
                 }
             } catch (t: Throwable) {
@@ -377,7 +528,7 @@ object TelegramClient {
             kickoffBackfill()
             "${source.idPrefix}:${user.id}"
         } catch (t: Throwable) {
-            Log.w(TAG, "sendNewThread failed: ${t.message}")
+            Log.w(TAG, "sendNewThread failed: ${humanizeError(t)}")
             null
         }
     }
@@ -509,12 +660,14 @@ object TelegramClient {
         when (update) {
             is Updates -> {
                 cacheUsers(update.users)
+                cacheChats(update.chats)
                 for (u in update.updates) handleSingleUpdate(u)
                 currentDate = update.date
                 currentSeq = update.seq
             }
             is UpdatesCombined -> {
                 cacheUsers(update.users)
+                cacheChats(update.chats)
                 for (u in update.updates) handleSingleUpdate(u)
                 currentDate = update.date
                 currentSeq = update.seq
@@ -547,20 +700,34 @@ object TelegramClient {
     private suspend fun handleSingleUpdate(update: TlObject) {
         when (update) {
             is UpdateNewMessage -> {
-                val msg = update.message as? Message ?: return
-                val chatId = peerToId(msg.peerId)
-                _events.emit(msg.toMessageUpdate(chatId))
-                if (!msg.out) {
-                    _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", msg.message, senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                when (val msg = update.message) {
+                    is Message -> {
+                        val chatId = peerToId(msg.peerId)
+                        _events.emit(msg.toMessageUpdate(chatId))
+                        if (!msg.out) {
+                            _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                        }
+                    }
+                    is MessageService -> {
+                        val chatId = peerToId(msg.peerId)
+                        handleServiceMessageEvent(msg, chatId)
+                    }
                 }
                 currentPts = update.pts
             }
             is UpdateNewChannelMessage -> {
-                val msg = update.message as? Message ?: return
-                val chatId = peerToId(msg.peerId)
-                _events.emit(msg.toMessageUpdate(chatId))
-                if (!msg.out) {
-                    _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", msg.message, senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                when (val msg = update.message) {
+                    is Message -> {
+                        val chatId = peerToId(msg.peerId)
+                        _events.emit(msg.toMessageUpdate(chatId))
+                        if (!msg.out) {
+                            _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                        }
+                    }
+                    is MessageService -> {
+                        val chatId = peerToId(msg.peerId)
+                        handleServiceMessageEvent(msg, chatId)
+                    }
                 }
                 currentPts = update.pts
             }
@@ -579,12 +746,18 @@ object TelegramClient {
             is UpdateEditMessage -> {
                 val msg = update.message as? Message ?: return
                 val chatId = peerToId(msg.peerId)
+                if (msg.editDate > 0) {
+                    _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                }
                 _events.emit(msg.toMessageUpdate(chatId))
                 currentPts = update.pts
             }
             is UpdateEditChannelMessage -> {
                 val msg = update.message as? Message ?: return
                 val chatId = peerToId(msg.peerId)
+                if (msg.editDate > 0) {
+                    _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                }
                 _events.emit(msg.toMessageUpdate(chatId))
                 currentPts = update.pts
             }
@@ -594,18 +767,155 @@ object TelegramClient {
             }
             is UpdateReadHistoryOutbox -> {
                 val chatId = peerToId(update.peer)
-                _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
+                if (update.peer is PeerUser) {
+                    _events.emit(GMEvent.ReadReceipt(source, chatId, "${chatId}_${update.maxId}", null, System.currentTimeMillis()))
+                }
             }
             is UpdateReadChannelInbox -> {
                 val chatId = update.channelId.toString()
                 _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
             }
+            is UpdateReadChannelOutbox -> {
+                val chatId = update.channelId.toString()
+                _events.emit(GMEvent.ReadReceipt(source, chatId, "${chatId}_${update.maxId}", null, System.currentTimeMillis()))
+            }
             is UpdateChannel -> {
-                // Channel metadata changed; trigger a resync
                 val chatId = update.channelId.toString()
                 _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
             }
+            is UpdateUserTyping -> {
+                val chatId = update.userId.toString()
+                val isTyping = update.actionTypeId != 0xfd5ec8f5.toInt() // not cancel
+                _events.emit(GMEvent.TypingIndicator(source, chatId, update.userId.toString(), isTyping))
+            }
+            is UpdateChatUserTyping -> {
+                val chatId = update.chatId.toString()
+                val senderId = peerToId(update.fromId)
+                val isTyping = update.actionTypeId != 0xfd5ec8f5.toInt()
+                _events.emit(GMEvent.TypingIndicator(source, chatId, senderId, isTyping))
+            }
+            is UpdateChannelUserTyping -> {
+                val chatId = update.channelId.toString()
+                val senderId = peerToId(update.fromId)
+                val isTyping = update.actionTypeId != 0xfd5ec8f5.toInt()
+                _events.emit(GMEvent.TypingIndicator(source, chatId, senderId, isTyping))
+            }
+            is UpdateMessageReactions -> {
+                val chatId = peerToId(update.peer)
+                _events.emit(GMEvent.ConversationUpdate(source, chatId, null, null, null, null, 0, 0))
+            }
+            is UpdateUserName -> {
+                val name = "${update.firstName} ${update.lastName}".trim()
+                if (name.isNotBlank()) userNameCache[update.userId] = name
+            }
+            is UpdateNotifySettings -> {
+                // Mute settings changed
+            }
+            is UpdatePinnedDialogs -> {
+                // Pin state changed
+            }
         }
+    }
+
+    private suspend fun handleServiceMessageEvent(msg: MessageService, chatId: String) {
+        val action = msg.action ?: return
+        val senderName = senderName(msg.fromId)
+        when (action) {
+            is MessageActionChatEditTitle -> {
+                _events.emit(GMEvent.ConversationNameChanged(source, chatId, action.title))
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} changed the group name to \"${action.title}\"",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatEditPhoto -> {
+                _events.emit(GMEvent.ConversationAvatarChanged(source, chatId, null))
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} changed the group photo",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatDeletePhoto -> {
+                _events.emit(GMEvent.ConversationAvatarChanged(source, chatId, null))
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} removed the group photo",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatAddUser -> {
+                for (userId in action.users) {
+                    _events.emit(GMEvent.ParticipantAdded(source, chatId, userId.toString()))
+                }
+                val addedNames = action.users.joinToString(", ") { userNameCache[it] ?: it.toString() }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} added $addedNames",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatDeleteUser -> {
+                _events.emit(GMEvent.ParticipantRemoved(source, chatId, action.userId.toString()))
+                val removedName = userNameCache[action.userId] ?: action.userId.toString()
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} removed $removedName",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatJoinedByLink -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} joined via invite link",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionSetMessagesTTL -> {
+                val body = if (action.period > 0) {
+                    "${senderName ?: "Someone"} set messages to auto-delete in ${formatTTL(action.period)}"
+                } else {
+                    "${senderName ?: "Someone"} disabled auto-delete"
+                }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    body, msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionPhoneCall -> {
+                val body = buildString {
+                    if (action.video) append("Video call") else append("Voice call")
+                    if (action.duration > 0) append(" (${action.duration}s)")
+                }
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    body, msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatCreate -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} created the group \"${action.title}\"",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChatMigrateTo -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "Group upgraded to supergroup",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionPinMessage -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "${senderName ?: "Someone"} pinned a message",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionTopicCreate -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "Topic \"${action.title}\" created",
+                    msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionGroupCall -> {
+                val body = if (action.duration > 0) "Group call (${action.duration}s)" else "Group call started"
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    body, msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionChannelCreate -> {
+                _events.emit(GMEvent.MessageUpdate(source, chatId, "${chatId}_${msg.id}",
+                    "Channel created", msg.out, msg.date.toLong() * 1000, senderName))
+            }
+            is MessageActionUnknown -> {}
+        }
+    }
+
+    private fun formatTTL(seconds: Int): String = when {
+        seconds >= 86400 * 7 -> "${seconds / (86400 * 7)} week(s)"
+        seconds >= 86400 -> "${seconds / 86400} day(s)"
+        seconds >= 3600 -> "${seconds / 3600} hour(s)"
+        seconds >= 60 -> "${seconds / 60} minute(s)"
+        else -> "$seconds second(s)"
     }
 
     private fun kickoffBackfill() {
@@ -638,6 +948,18 @@ object TelegramClient {
                     val tsMs = (lastMsg?.date?.toLong() ?: 0L) * 1000L
                     val isGroup = dialog.peer is PeerChat || dialog.peer is PeerChannel
                     val name = resolvePeerName(dialog.peer)
+                    val convType = when (dialog.peer) {
+                        is PeerChannel -> {
+                            val ch = channelMetaCache[dialog.peer.channelId]
+                            when {
+                                ch?.forum == true -> "Forum"
+                                ch?.megagroup == true -> "Supergroup"
+                                else -> "Channel"
+                            }
+                        }
+                        is PeerChat -> "Group"
+                        else -> "Telegram"
+                    }
 
                     _events.emit(
                         GMEvent.ConversationUpdate(
@@ -650,7 +972,7 @@ object TelegramClient {
                             lastTimestamp = tsMs,
                             unreadCount = dialog.unreadCount,
                             isGroup = isGroup,
-                            conversationType = "Telegram",
+                            conversationType = convType,
                         )
                     )
 
@@ -665,8 +987,9 @@ object TelegramClient {
                         val histMsgs = extractMessages(histResult)
                         cacheUsers(extractUsers(histResult))
                         for (msg in histMsgs) {
-                            if (msg is Message) {
-                                _events.emit(msg.toMessageUpdate(chatId))
+                            when (msg) {
+                                is Message -> _events.emit(msg.toMessageUpdate(chatId))
+                                is MessageService -> handleServiceMessageEvent(msg, chatId)
                             }
                         }
                     } catch (t: Throwable) {
@@ -700,10 +1023,17 @@ object TelegramClient {
             val diff = client.invoke(UpdatesGetDifference(currentPts, currentDate, currentQts)) { TlRegistry.decode(it) }
             if (diff is UpdatesDifference) {
                 cacheUsers(diff.users)
+                cacheChats(diff.chats)
                 for (msg in diff.newMessages) {
-                    if (msg is Message) {
-                        val chatId = peerToId(msg.peerId)
-                        _events.emit(msg.toMessageUpdate(chatId))
+                    when (msg) {
+                        is Message -> {
+                            val chatId = peerToId(msg.peerId)
+                            _events.emit(msg.toMessageUpdate(chatId))
+                        }
+                        is MessageService -> {
+                            val chatId = peerToId(msg.peerId)
+                            handleServiceMessageEvent(msg, chatId)
+                        }
                     }
                 }
                 for (u in diff.otherUpdates) handleSingleUpdate(u)
@@ -783,6 +1113,7 @@ object TelegramClient {
                 is Channel -> {
                     userNameCache[c.id] = c.title
                     peerCache[c.id] = InputPeerChannel(c.id, c.accessHash)
+                    channelMetaCache[c.id] = c
                 }
             }
         }
@@ -819,14 +1150,137 @@ object TelegramClient {
         else -> emptyList()
     }
 
+    private fun renderBody(msg: Message): String {
+        val text = msg.message
+        if (text.isBlank()) return extractPreview(msg) ?: ""
+        if (msg.entities.isEmpty()) return buildBodyWithContext(msg, text)
+
+        val sb = StringBuilder()
+        var lastEnd = 0
+        val sorted = msg.entities.sortedBy { it.offset }
+        for (entity in sorted) {
+            val start = entity.offset.coerceAtMost(text.length)
+            val end = (entity.offset + entity.length).coerceAtMost(text.length)
+            if (start < lastEnd) continue
+            if (start > lastEnd) sb.append(text, lastEnd, start)
+            val slice = text.substring(start, end)
+            when (entity.type) {
+                "bold" -> sb.append("*").append(slice).append("*")
+                "italic" -> sb.append("_").append(slice).append("_")
+                "code" -> sb.append("`").append(slice).append("`")
+                "pre" -> sb.append("```").append(slice).append("```")
+                "strikethrough" -> sb.append("~").append(slice).append("~")
+                "underline" -> sb.append(slice)
+                "textUrl" -> sb.append(slice).append(" (").append(entity.url).append(")")
+                "spoiler" -> sb.append("||").append(slice).append("||")
+                "blockquote" -> sb.append("> ").append(slice)
+                else -> sb.append(slice)
+            }
+            lastEnd = end
+        }
+        if (lastEnd < text.length) sb.append(text, lastEnd, text.length)
+
+        return buildBodyWithContext(msg, sb.toString())
+    }
+
+    private fun buildBodyWithContext(msg: Message, body: String): String {
+        val parts = mutableListOf<String>()
+        msg.fwdFrom?.let { fwd ->
+            val fwdName = fwd.fromName.ifBlank {
+                fwd.fromId?.let {
+                    if (it is PeerUser) userNameCache[it.userId] else null
+                } ?: "Unknown"
+            }
+            parts.add("Forwarded from $fwdName:")
+        }
+        if (msg.replyToMsgId != 0) {
+            parts.add("[Reply to ${msg.replyToMsgId}]")
+        }
+        parts.add(body)
+        val media = msg.media
+        if (media != null && media !is MessageMediaEmpty) {
+            val mediaText = when (media) {
+                is MessageMediaWebPage -> if (media.url.isNotBlank()) "[Link: ${media.url}]" else null
+                is MessageMediaPhoto -> "[Photo]"
+                is MessageMediaDocument -> when {
+                    (media as MessageMediaDocument).isSticker -> {
+                        val alt = media.stickerAlt.ifBlank { null }
+                        val stickerType = when {
+                            media.mimeType == "application/x-tgsticker" -> "animated"
+                            media.mimeType == "video/webm" -> "video"
+                            else -> "static"
+                        }
+                        alt ?: "[Sticker ($stickerType)]"
+                    }
+                    media.isVoice -> "[Voice message]"
+                    media.isRoundVideo -> "[Video message]"
+                    media.isVideo -> "[Video]"
+                    media.isAnimated -> "[GIF]"
+                    media.mimeType.startsWith("audio/") -> "[Audio]"
+                    media.fileName.isNotBlank() -> "[File: ${media.fileName}]"
+                    else -> "[File]"
+                }
+                is MessageMediaContact -> {
+                    val name = "${media.firstName} ${media.lastName}".trim()
+                    val phone = media.phoneNumber
+                    if (phone.isNotBlank()) "[Contact: $name ($phone)]" else "[Contact: $name]"
+                }
+                is MessageMediaGeo -> "[Location: ${media.geoUri()}]"
+                is MessageMediaGeoLive -> "[Live Location: ${media.geoUri()}]"
+                is MessageMediaVenue -> if (media.title.isNotBlank()) "[Venue: ${media.title} at ${media.geoUri()}]" else "[Venue]"
+                is MessageMediaPoll -> renderPoll(media)
+                is MessageMediaDice -> renderDice(media)
+                else -> null
+            }
+            if (mediaText != null && body.isBlank()) {
+                parts.clear()
+                msg.fwdFrom?.let { fwd ->
+                    val fwdName = fwd.fromName.ifBlank { "Unknown" }
+                    parts.add("Forwarded from $fwdName:")
+                }
+                parts.add(mediaText)
+            } else if (mediaText != null) {
+                parts.add(mediaText)
+            }
+        }
+        return parts.joinToString("\n")
+    }
+
+    private fun renderPoll(poll: MessageMediaPoll): String {
+        return if (poll.pollQuestion.isNotBlank()) "[Poll: ${poll.pollQuestion}]" else "[Poll]"
+    }
+
+    private fun renderDice(dice: MessageMediaDice): String {
+        return when (dice.emoticon) {
+            "🎯" -> "Dart: ${dice.value}"
+            "🎲" -> "Dice: ${dice.value}"
+            "🏀" -> "Basketball: ${if (dice.value >= 4) "Score!" else "Miss"}"
+            "⚽" -> "Football: ${if (dice.value >= 3) "Goal!" else "Miss"}"
+            "🎳" -> "Bowling: ${dice.value} pins"
+            "🎰" -> "Slots: ${dice.value}"
+            else -> "${dice.emoticon} ${dice.value}"
+        }
+    }
+
     private fun extractPreview(msg: Message): String? {
         val text = msg.message
-        if (text.isNotBlank()) return text
+        if (text.isNotBlank()) {
+            if (msg.entities.isNotEmpty()) return renderBody(msg)
+            return buildBodyWithContext(msg, text)
+        }
         val media = msg.media
         return when (media) {
             is MessageMediaPhoto -> "[Photo]"
             is MessageMediaDocument -> when {
-                media.isSticker -> media.stickerAlt.ifBlank { "[Sticker]" }
+                media.isSticker -> {
+                    val alt = media.stickerAlt.ifBlank { null }
+                    val stickerType = when {
+                        media.mimeType == "application/x-tgsticker" -> "animated"
+                        media.mimeType == "video/webm" -> "video"
+                        else -> "static"
+                    }
+                    alt ?: "[Sticker ($stickerType)]"
+                }
                 media.isVoice -> "[Voice message]"
                 media.isRoundVideo -> "[Video message]"
                 media.isVideo -> "[Video]"
@@ -836,12 +1290,16 @@ object TelegramClient {
                 media.fileName.isNotBlank() -> "[File: ${media.fileName}]"
                 else -> "[File]"
             }
-            is MessageMediaContact -> "[Contact: ${media.firstName} ${media.lastName}]".trim()
+            is MessageMediaContact -> {
+                val name = "${media.firstName} ${media.lastName}".trim()
+                "[Contact: $name${if (media.phoneNumber.isNotBlank()) " (${media.phoneNumber})" else ""}]"
+            }
             is MessageMediaGeo -> "[Location]"
             is MessageMediaGeoLive -> "[Live Location]"
             is MessageMediaVenue -> if (media.title.isNotBlank()) "[Venue: ${media.title}]" else "[Venue]"
-            is MessageMediaPoll -> if (media.pollQuestion.isNotBlank()) "[Poll: ${media.pollQuestion}]" else "[Poll]"
-            is MessageMediaDice -> "${media.emoticon} ${media.value}"
+            is MessageMediaPoll -> renderPoll(media)
+            is MessageMediaDice -> renderDice(media)
+            is MessageMediaWebPage -> if (media.url.isNotBlank()) "[Link: ${media.url}]" else "[Link Preview]"
             is MessageMediaUnsupported -> "[Unsupported message]"
             else -> if (msg.mediaTypeId != 0) "[Media]" else null
         }
@@ -849,7 +1307,7 @@ object TelegramClient {
 
     private fun Message.toMessageUpdate(chatId: String): GMEvent.MessageUpdate {
         val msgId = "${chatId}_${this.id}"
-        val body = extractPreview(this) ?: ""
+        val body = renderBody(this)
         val tsMs = this.date.toLong() * 1000L
         return GMEvent.MessageUpdate(
             source = source,
@@ -860,5 +1318,308 @@ object TelegramClient {
             timestamp = tsMs,
             senderName = senderName(this.fromId),
         )
+    }
+
+    // ----------------------------------------------------------------
+    // Membership handling (Issue 11)
+    // ----------------------------------------------------------------
+
+    suspend fun inviteMember(conversationId: String, userIds: List<Long>): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            when (peer) {
+                is InputPeerChannel -> {
+                    val inputUsers = userIds.mapNotNull { uid ->
+                        val cached = peerCache[uid]
+                        if (cached is InputPeerUser) InputUser(cached.userId, cached.accessHash) else null
+                    }
+                    client.invoke(ChannelsInviteToChannel(
+                        InputChannel(peer.channelId, peer.accessHash), inputUsers
+                    )) { TlRegistry.decode(it) }
+                }
+                is InputPeerChat -> {
+                    for (uid in userIds) {
+                        val cached = peerCache[uid]
+                        if (cached is InputPeerUser) {
+                            client.invoke(MessagesAddChatUser(
+                                peer.chatId, InputUser(cached.userId, cached.accessHash)
+                            )) { TlRegistry.decode(it) }
+                        }
+                    }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "inviteMember failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun kickMember(conversationId: String, userId: Long): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        val cached = peerCache[userId]
+        val inputUser = if (cached is InputPeerUser) InputUser(cached.userId, cached.accessHash) else return false
+        return try {
+            when (peer) {
+                is InputPeerChannel -> {
+                    client.invoke(ChannelsEditBanned(
+                        InputChannel(peer.channelId, peer.accessHash), inputUser
+                    )) { TlRegistry.decode(it) }
+                }
+                is InputPeerChat -> {
+                    client.invoke(MessagesDeleteChatUser(peer.chatId, inputUser)) { TlRegistry.decode(it) }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "kickMember failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun banMember(conversationId: String, userId: Long): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        if (peer !is InputPeerChannel) return false
+        val cached = peerCache[userId]
+        val inputUser = if (cached is InputPeerUser) InputUser(cached.userId, cached.accessHash) else return false
+        return try {
+            client.invoke(ChannelsEditBanned(
+                InputChannel(peer.channelId, peer.accessHash), inputUser, bannedRights = 1L
+            )) { TlRegistry.decode(it) }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "banMember failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun leaveGroup(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            when (peer) {
+                is InputPeerChannel -> {
+                    client.invoke(ChannelsLeaveChannel(
+                        InputChannel(peer.channelId, peer.accessHash)
+                    )) { TlRegistry.decode(it) }
+                }
+                is InputPeerChat -> {
+                    client.invoke(MessagesDeleteChatUser(
+                        peer.chatId, InputUser(0, 0) // self
+                    )) { TlRegistry.decode(it) }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "leaveGroup failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Forum/topic helpers (Issue 12)
+    // ----------------------------------------------------------------
+
+    private fun isTopicConversation(conversationId: String): Boolean {
+        return conversationId.contains("_topic_")
+    }
+
+    private fun extractTopicId(conversationId: String): Int? {
+        val parts = conversationId.split("_topic_")
+        return if (parts.size == 2) parts[1].toIntOrNull() else null
+    }
+
+    // ----------------------------------------------------------------
+    // Markdown parsing for outbound entities (Issue 13)
+    // ----------------------------------------------------------------
+
+    private fun parseMarkdownEntities(text: String): List<MessageEntity> {
+        val entities = mutableListOf<MessageEntity>()
+        val patterns = listOf(
+            "\\*\\*(.+?)\\*\\*" to "bold",
+            "\\*(.+?)\\*" to "italic",
+            "__(.+?)__" to "underline",
+            "~~(.+?)~~" to "strikethrough",
+            "```(.+?)```" to "pre",
+            "`(.+?)`" to "code",
+            "\\|\\|(.+?)\\|\\|" to "spoiler",
+        )
+        for ((pattern, type) in patterns) {
+            val regex = Regex(pattern, RegexOption.DOT_MATCHES_ALL)
+            for (match in regex.findAll(text)) {
+                entities.add(MessageEntity(
+                    type = type,
+                    offset = match.range.first,
+                    length = match.groupValues[1].length,
+                ))
+            }
+        }
+        // URL detection
+        val urlRegex = Regex("\\[(.+?)]\\((.+?)\\)")
+        for (match in urlRegex.findAll(text)) {
+            entities.add(MessageEntity(
+                type = "textUrl",
+                offset = match.range.first,
+                length = match.groupValues[1].length,
+                url = match.groupValues[2],
+            ))
+        }
+        return entities.sortedBy { it.offset }
+    }
+
+    private fun stripMarkdown(text: String): String {
+        var result = text
+        result = result.replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
+        result = result.replace(Regex("\\*(.+?)\\*"), "$1")
+        result = result.replace(Regex("__(.+?)__"), "$1")
+        result = result.replace(Regex("~~(.+?)~~"), "$1")
+        result = result.replace(Regex("```(.+?)```", RegexOption.DOT_MATCHES_ALL), "$1")
+        result = result.replace(Regex("`(.+?)`"), "$1")
+        result = result.replace(Regex("\\|\\|(.+?)\\|\\|"), "$1")
+        result = result.replace(Regex("\\[(.+?)]\\((.+?)\\)"), "$1")
+        return result
+    }
+
+    // ----------------------------------------------------------------
+    // Error humanization (Issue 17)
+    // ----------------------------------------------------------------
+
+    private fun humanizeError(t: Throwable): String {
+        val msg = t.message ?: return t.toString()
+        return when {
+            msg.contains("PEER_ID_INVALID") -> "Invalid peer: the user or chat could not be found"
+            msg.contains("CHAT_WRITE_FORBIDDEN") -> "You can't write in this chat"
+            msg.contains("CHAT_ADMIN_REQUIRED") -> "Admin privileges are required"
+            msg.contains("CHAT_FORBIDDEN") -> "You cannot write in this chat"
+            msg.contains("USER_BANNED_IN_CHANNEL") -> "You're banned from sending messages in this channel"
+            msg.contains("USER_NOT_PARTICIPANT") -> "You are not a member of this chat"
+            msg.contains("CHANNEL_PRIVATE") -> "This channel is private"
+            msg.contains("MESSAGE_TOO_LONG") -> "Message was too long"
+            msg.contains("MESSAGE_EMPTY") -> "Message is empty"
+            msg.contains("MESSAGE_NOT_MODIFIED") -> "Message content was not changed"
+            msg.contains("MESSAGE_EDIT_TIME_EXPIRED") -> "You can't edit this message anymore"
+            msg.contains("MEDIA_CAPTION_TOO_LONG") -> "The caption is too long"
+            msg.contains("MEDIA_EMPTY") -> "The provided media is invalid"
+            msg.contains("FLOOD_WAIT") -> "Too many requests, please wait"
+            msg.contains("SLOWMODE_WAIT") -> "Slow mode is active, please wait"
+            msg.contains("USER_PRIVACY_RESTRICTED") -> "The user's privacy settings don't allow this"
+            msg.contains("REACTIONS_TOO_MANY") -> "Too many different reactions on this message"
+            msg.contains("REACTION_INVALID") -> "Invalid reaction"
+            msg.contains("PHONE_NUMBER_INVALID") -> "The phone number is invalid"
+            msg.contains("PHONE_CODE_INVALID") -> "The verification code is invalid"
+            msg.contains("SESSION_PASSWORD_NEEDED") -> "Two-factor authentication is required"
+            msg.contains("CHANNEL_FORUM_MISSING") -> "This channel is not a forum"
+            msg.contains("TOPIC_DELETED") -> "The topic was deleted"
+            else -> msg
+        }
+    }
+
+    private fun handleSponsoredMessage() {
+        Log.i(TAG, "Sponsored messages are not supported on this client")
+    }
+
+    suspend fun setGroupAvatar(conversationId: String, imageBytes: ByteArray): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            val fileId = random.nextLong()
+            val partSize = 512 * 1024
+            val parts = (imageBytes.size + partSize - 1) / partSize
+            for (i in 0 until parts) {
+                val start = i * partSize
+                val end = minOf(start + partSize, imageBytes.size)
+                val chunk = imageBytes.copyOfRange(start, end)
+                client.invoke(UploadSaveFilePart(fileId, i, chunk)) { TlRegistry.decode(it) }
+            }
+            val inputFile = InputFile(fileId, parts, "avatar.jpg")
+            val inputPhoto = InputChatUploadedPhoto(inputFile)
+            when (peer) {
+                is InputPeerChat -> {
+                    client.invoke(MessagesEditChatPhoto(peer.chatId, inputPhoto)) { TlRegistry.decode(it) }
+                }
+                is InputPeerChannel -> {
+                    client.invoke(ChannelsEditPhoto(InputChannel(peer.channelId, peer.accessHash), inputPhoto)) { TlRegistry.decode(it) }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "setGroupAvatar failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun removeGroupAvatar(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            val emptyPhoto = InputChatPhotoEmpty
+            when (peer) {
+                is InputPeerChat -> {
+                    client.invoke(MessagesEditChatPhoto(peer.chatId, emptyPhoto)) { TlRegistry.decode(it) }
+                }
+                is InputPeerChannel -> {
+                    client.invoke(ChannelsEditPhoto(InputChannel(peer.channelId, peer.accessHash), emptyPhoto)) { TlRegistry.decode(it) }
+                }
+                else -> return false
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "removeGroupAvatar failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    suspend fun deleteMessage(
+        conversationId: String,
+        messageId: Int,
+        revokeForEveryone: Boolean = true,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val client = apiClient ?: return false
+        val peer = resolvePeer(conversationId) ?: return false
+        return try {
+            when (peer) {
+                is InputPeerChannel -> {
+                    val inputChannel = InputChannel(peer.channelId, peer.accessHash)
+                    client.invoke(ChannelsDeleteMessages(inputChannel, listOf(messageId))) { TlRegistry.decode(it) }
+                }
+                else -> {
+                    client.invoke(MessagesDeleteMessages(listOf(messageId), revokeForEveryone)) { TlRegistry.decode(it) }
+                }
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "deleteMessage failed: ${humanizeError(t)}")
+            false
+        }
+    }
+
+    private fun fullyQualifyEmoji(emoji: String): String {
+        if (emoji.codePointCount(0, emoji.length) == 1) {
+            val cp = emoji.codePointAt(0)
+            if (cp in 0x2600..0x27BF || cp in 0x2300..0x23FF ||
+                cp in 0x2B50..0x2B55 || cp in 0x200D..0x200D ||
+                cp in 0x2702..0x27B0 || cp in 0x3030..0x3030 ||
+                cp in 0x303D..0x303D || cp in 0x3297..0x3299 ||
+                cp in 0x2049..0x2139 || cp in 0x231A..0x231B ||
+                cp in 0x25AA..0x25FE || cp in 0x2934..0x2935 ||
+                cp in 0x2194..0x21AA || cp in 0x00A9..0x00AE) {
+                return emoji + "\uFE0F"
+            }
+        }
+        return emoji
     }
 }

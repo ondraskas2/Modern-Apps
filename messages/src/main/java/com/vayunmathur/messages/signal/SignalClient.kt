@@ -52,12 +52,14 @@ import org.json.JSONObject
 import org.signal.libsignal.protocol.IdentityKeyPair
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Collections
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 object SignalClient {
 
     private const val TAG = "SignalClient"
+    private const val MESSAGE_DELETE_MAX_AGE_MS = 24L * 60 * 60 * 1000 // 24 hours
 
     sealed interface State {
         data object Idle : State
@@ -175,48 +177,80 @@ object SignalClient {
         _state.value = State.NeedsSetup
     }
 
+    // Fix #14: QR auto-refresh with 45s timeout and 6 retries
     fun startProvisioning() {
         _state.value = State.Connecting
         provisioningJob?.cancel()
         provisioningJob = scope.launch {
-            try {
-                Provisioning.startProvisioning(appContext).collect { event ->
-                    when (event) {
-                        is Provisioning.ProvisioningEvent.QrUrl -> {
-                            _state.value = State.AwaitingQrScan(event.url)
-                        }
-                        is Provisioning.ProvisioningEvent.Success -> {
-                            val data = event.deviceData
-                            val auth = SignalAuthData(
-                                aci = data.aci,
-                                pni = data.pni,
-                                deviceId = data.deviceId,
-                                number = data.number,
-                                password = data.password,
-                                aciIdentityKeyPair = data.aciIdentityKeyPair,
-                                pniIdentityKeyPair = data.pniIdentityKeyPair,
-                                aciRegistrationId = data.aciRegistrationId,
-                                pniRegistrationId = data.pniRegistrationId,
-                                masterKey = data.masterKey,
-                                accountEntropyPool = data.accountEntropyPool,
-                                ephemeralBackupKey = data.ephemeralBackupKey,
-                                mediaRootBackupKey = data.mediaRootBackupKey,
-                            )
-                            auth.save(appContext)
-                            authData = auth
-                            bootSession(auth)
-                        }
-                        is Provisioning.ProvisioningEvent.Error -> {
-                            Log.e(TAG, "Provisioning error: ${event.message}")
-                            _state.value = State.Disconnected("Provisioning failed: ${event.message}")
+            var qrRetryCount = 0
+            val maxQrRetries = 6
+
+            while (qrRetryCount < maxQrRetries) {
+                try {
+                    var gotSuccess = false
+                    val timeoutJob = launch {
+                        delay(45_000L)
+                    }
+
+                    val provisionFlow = Provisioning.startProvisioning(appContext)
+                    provisionFlow.collect { event ->
+                        when (event) {
+                            is Provisioning.ProvisioningEvent.QrUrl -> {
+                                _state.value = State.AwaitingQrScan(event.url)
+                            }
+                            is Provisioning.ProvisioningEvent.Success -> {
+                                timeoutJob.cancel()
+                                gotSuccess = true
+                                val data = event.deviceData
+                                val auth = SignalAuthData(
+                                    aci = data.aci,
+                                    pni = data.pni,
+                                    deviceId = data.deviceId,
+                                    number = data.number,
+                                    password = data.password,
+                                    aciIdentityKeyPair = data.aciIdentityKeyPair,
+                                    pniIdentityKeyPair = data.pniIdentityKeyPair,
+                                    aciRegistrationId = data.aciRegistrationId,
+                                    pniRegistrationId = data.pniRegistrationId,
+                                    masterKey = data.masterKey,
+                                    accountEntropyPool = data.accountEntropyPool,
+                                    ephemeralBackupKey = data.ephemeralBackupKey,
+                                    mediaRootBackupKey = data.mediaRootBackupKey,
+                                )
+                                auth.save(appContext)
+                                authData = auth
+                                bootSession(auth)
+                                return@collect
+                            }
+                            is Provisioning.ProvisioningEvent.Error -> {
+                                timeoutJob.cancel()
+                                Log.e(TAG, "Provisioning error: ${event.message}")
+                                _state.value = State.Disconnected("Provisioning failed: ${event.message}")
+                                return@collect
+                            }
                         }
                     }
+
+                    if (gotSuccess) return@launch
+
+                    // If we got here without success, the flow completed or timed out
+                    timeoutJob.cancel()
+                    qrRetryCount++
+                    if (qrRetryCount >= maxQrRetries) {
+                        _state.value = State.Disconnected("Too many QR code refreshes")
+                        return@launch
+                    }
+                    Log.d(TAG, "QR scan timed out, refreshing (attempt $qrRetryCount/$maxQrRetries)")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Provisioning attempt failed", e)
+                    qrRetryCount++
+                    if (qrRetryCount >= maxQrRetries) {
+                        _state.value = State.Disconnected("Provisioning failed: ${e.message}")
+                        return@launch
+                    }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Provisioning failed", e)
-                _state.value = State.Disconnected("Provisioning failed: ${e.message}")
             }
         }
     }
@@ -265,16 +299,31 @@ object SignalClient {
         }
     }
 
+    // Issue #12: Group read receipt timestamps by sender ACI, send per-sender ReceiptMessage
     suspend fun markRead(conversationId: String): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
-        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val auth = authData ?: return false
         return try {
             val messagesDb = buildMessagesDatabase(appContext)
             val messages = messagesDb.messageDao().observeForConversation(conversationId).first()
-            val timestamps = messages.map { it.timestamp }.takeIf { it.isNotEmpty() } ?: return true
-            val content = ContentBuilders.readReceipt(timestamps)
-            sender.sendMessage(recipientAci, content, System.currentTimeMillis())
+            if (messages.isEmpty()) return true
+
+            // Group timestamps by sender ACI
+            val timestampsBySender = mutableMapOf<String, MutableList<Long>>()
+            for (msg in messages) {
+                val senderAci = msg.senderId ?: continue
+                // Skip own messages
+                if (senderAci == auth.aci) continue
+                timestampsBySender.getOrPut(senderAci) { mutableListOf() }.add(msg.timestamp)
+            }
+
+            // Send a separate ReceiptMessage per sender
+            for ((senderAci, timestamps) in timestampsBySender) {
+                val recipientAci = resolveRecipient(senderAci) ?: continue
+                val content = ContentBuilders.readReceipt(timestamps)
+                sender.sendMessage(recipientAci, content, System.currentTimeMillis())
+            }
             true
         } catch (t: Throwable) {
             Log.w(TAG, "markRead failed: ${t.message}")
@@ -282,34 +331,123 @@ object SignalClient {
         }
     }
 
+    // Fix #2: deleteThread — add SyncMessage DeleteForMe sync to Signal
     suspend fun deleteThread(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val auth = authData ?: return false
+        val aci = extractAci(conversationId) ?: return false
+
+        // Build ConversationIdentifier
+        val convId = SignalServiceProtos.ConversationIdentifier.newBuilder()
+            .setThreadServiceIdBinary(
+                com.google.protobuf.ByteString.copyFrom(MessageSender.uuidToBytes(aci))
+            ).build()
+
+        // Query last 5 messages for the anchor
+        val mostRecentMessages = try {
+            val messagesDb = buildMessagesDatabase(appContext)
+            val messages = messagesDb.messageDao().observeForConversation(conversationId).first()
+            messages.takeLast(5).mapNotNull { msg ->
+                val authorAci = msg.senderId ?: return@mapNotNull null
+                SignalServiceProtos.AddressableMessage.newBuilder()
+                    .setAuthorServiceIdBinary(
+                        com.google.protobuf.ByteString.copyFrom(MessageSender.uuidToBytes(authorAci))
+                    )
+                    .setSentTimestamp(msg.timestamp)
+                    .build()
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to query recent messages for delete: ${t.message}")
+            emptyList()
+        }
+
+        val deleteContent = ContentBuilders.deleteForMeSyncMessage(
+            conversationId = convId,
+            mostRecentMessages = mostRecentMessages,
+            isFullDelete = true,
+        )
+
+        // Send to self as sync message
+        try {
+            sender.sendSelfSyncMessage(deleteContent, System.currentTimeMillis())
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to send DeleteForMe sync: ${t.message}")
+        }
+
         _events.emit(GMEvent.ConversationDeleted(source, conversationId))
         return true
     }
 
-    suspend fun sendReaction(
+    // Fix #9: Message deletion with 24h time restriction
+    suspend fun deleteMessage(
         messageId: String,
         conversationId: String,
-        emoji: String,
-        add: Boolean,
+        messageTimestamp: Long,
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
         val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
         val targetTimestamp = messageId.substringAfterLast('_').toLongOrNull() ?: return false
-        val content = ContentBuilders.reactionMessage(emoji, recipientAci, targetTimestamp, !add)
+
+        // Enforce 24h delete window (matching Go bridge capabilities: DeleteMaxAge = 24h)
+        val age = System.currentTimeMillis() - messageTimestamp
+        if (age > MESSAGE_DELETE_MAX_AGE_MS) {
+            Log.w(TAG, "Cannot delete message older than 24 hours (age=${age}ms)")
+            return false
+        }
+
+        val content = ContentBuilders.deleteMessage(targetTimestamp)
         val timestamp = System.currentTimeMillis()
         val result = sender.sendMessage(recipientAci, content, timestamp)
         return result.success
     }
 
-    suspend fun sendTyping(conversationId: String): Boolean {
+    // Issue #11: Add messageAuthorAci parameter for correct reaction targeting
+    suspend fun sendReaction(
+        messageId: String,
+        conversationId: String,
+        emoji: String,
+        add: Boolean,
+        messageAuthorAci: String? = null,
+    ): Boolean {
         if (_state.value !is State.Connected) return false
         val sender = messageSender ?: return false
         val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
-        val content = ContentBuilders.typingMessage(true, System.currentTimeMillis())
+        val targetTimestamp = messageId.substringAfterLast('_').toLongOrNull() ?: return false
+        val authorAci = messageAuthorAci ?: recipientAci
+        val content = ContentBuilders.reactionMessage(emoji, authorAci, targetTimestamp, !add)
+        val timestamp = System.currentTimeMillis()
+        val result = sender.sendMessage(recipientAci, content, timestamp)
+        return result.success
+    }
+
+    // Fix #10: Group typing support (include GroupIdentifier)
+    suspend fun sendTyping(conversationId: String, isTyping: Boolean = true): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val aci = extractAci(conversationId) ?: return false
+
+        // Check if this is a group conversation
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val groupIdBytes = Base64.decode(groupId, Base64.DEFAULT)
+                val content = ContentBuilders.typingMessage(isTyping, System.currentTimeMillis(), groupIdBytes)
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, System.currentTimeMillis())
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(aci) ?: return false
+        val content = ContentBuilders.typingMessage(isTyping, System.currentTimeMillis())
         val result = sender.sendMessage(recipientAci, content, System.currentTimeMillis())
         return result.success
+    }
+
+    suspend fun sendStopTyping(conversationId: String): Boolean {
+        return sendTyping(conversationId, isTyping = false)
     }
 
     fun fetchMessages(conversationId: String, count: Int = 50) {
@@ -329,6 +467,152 @@ object SignalClient {
 
     suspend fun searchContacts(query: String): List<ContactSuggestion> {
         return contactManager?.searchContacts(query) ?: emptyList()
+    }
+
+    // Issue #7: Edit messages — wraps EditMessage around a DataMessage with new body
+    suspend fun sendEdit(
+        conversationId: String,
+        originalMessageId: String,
+        newBody: String,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val targetTimestamp = originalMessageId.substringAfterLast('_').toLongOrNull() ?: return false
+        val editTimestamp = System.currentTimeMillis()
+        val content = ContentBuilders.editMessage(targetTimestamp, newBody, editTimestamp)
+        val result = sender.sendMessage(recipientAci, content, editTimestamp)
+        return result.success
+    }
+
+    // Issue #10: Accept message request by sending profileKey to the requester
+    suspend fun acceptMessageRequest(conversationId: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val auth = authData ?: return false
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+
+        // Send sync message
+        val syncContent = ContentBuilders.messageRequestResponseSync(
+            threadAci = recipientAci,
+            type = SignalServiceProtos.SyncMessage.MessageRequestResponse.Type.ACCEPT,
+        )
+        try {
+            sender.sendSelfSyncMessage(syncContent, System.currentTimeMillis())
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to send message request accept sync: ${t.message}")
+        }
+
+        // Send profileKey DataMessage to the requester
+        val profileKey = contactManager?.getProfileKey(auth.aci)
+        val timestamp = System.currentTimeMillis()
+        val dm = SignalServiceProtos.DataMessage.newBuilder()
+            .setFlags(SignalServiceProtos.DataMessage.Flags.PROFILE_KEY_UPDATE_VALUE)
+            .setTimestamp(timestamp)
+        if (profileKey != null) {
+            dm.setProfileKey(com.google.protobuf.ByteString.copyFrom(profileKey))
+        }
+        val content = SignalServiceProtos.Content.newBuilder()
+            .setDataMessage(dm.build())
+            .build()
+        val result = sender.sendMessage(recipientAci, content, timestamp)
+        return result.success
+    }
+
+    // Fix #4: Group metadata changes
+    // Issue #8: Real group name change using GroupManager
+    suspend fun setGroupName(groupId: String, newName: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.setGroupName(groupId, newName)
+    }
+
+    suspend fun setGroupAvatar(groupId: String, avatarBytes: ByteArray): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.uploadGroupAvatar(groupId, avatarBytes)
+    }
+
+    suspend fun setGroupDescription(groupId: String, newDescription: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val gm = groupManager ?: return false
+        return gm.setGroupDescription(groupId, newDescription)
+    }
+
+    // Fix #6: Disappearing messages
+    suspend fun setDisappearingTimer(conversationId: String, expirationSeconds: Int): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val aci = extractAci(conversationId) ?: return false
+        val groupId = extractGroupIdFromConversation(conversationId)
+
+        val timestamp = System.currentTimeMillis()
+        val content = ContentBuilders.disappearingTimerMessage(expirationSeconds, timestamp)
+
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(aci) ?: return false
+        val result = sender.sendMessage(recipientAci, content, timestamp)
+        return result.success
+    }
+
+    // Fix #7: Poll creation
+    suspend fun createPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean = false,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val timestamp = System.currentTimeMillis()
+        val content = ContentBuilders.pollCreateMessage(question, options, allowMultiple, timestamp)
+
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val result = sender.sendMessage(recipientAci, content, timestamp)
+        return result.success
+    }
+
+    // Fix #7: Poll voting
+    suspend fun votePoll(
+        conversationId: String,
+        targetAuthorAci: String,
+        targetTimestamp: Long,
+        optionIndexes: List<Int>,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val sender = messageSender ?: return false
+        val timestamp = System.currentTimeMillis()
+        val authorBytes = MessageSender.uuidToBytes(targetAuthorAci)
+        val content = ContentBuilders.pollVoteMessage(authorBytes, targetTimestamp, optionIndexes, timestamp)
+
+        val groupId = extractGroupIdFromConversation(conversationId)
+        if (groupId != null) {
+            val group = groupManager?.getCachedGroup(groupId)
+            if (group != null) {
+                val results = sender.sendGroupMessage(groupId, group.memberAcis, content, timestamp)
+                return results.any { it.success }
+            }
+        }
+
+        val recipientAci = resolveRecipient(extractAci(conversationId) ?: return false) ?: return false
+        val result = sender.sendMessage(recipientAci, content, timestamp)
+        return result.success
     }
 
     // ----------------------------------------------------------------
@@ -527,7 +811,8 @@ object SignalClient {
         }
     }
 
-    private suspend fun handleDecryptedMessage(msg: DecryptedMessage) {
+    private suspend fun handleDecryptedMessage(msg: DecryptedMessage?) {
+        if (msg == null) return
         val chatId = msg.senderAci
         val senderName = nameCache[msg.senderAci] ?: resolveDisplayName(msg.senderAci)
 
@@ -556,6 +841,12 @@ object SignalClient {
                 val msgId = "${chatId}_${content.targetTimestamp}"
                 _events.emit(GMEvent.MessageDeleted(source, msgId))
             }
+            // Fix #19: AdminDelete handling
+            is MessageContent.AdminDelete -> {
+                val authorAci = content.targetAuthorAci ?: msg.senderAci
+                val msgId = "${authorAci}_${content.targetTimestamp}"
+                _events.emit(GMEvent.MessageDeleted(source, msgId))
+            }
             is MessageContent.SyncSent -> {
                 val destAci = content.destinationAci ?: return
                 val syncContent = content.message ?: return
@@ -572,13 +863,23 @@ object SignalClient {
             }
             is MessageContent.Typing -> {}
             is MessageContent.ReadReceipt -> {}
+            // Fix #16: ViewedReceipt handling
+            is MessageContent.ViewedReceipt -> {
+                Log.d(TAG, "Received viewed receipt for ${content.timestamps.size} messages")
+            }
             is MessageContent.DeliveryReceipt -> {}
             is MessageContent.Call -> {}
             is MessageContent.Edit -> {
                 val msgId = "${chatId}_${content.targetTimestamp}"
                 _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, content.newBody, false, msg.timestamp, senderName))
             }
-            is MessageContent.SyncRead -> {}
+            // Fix #11: SyncRead handler — forward as read receipts
+            is MessageContent.SyncRead -> {
+                for ((senderAci, timestamp) in content.messages) {
+                    _events.emit(GMEvent.ReadReceipt(source, conversationId = senderAci, messageId = "${senderAci}_${timestamp}"))
+                }
+                Log.d(TAG, "Processed ${content.messages.size} sync read messages")
+            }
             is MessageContent.SyncKeys -> {
                 val masterKey = content.masterKey
                     ?: content.accountEntropyPool?.let { aep ->
@@ -600,7 +901,54 @@ object SignalClient {
             is MessageContent.SyncFetchLatest -> {
                 Log.d(TAG, "Received fetch latest: ${content.type}")
             }
-            is MessageContent.SyncDeleteForMe -> {}
+            // Fix #12: SyncDeleteForMe handler — process conversation and message deletes
+            is MessageContent.SyncDeleteForMe -> {
+                for (convDelete in content.conversationDeletes) {
+                    val convAci = convDelete.conversationId.threadAci
+                    if (convDelete.isFullDelete && convAci != null) {
+                        _events.emit(GMEvent.ConversationDeleted(source, "${source.idPrefix}:$convAci"))
+                        Log.d(TAG, "SyncDeleteForMe: deleted conversation for $convAci")
+                    }
+                    // Issue #15: Handle mostRecentMessages variant — delete individual messages
+                    for (addrMsg in convDelete.mostRecentMessages) {
+                        val authorAci = addrMsg.authorAci ?: continue
+                        val delMsgId = "${authorAci}_${addrMsg.sentTimestamp}"
+                        _events.emit(GMEvent.MessageDeleted(source, delMsgId))
+                    }
+                    for (addrMsg in convDelete.mostRecentNonExpiringMessages) {
+                        val authorAci = addrMsg.authorAci ?: continue
+                        val delMsgId = "${authorAci}_${addrMsg.sentTimestamp}"
+                        _events.emit(GMEvent.MessageDeleted(source, delMsgId))
+                    }
+                }
+                for (msgDelete in content.messageDeletes) {
+                    for (addrMsg in msgDelete.messages) {
+                        val authorAci = addrMsg.authorAci ?: continue
+                        val delMsgId = "${authorAci}_${addrMsg.sentTimestamp}"
+                        _events.emit(GMEvent.MessageDeleted(source, delMsgId))
+                    }
+                }
+            }
+            // Fix #13: SyncMessageRequestResponse handler
+            is MessageContent.SyncMessageRequestResponse -> {
+                val threadAci = content.threadAci
+                if (content.type == "ACCEPT" && threadAci != null) {
+                    Log.d(TAG, "Message request accepted for $threadAci")
+                } else if (content.type == "DELETE" && threadAci != null) {
+                    _events.emit(GMEvent.ConversationDeleted(source, "${source.idPrefix}:$threadAci"))
+                    Log.d(TAG, "Message request deleted for $threadAci")
+                }
+            }
+            // Fix #15: Contact sync blob processing
+            is MessageContent.SyncContacts -> {
+                try {
+                    val (contacts, avatars) = ContactManager.unmarshalContactDetailsMessages(content.blob)
+                    contactManager?.handleContactSync(contacts, avatars)
+                    Log.d(TAG, "Processed contact sync with ${contacts.size} contacts")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to process contact sync blob", e)
+                }
+            }
             is MessageContent.Sticker -> {
                 val msgId = "${chatId}_${msg.timestamp}"
                 val body = content.emoji ?: "[Sticker]"
@@ -608,6 +956,67 @@ object SignalClient {
                 _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
             }
             is MessageContent.ProfileKeyUpdate -> {}
+            // Fix #3: GroupChange processing
+            is MessageContent.GroupChange -> {
+                val gId = content.groupId
+                if (gId != null) {
+                    Log.d(TAG, "Received group change for $gId at revision ${content.revision}")
+                    groupManager?.invalidateCachedGroup(gId)
+                    val masterKey = groupManager?.let { gm ->
+                        val stored = db?.groupDao()?.get(gId)
+                        stored?.masterKey
+                    }
+                    if (masterKey != null) {
+                        groupManager?.fetchGroup(gId, masterKey)
+                    }
+                }
+            }
+            // Fix #17: GroupCallUpdate handling
+            is MessageContent.GroupCallUpdate -> {
+                val gId = content.groupId
+                if (gId != null && content.eraId != null) {
+                    val isNew = groupManager?.updateActiveCall(gId, content.eraId) ?: false
+                    if (isNew) {
+                        val msgId = "${gId}_${msg.timestamp}"
+                        _events.emit(GMEvent.IncomingMessage(source, gId, msgId, "Group call started", senderName, null, msg.timestamp))
+                    }
+                }
+                Log.d(TAG, "GroupCallUpdate: eraId=${content.eraId}, groupId=${content.groupId}")
+            }
+            // Fix #7: Poll messages
+            is MessageContent.PollCreate -> {
+                val msgId = "${chatId}_${msg.timestamp}"
+                val optionsList = content.options.joinToString(", ")
+                val body = "Poll: ${content.question}\nOptions: $optionsList"
+                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName))
+                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+            }
+            is MessageContent.PollVote -> {
+                Log.d(TAG, "Received poll vote for timestamp ${content.targetTimestamp}")
+            }
+            // Fix #6: Disappearing timer update
+            is MessageContent.ExpirationTimerUpdate -> {
+                val msgId = "${chatId}_${msg.timestamp}"
+                val body = if (content.expirationSeconds > 0) {
+                    "Disappearing messages set to ${content.expirationSeconds}s"
+                } else {
+                    "Disappearing messages turned off"
+                }
+                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+            }
+            // Fix #18: Payment/GiftBadge/Contact placeholder text
+            is MessageContent.Payment -> {
+                val msgId = "${chatId}_${msg.timestamp}"
+                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, "Payment message (unsupported)", senderName, null, msg.timestamp))
+            }
+            is MessageContent.GiftBadge -> {
+                val msgId = "${chatId}_${msg.timestamp}"
+                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, "Gift badge (unsupported)", senderName, null, msg.timestamp))
+            }
+            is MessageContent.ContactCard -> {
+                val msgId = "${chatId}_${msg.timestamp}"
+                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, "Contact card (unsupported)", senderName, null, msg.timestamp))
+            }
             is MessageContent.Unknown -> {
                 Log.d(TAG, "Unknown content: ${content.description}")
             }
@@ -669,6 +1078,14 @@ object SignalClient {
 
     private fun extractAci(conversationId: String): String? {
         return conversationId.substringAfter(':', conversationId).takeIf { it.isNotBlank() }
+    }
+
+    private fun extractGroupIdFromConversation(conversationId: String): String? {
+        // Group conversation IDs are prefixed with "group:"
+        if (conversationId.startsWith("group:")) {
+            return conversationId.substringAfter("group:")
+        }
+        return null
     }
 
     private suspend fun resolveRecipient(identifier: String): String? {

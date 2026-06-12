@@ -24,6 +24,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.security.SecureRandom
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -64,6 +68,9 @@ object WhatsAppClient {
     private var qrJob: Job? = null
 
     private val nameCache = ConcurrentHashMap<String, String>()
+    private val lidToPhoneMap = ConcurrentHashMap<String, String>()
+    private val undecryptableTracker = ConcurrentHashMap<String, Int>()
+    private val pendingMessageIDs: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -264,36 +271,49 @@ object WhatsAppClient {
                     webSocket?.send(WhatsAppProtocol.encodeNode(ack))
                 }
 
-                // Handle receipts (read, delivered) from Go handleWAReceipt
+                // Handle receipts with per-sender batching (Go handleWAReceipt)
                 if (node.tag == "receipt") {
-                    val receiptType = node.attrs["type"]
-                    if (receiptType == "read" || receiptType == "read-self") {
-                        val from = node.attrs["from"] ?: return@launch
-                        _events.emit(GMEvent.ReadReceipt(
-                            source = MessageSource.WHATSAPP,
-                            conversationId = "wa:$from",
-                            messageId = node.attrs["id"] ?: "",
-                            timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
-                        ))
-                    }
+                    handleReceipt(node)
                     return@launch
                 }
 
-                // Handle chat presence (typing indicators) from Go handleWAChatPresence
+                // Handle chat presence with media type differentiation (Go handleWAChatPresence)
                 if (node.tag == "chatstate") {
-                    val from = node.attrs["from"] ?: return@launch
-                    val composing = node.getChildByTag("composing") != null
-                    _events.emit(GMEvent.TypingIndicator(
-                        source = MessageSource.WHATSAPP,
-                        conversationId = "wa:$from",
-                        senderId = from,
-                        isTyping = composing,
-                    ))
+                    handleChatPresence(node)
+                    return@launch
+                }
+
+                // Handle notifications (group changes, mute/pin/archive)
+                if (node.tag == "notification") {
+                    handleNotification(node)
                     return@launch
                 }
 
                 if (node.tag != "message") return@launch
+
+                // Check for undecryptable messages (Go handleWAUndecryptableMessage)
+                val encNode = node.getChildByTag("enc")
+                if (encNode?.data == null && node.attrs["type"] == "text") {
+                    trackUndecryptable(node)
+                    return@launch
+                }
+
                 val message = WhatsAppProtocol.parseMessage(node) ?: return@launch
+
+                // Skip status broadcasts (Go handleWAMessage status@broadcast check)
+                if (message.from.startsWith("status@broadcast")) {
+                    Log.d(TAG, "Skipping status broadcast from ${message.participant}")
+                    return@launch
+                }
+
+                // Pending message dedup (Go handleWAMessage pendingMessages check)
+                if (pendingMessageIDs.remove(message.id)) {
+                    Log.d(TAG, "Ignoring pending message ${message.id}")
+                    return@launch
+                }
+
+                // LID routing (Go rerouteWAMessage)
+                val sender = resolveJID(message.participant ?: message.from)
 
                 // Handle revoke (message deletion) from Go handleWAMessage/revoke case
                 if (message.isRevoke && message.revokeTargetId != null) {
@@ -318,12 +338,31 @@ object WhatsAppClient {
                     return@launch
                 }
 
+                // Handle disappearing timer change (Go handleWAMessage/ephemeral case)
+                if (message.disappearingTimer != null) {
+                    _events.emit(GMEvent.IncomingMessage(
+                        source = MessageSource.WHATSAPP,
+                        conversationId = "wa:${message.from}",
+                        messageId = message.id,
+                        body = message.body,
+                        peerName = resolveName(sender),
+                        peerPhone = null,
+                        timestamp = message.timestamp * 1000,
+                    ))
+                    return@launch
+                }
+
+                // Handle poll creation — store option hashes (Go handleWAMessage/poll case)
+                if (message.pollData != null && !message.pollData.isPollVote) {
+                    storePollOptions(message.id, message.pollData.options)
+                }
+
                 _events.emit(GMEvent.IncomingMessage(
                     source = MessageSource.WHATSAPP,
                     conversationId = "wa:${message.from}",
                     messageId = message.id,
                     body = message.body,
-                    peerName = resolveName(message.participant ?: message.from),
+                    peerName = resolveName(sender),
                     peerPhone = null,
                     timestamp = message.timestamp * 1000,
                 ))
@@ -344,12 +383,265 @@ object WhatsAppClient {
         }
     }
 
+    /**
+     * Handle receipt with per-sender batching for group chats.
+     * From Go handleWAReceipt — groups messages by sender.
+     */
+    private suspend fun handleReceipt(node: WhatsAppProtocol.Node) {
+        val receiptType = node.attrs["type"]
+        if (receiptType != "read" && receiptType != "read-self") return
+
+        val from = node.attrs["from"] ?: return
+        val participant = node.attrs["participant"]
+
+        // Reroute LID sender
+        val sender = resolveJID(participant ?: from)
+
+        val messageId = node.attrs["id"] ?: return
+        val timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000
+
+        _events.emit(GMEvent.ReadReceipt(
+            source = MessageSource.WHATSAPP,
+            conversationId = "wa:$from",
+            messageId = messageId,
+            timestamp = timestamp,
+        ))
+
+        // Handle additional message IDs in list node
+        val listNode = node.getChildByTag("list")
+        listNode?.content?.filterIsInstance<WhatsAppProtocol.Node>()?.forEach { item ->
+            val itemId = item.attrs["id"] ?: return@forEach
+            _events.emit(GMEvent.ReadReceipt(
+                source = MessageSource.WHATSAPP,
+                conversationId = "wa:$from",
+                messageId = itemId,
+                timestamp = timestamp,
+            ))
+        }
+    }
+
+    /**
+     * Handle chat presence with media type differentiation.
+     * From Go handleWAChatPresence — differentiates text/audio/media typing.
+     */
+    private suspend fun handleChatPresence(node: WhatsAppProtocol.Node) {
+        val from = node.attrs["from"] ?: return
+        val participant = node.attrs["participant"]
+        val sender = resolveJID(participant ?: from)
+
+        val composingNode = node.getChildByTag("composing")
+        val pausedNode = node.getChildByTag("paused")
+
+        val isTyping = composingNode != null
+        val mediaAttr = composingNode?.attrs?.get("media")
+
+        _events.emit(GMEvent.TypingIndicator(
+            source = MessageSource.WHATSAPP,
+            conversationId = "wa:$from",
+            senderId = sender,
+            isTyping = isTyping,
+        ))
+    }
+
+    /**
+     * Handle notification events (group changes, mute, pin, archive).
+     * From Go handleWAGroupInfoChange, handleWAMute, handleWAArchive, handleWAPin.
+     */
+    private suspend fun handleNotification(node: WhatsAppProtocol.Node) {
+        val notifType = node.attrs["type"] ?: return
+        val from = node.attrs["from"] ?: return
+
+        when (notifType) {
+            "w:gp2" -> handleGroupNotification(node, from)
+            "server_sync" -> handleServerSync(node, from)
+        }
+    }
+
+    /**
+     * Handle group info change notifications.
+     * From Go handleWAGroupInfoChange.
+     */
+    private suspend fun handleGroupNotification(node: WhatsAppProtocol.Node, groupJid: String) {
+        node.content?.filterIsInstance<WhatsAppProtocol.Node>()?.forEach { child ->
+            when (child.tag) {
+                "subject" -> {
+                    val newName = child.attrs["subject"] ?: child.data?.let { String(it, Charsets.UTF_8) } ?: return@forEach
+                    _events.emit(GMEvent.IncomingMessage(
+                        source = MessageSource.WHATSAPP,
+                        conversationId = "wa:$groupJid",
+                        messageId = node.attrs["id"] ?: "",
+                        body = "[Group name changed to: $newName]",
+                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
+                        peerPhone = null,
+                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
+                    ))
+                }
+                "description" -> {
+                    val newDesc = child.data?.let { String(it, Charsets.UTF_8) } ?: ""
+                    _events.emit(GMEvent.IncomingMessage(
+                        source = MessageSource.WHATSAPP,
+                        conversationId = "wa:$groupJid",
+                        messageId = node.attrs["id"] ?: "",
+                        body = "[Group description changed: $newDesc]",
+                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
+                        peerPhone = null,
+                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
+                    ))
+                }
+                "add", "remove", "promote", "demote" -> {
+                    val participants = child.content?.filterIsInstance<WhatsAppProtocol.Node>()
+                        ?.mapNotNull { it.attrs["jid"] } ?: emptyList()
+                    val action = child.tag
+                    _events.emit(GMEvent.IncomingMessage(
+                        source = MessageSource.WHATSAPP,
+                        conversationId = "wa:$groupJid",
+                        messageId = node.attrs["id"] ?: "",
+                        body = "[Group: ${participants.joinToString()} ${action}ed]",
+                        peerName = resolveName(node.attrs["participant"] ?: groupJid),
+                        peerPhone = null,
+                        timestamp = (node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000) * 1000,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle server sync notifications (mute, pin, archive).
+     * From Go handleWAMute, handleWAArchive, handleWAPin.
+     */
+    private suspend fun handleServerSync(node: WhatsAppProtocol.Node, from: String) {
+        node.content?.filterIsInstance<WhatsAppProtocol.Node>()?.forEach { child ->
+            when (child.tag) {
+                "collection" -> {
+                    val collectionType = child.attrs["name"] ?: return@forEach
+                    child.content?.filterIsInstance<WhatsAppProtocol.Node>()?.forEach { patch ->
+                        handleAppStatePatch(collectionType, patch)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle app state patch mutations (mute, pin, archive, unread).
+     * From Go handleWAMute / handleWAArchive / handleWAPin / handleWAMarkChatAsRead.
+     */
+    private suspend fun handleAppStatePatch(collectionType: String, patch: WhatsAppProtocol.Node) {
+        val chatJid = patch.attrs["jid"] ?: return
+        val action = patch.attrs["action"]
+        val value = patch.data?.let { String(it, Charsets.UTF_8) }
+        val convId = "wa:$chatJid"
+        when {
+            collectionType == "regular" && action == "mute" -> {
+                val muteEnd = value?.toLongOrNull() ?: 0L
+                Log.d(TAG, "AppState: mute $chatJid until $muteEnd")
+                db?.conversationDao()?.updateMuteEndTime(chatJid, muteEnd)
+                _events.emit(GMEvent.ConversationUpdate(
+                    source = source, conversationId = convId,
+                    peerName = null, peerPhone = null, avatarUrl = null,
+                    lastPreview = null, lastTimestamp = 0, unreadCount = 0,
+                ))
+            }
+            collectionType == "regular" && action == "pin" -> {
+                val pinned = value == "true" || value == "1"
+                Log.d(TAG, "AppState: pin $chatJid = $pinned")
+                db?.conversationDao()?.updatePinned(chatJid, pinned)
+            }
+            collectionType == "regular" && action == "archive" -> {
+                val archived = value == "true" || value == "1"
+                Log.d(TAG, "AppState: archive $chatJid = $archived")
+                db?.conversationDao()?.updateArchived(chatJid, archived)
+            }
+            collectionType == "regular" && action == "markRead" -> {
+                val unread = value == "true" || value == "1"
+                Log.d(TAG, "AppState: markedAsUnread $chatJid = $unread")
+                db?.conversationDao()?.updateMarkedAsUnread(chatJid, unread)
+            }
+            collectionType == "regular" && action == "star" -> {
+                Log.d(TAG, "AppState: star/favorite $chatJid")
+            }
+            collectionType == "regular" && action == "delete" -> {
+                Log.d(TAG, "AppState: delete chat $chatJid")
+                db?.conversationDao()?.delete(chatJid)
+                _events.emit(GMEvent.ConversationDeleted(source, convId))
+            }
+        }
+    }
+
+    /**
+     * Track undecryptable messages.
+     * From Go handleWAUndecryptableMessage / trackUndecryptable.
+     */
+    private fun trackUndecryptable(node: WhatsAppProtocol.Node) {
+        val from = node.attrs["from"] ?: return
+        val count = undecryptableTracker.merge(from, 1) { old, new -> old + new } ?: 1
+        Log.w(TAG, "Undecryptable message from $from (count: $count)")
+    }
+
+    /**
+     * Resolve JID: convert LID JIDs to phone number JIDs.
+     * Handles DM sender LID, own message LID, broadcast, and bot cases.
+     * From Go resolveJID / rerouteWAMessage.
+     */
+    private fun resolveJID(jid: String): String {
+        if (!jid.contains("@lid")) return jid
+        // Check direct LID→phone mapping
+        lidToPhoneMap[jid]?.let { return it }
+        // Check if it matches our own LID
+        val ownLid = authData?.lid
+        if (ownLid != null && ownLid.isNotEmpty() && jid == ownLid) {
+            return authData?.wid ?: jid
+        }
+        return jid
+    }
+
+    /**
+     * Store poll option hashes for later vote resolution.
+     * From Go wadb.PollOption.
+     */
+    private suspend fun storePollOptions(messageId: String, options: List<String>) {
+        val dao = db?.pollOptionDao() ?: return
+        val pollOptions = options.map { option ->
+            val hash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(option.toByteArray(Charsets.UTF_8))
+            WhatsAppPollOption(
+                msgId = messageId,
+                optionHash = Base64.encodeToString(hash, Base64.NO_WRAP),
+                optionName = option,
+            )
+        }
+        dao.upsertAll(pollOptions)
+    }
+
     private fun kickoffBackfill() {
         backfillJob?.cancel()
         backfillJob = scope.launch {
-            // WhatsApp Web doesn't support history backfill like Signal
-            // Only new messages will be received
-            Log.i(TAG, "Backfill complete (WhatsApp Web has no history)")
+            Log.i(TAG, "Starting history sync")
+            try {
+                // Request initial history sync from server (Go handleWAAppStateSyncComplete)
+                val ws = webSocket ?: return@launch
+                val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+                val syncNode = WhatsAppProtocol.Node(
+                    tag = "iq",
+                    attrs = mapOf(
+                        "id" to id,
+                        "type" to "set",
+                        "xmlns" to "w:web",
+                        "to" to "s.whatsapp.net",
+                    ),
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "web",
+                            attrs = mapOf("type" to "initial")
+                        )
+                    )
+                )
+                ws.send(WhatsAppProtocol.encodeNode(syncNode))
+                Log.i(TAG, "History sync request sent")
+            } catch (e: Exception) {
+                Log.e(TAG, "History sync failed", e)
+            }
         }
     }
 
@@ -437,13 +729,48 @@ object WhatsAppClient {
         }
     }
 
-    suspend fun markRead(conversationId: String, messageIds: List<String> = emptyList()) {
+    /**
+     * Mark messages as read with per-sender batching for group chats.
+     * From Go HandleMatrixReadReceipt — groups messages by sender.
+     */
+    suspend fun markRead(
+        conversationId: String,
+        messageIds: List<String> = emptyList(),
+        senderJids: Map<String, String> = emptyMap(),
+    ) {
         val to = extractJid(conversationId) ?: return
         val ws = webSocket ?: return
         if (messageIds.isEmpty()) return
 
-        val node = WhatsAppProtocol.buildReadReceipt(chatJid = to, messageIds = messageIds)
-        ws.send(WhatsAppProtocol.encodeNode(node))
+        // Filter out own messages by checking both JID and LID (Issue 4)
+        val ownJid = authData?.wid ?: ""
+        val ownLid = authData?.lid ?: ""
+        val filteredIds = messageIds.filter { msgId ->
+            val sender = senderJids[msgId] ?: ""
+            sender != ownJid && (ownLid.isEmpty() || sender != ownLid)
+        }
+        if (filteredIds.isEmpty()) return
+
+        val isGroup = to.contains("@g.us")
+        if (isGroup && senderJids.isNotEmpty()) {
+            // Batch by sender for group chats (Go HandleMatrixReadReceipt)
+            val bySender = mutableMapOf<String, MutableList<String>>()
+            filteredIds.forEach { msgId ->
+                val sender = senderJids[msgId] ?: ""
+                bySender.getOrPut(sender) { mutableListOf() }.add(msgId)
+            }
+            bySender.forEach { (sender, ids) ->
+                val node = WhatsAppProtocol.buildReadReceipt(
+                    chatJid = to,
+                    messageIds = ids,
+                    senderJid = sender.ifEmpty { null },
+                )
+                ws.send(WhatsAppProtocol.encodeNode(node))
+            }
+        } else {
+            val node = WhatsAppProtocol.buildReadReceipt(chatJid = to, messageIds = filteredIds)
+            ws.send(WhatsAppProtocol.encodeNode(node))
+        }
     }
 
     suspend fun sendReaction(conversationId: String, messageId: String, emoji: String) {
@@ -453,11 +780,12 @@ object WhatsAppClient {
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
         val ownJid = authData?.wid ?: ""
 
+        val strippedEmoji = emoji.replace("\uFE0F", "")
         val node = WhatsAppProtocol.buildReactionMessage(
             chatJid = chatJid,
             senderJid = "",
             targetMessageId = messageId,
-            emoji = emoji,
+            emoji = strippedEmoji,
             ownJid = ownJid,
             id = id,
         )
@@ -465,13 +793,25 @@ object WhatsAppClient {
     }
 
     /**
-     * Send a typing indicator (chat presence).
-     * From whatsmeow HandleMatrixTyping / SendChatPresence
+     * Send a typing indicator (chat presence) with media type differentiation.
+     * From whatsmeow HandleMatrixTyping / SendChatPresence.
+     * Supports: text typing, audio recording, media uploading.
      */
-    suspend fun sendTyping(conversationId: String, isTyping: Boolean, isAudio: Boolean = false) {
+    enum class TypingType { TEXT, RECORDING_AUDIO, UPLOADING_MEDIA }
+
+    suspend fun sendTyping(
+        conversationId: String,
+        isTyping: Boolean,
+        typingType: TypingType = TypingType.TEXT,
+    ) {
         if (_state.value !is State.Connected) return
         val ws = webSocket ?: return
         val chatJid = extractJid(conversationId) ?: return
+
+        // Go HandleMatrixTyping: UploadingMedia returns nil (not sent)
+        if (typingType == TypingType.UPLOADING_MEDIA) return
+
+        val isAudio = typingType == TypingType.RECORDING_AUDIO
         val node = WhatsAppProtocol.buildChatPresence(chatJid, isTyping, isAudio, authData?.wid ?: "")
         ws.send(WhatsAppProtocol.encodeNode(node))
     }
@@ -506,13 +846,274 @@ object WhatsAppClient {
         return ws.send(WhatsAppProtocol.encodeNode(node))
     }
 
+    /**
+     * Send a poll creation message.
+     * From Go HandleMatrixPollStart / PollStartToWhatsApp.
+     */
+    suspend fun sendPollCreation(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        selectableCount: Int = 0,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val chatJid = extractJid(conversationId) ?: return false
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+
+        val node = WhatsAppProtocol.buildPollCreationMessage(chatJid, question, options, selectableCount, id)
+        val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+        if (sent) {
+            storePollOptions(id, options)
+        }
+        return sent
+    }
+
+    /**
+     * Send a location message.
+     * From Go from-matrix.go parseGeoURI / location handling.
+     */
+    suspend fun sendLocation(
+        conversationId: String,
+        latitude: Double,
+        longitude: Double,
+        name: String? = null,
+        address: String? = null,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val chatJid = extractJid(conversationId) ?: return false
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+
+        val node = WhatsAppProtocol.buildLocationMessage(chatJid, latitude, longitude, name, address, id)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Send a contact/vCard message.
+     * From Go wa-contact.go convertContactMessage.
+     */
+    suspend fun sendContact(
+        conversationId: String,
+        displayName: String,
+        vcard: String,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val chatJid = extractJid(conversationId) ?: return false
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+
+        val node = WhatsAppProtocol.buildContactMessage(chatJid, displayName, vcard, id)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Set disappearing messages timer.
+     * From Go HandleMatrixDisappearingTimer.
+     * Allowed values: 0 (off), 86400 (24h), 604800 (7d), 7776000 (90d).
+     */
+    suspend fun setDisappearingTimer(conversationId: String, timerSeconds: Long): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val chatJid = extractJid(conversationId) ?: return false
+
+        val allowedValues = setOf(0L, 86400L, 604800L, 7776000L)
+        if (timerSeconds !in allowedValues) {
+            Log.w(TAG, "Invalid disappearing timer value: $timerSeconds")
+            return false
+        }
+
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = WhatsAppProtocol.buildDisappearingTimerMessage(chatJid, timerSeconds, id)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Set group name.
+     * From Go HandleMatrixRoomName / SetGroupName.
+     */
+    suspend fun setGroupName(conversationId: String, name: String): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val groupJid = extractJid(conversationId) ?: return false
+        if (!groupJid.contains("@g.us")) return false
+
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = WhatsAppProtocol.buildGroupInfoChange(groupJid, "subject", name, id)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Set group topic/description with old/new ID tracking.
+     * From Go HandleMatrixRoomTopic / SetGroupTopic.
+     */
+    suspend fun setGroupTopic(
+        conversationId: String,
+        topic: String,
+        previousTopicId: String? = null,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val groupJid = extractJid(conversationId) ?: return false
+        if (!groupJid.contains("@g.us")) return false
+
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val extraAttrs = mutableMapOf<String, String>()
+        if (previousTopicId != null) {
+            extraAttrs["prev_v"] = previousTopicId
+        }
+        extraAttrs["id"] = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = WhatsAppProtocol.buildGroupInfoChange(groupJid, "description", topic, id, extraAttrs)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Set group avatar with crop/resize/JPEG conversion.
+     * Crops to square, scales to max 640x640, encodes as JPEG.
+     * From Go HandleMatrixRoomAvatar.
+     */
+    suspend fun setGroupAvatar(conversationId: String, imageBytes: ByteArray): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val groupJid = extractJid(conversationId) ?: return false
+        if (!groupJid.contains("@g.us")) return false
+
+        val processed = withContext(Dispatchers.Default) {
+            cropResizeAvatar(imageBytes)
+        } ?: return false
+
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to id,
+                "type" to "set",
+                "xmlns" to "w:profile:picture",
+                "to" to groupJid,
+            ),
+            content = listOf(
+                WhatsAppProtocol.Node(
+                    tag = "picture",
+                    attrs = mapOf("type" to "image"),
+                    data = processed,
+                )
+            ),
+        )
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    private fun cropResizeAvatar(imageBytes: ByteArray): ByteArray? {
+        val original = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size) ?: return null
+        val size = minOf(original.width, original.height)
+        val x = (original.width - size) / 2
+        val y = (original.height - size) / 2
+        val cropped = Bitmap.createBitmap(original, x, y, size, size)
+        val maxDim = 640
+        val scaled = if (size > maxDim) {
+            Bitmap.createScaledBitmap(cropped, maxDim, maxDim, true).also {
+                if (it !== cropped) cropped.recycle()
+            }
+        } else cropped
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        if (scaled !== original) scaled.recycle()
+        if (original !== cropped && original !== scaled) original.recycle()
+        return out.toByteArray()
+    }
+
+    /**
+     * Add or remove group members.
+     * From Go HandleMatrixMembership / UpdateGroupParticipants.
+     */
+    suspend fun updateGroupParticipants(
+        conversationId: String,
+        participantJids: List<String>,
+        action: String,
+    ): Boolean {
+        if (_state.value !is State.Connected) return false
+        val ws = webSocket ?: return false
+        val groupJid = extractJid(conversationId) ?: return false
+        if (!groupJid.contains("@g.us")) return false
+
+        val validActions = setOf("add", "remove", "promote", "demote")
+        if (action !in validActions) return false
+
+        val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = WhatsAppProtocol.buildGroupParticipantChange(groupJid, participantJids, action, id)
+        return ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Delete a chat, optionally leaving group, with AppState mutations.
+     * From Go HandleMatrixDeleteChat.
+     */
+    suspend fun deleteChat(conversationId: String, leaveGroup: Boolean = true): Boolean {
+        val jid = extractJid(conversationId) ?: return false
+        val ws = webSocket
+
+        if (leaveGroup && jid.contains("@g.us") && _state.value is State.Connected && ws != null) {
+            val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+            val ownJid = authData?.wid ?: ""
+            if (ownJid.isNotEmpty()) {
+                val node = WhatsAppProtocol.buildGroupParticipantChange(
+                    jid, listOf(ownJid), "remove", id
+                )
+                ws.send(WhatsAppProtocol.encodeNode(node))
+            }
+        }
+
+        // Query last message timestamp for the delete anchor
+        val conversation = db?.conversationDao()?.getConversation(jid)
+        val lastMsgTimestamp = conversation?.lastMessageTimestamp ?: 0L
+
+        // Push AppState delete mutation (Go HandleMatrixDeleteChat PatchDelete)
+        if (_state.value is State.Connected && ws != null) {
+            val patchAttrs = mutableMapOf("jid" to jid, "action" to "delete")
+            if (lastMsgTimestamp > 0) patchAttrs["messageTimestamp"] = lastMsgTimestamp.toString()
+
+            val patchNode = WhatsAppProtocol.Node(
+                tag = "iq",
+                attrs = mapOf(
+                    "id" to WhatsAppProtocol.generateMessageId(authData?.wid),
+                    "type" to "set",
+                    "xmlns" to "w:sync:app:state",
+                    "to" to "s.whatsapp.net",
+                ),
+                content = listOf(
+                    WhatsAppProtocol.Node(
+                        tag = "sync",
+                        content = listOf(
+                            WhatsAppProtocol.Node(
+                                tag = "collection",
+                                attrs = mapOf("name" to "regular"),
+                                content = listOf(
+                                    WhatsAppProtocol.Node(
+                                        tag = "patch",
+                                        attrs = patchAttrs,
+                                    )
+                                ),
+                            )
+                        ),
+                    )
+                ),
+            )
+            ws.send(WhatsAppProtocol.encodeNode(patchNode))
+        }
+
+        db?.conversationDao()?.delete(jid)
+        _events.emit(GMEvent.ConversationDeleted(source, conversationId))
+        return true
+    }
+
     suspend fun sendNewThread(recipientJid: String, body: String): String? {
         if (_state.value !is State.Connected) return null
         val ws = webSocket ?: return null
         val jid = if (recipientJid.contains("@")) recipientJid else "$recipientJid@s.whatsapp.net"
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        pendingMessageIDs.add(id)
         val node = WhatsAppProtocol.buildTextMessage(jid, id, body)
         val sent = ws.send(WhatsAppProtocol.encodeNode(node))
+        if (!sent) pendingMessageIDs.remove(id)
         return if (sent) "wa:$jid" else null
     }
 
@@ -521,6 +1122,128 @@ object WhatsAppClient {
         db?.conversationDao()?.delete(jid)
         _events.emit(GMEvent.ConversationDeleted(source, conversationId))
         return true
+    }
+
+    suspend fun markChatUnread(conversationId: String, unread: Boolean) {
+        if (_state.value !is State.Connected) return
+        val ws = webSocket ?: return
+        val chatJid = extractJid(conversationId) ?: return
+
+        val patchNode = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to WhatsAppProtocol.generateMessageId(authData?.wid),
+                "type" to "set",
+                "xmlns" to "w:sync:app:state",
+                "to" to "s.whatsapp.net",
+            ),
+            content = listOf(
+                WhatsAppProtocol.Node(
+                    tag = "sync",
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "collection",
+                            attrs = mapOf("name" to "regular"),
+                            content = listOf(
+                                WhatsAppProtocol.Node(
+                                    tag = "patch",
+                                    attrs = mapOf(
+                                        "jid" to chatJid,
+                                        "action" to "markRead",
+                                    ),
+                                    data = if (unread) "true".toByteArray() else "false".toByteArray(),
+                                )
+                            ),
+                        )
+                    ),
+                )
+            ),
+        )
+        ws.send(WhatsAppProtocol.encodeNode(patchNode))
+    }
+
+    suspend fun setMute(conversationId: String, muteUntilMs: Long) {
+        if (_state.value !is State.Connected) return
+        val ws = webSocket ?: return
+        val chatJid = extractJid(conversationId) ?: return
+
+        val patchNode = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to WhatsAppProtocol.generateMessageId(authData?.wid),
+                "type" to "set",
+                "xmlns" to "w:sync:app:state",
+                "to" to "s.whatsapp.net",
+            ),
+            content = listOf(
+                WhatsAppProtocol.Node(
+                    tag = "sync",
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "collection",
+                            attrs = mapOf("name" to "regular"),
+                            content = listOf(
+                                WhatsAppProtocol.Node(
+                                    tag = "patch",
+                                    attrs = mapOf(
+                                        "jid" to chatJid,
+                                        "action" to "mute",
+                                    ),
+                                    data = muteUntilMs.toString().toByteArray(),
+                                )
+                            ),
+                        )
+                    ),
+                )
+            ),
+        )
+        ws.send(WhatsAppProtocol.encodeNode(patchNode))
+        val conv = db?.conversationDao()?.getConversation(chatJid)
+        if (conv != null) {
+            db?.conversationDao()?.upsert(conv.copy(muteEndTime = muteUntilMs))
+        }
+    }
+
+    suspend fun togglePin(conversationId: String, pinned: Boolean) {
+        if (_state.value !is State.Connected) return
+        val ws = webSocket ?: return
+        val chatJid = extractJid(conversationId) ?: return
+
+        val patchNode = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to WhatsAppProtocol.generateMessageId(authData?.wid),
+                "type" to "set",
+                "xmlns" to "w:sync:app:state",
+                "to" to "s.whatsapp.net",
+            ),
+            content = listOf(
+                WhatsAppProtocol.Node(
+                    tag = "sync",
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "collection",
+                            attrs = mapOf("name" to "regular"),
+                            content = listOf(
+                                WhatsAppProtocol.Node(
+                                    tag = "patch",
+                                    attrs = mapOf(
+                                        "jid" to chatJid,
+                                        "action" to "pin",
+                                    ),
+                                    data = if (pinned) "true".toByteArray() else "false".toByteArray(),
+                                )
+                            ),
+                        )
+                    ),
+                )
+            ),
+        )
+        ws.send(WhatsAppProtocol.encodeNode(patchNode))
+        val conv = db?.conversationDao()?.getConversation(chatJid)
+        if (conv != null) {
+            db?.conversationDao()?.upsert(conv.copy(pinned = pinned))
+        }
     }
 
     fun isLoggedIn(): Boolean {

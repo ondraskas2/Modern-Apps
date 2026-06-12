@@ -141,8 +141,194 @@ data class DocumentAttributeFilename(val fileName: String) : TlObject {
     override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putString(fileName) }
 }
 
+// Web page media
+data class MessageMediaWebPage(
+    val url: String = "",
+    val title: String = "",
+    val description: String = "",
+) : TlObject {
+    override val typeId = 0xddf10c3b.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+// Message entity types (for rich text formatting)
+data class MessageEntity(
+    val type: String,
+    val offset: Int,
+    val length: Int,
+    val url: String = "",
+    val userId: Long = 0,
+    val language: String = "",
+    val documentId: Long = 0,
+) : TlObject {
+    override val typeId = 0
+    override fun encode(buf: TlBuffer) {
+        val id = when (type) {
+            "bold" -> 0xbd610bc9.toInt()
+            "italic" -> 0x826f8b60.toInt()
+            "underline" -> 0x9c4e7e8b.toInt()
+            "strikethrough" -> 0xbf0693d4.toInt()
+            "code" -> 0x28a20571.toInt()
+            "pre" -> 0x73924be0.toInt()
+            "textUrl" -> 0x76a6d327.toInt()
+            "mentionName" -> 0xdc7b1140.toInt()
+            "spoiler" -> 0x32ca960f.toInt()
+            "blockquote" -> 0x020df5d0.toInt()
+            "customEmoji" -> 0xc8cf05f8.toInt()
+            else -> return
+        }
+        buf.putId(id)
+        buf.putInt32(offset)
+        buf.putInt32(length)
+        when (type) {
+            "pre" -> buf.putString(language)
+            "textUrl" -> buf.putString(url)
+            "mentionName" -> {
+                buf.putId(0xf21158c6.toInt()) // inputUser
+                buf.putInt64(userId)
+                buf.putInt64(0) // access_hash
+            }
+            "customEmoji" -> buf.putInt64(documentId)
+        }
+    }
+}
+
+// Forward header info
+data class MessageFwdHeader(
+    val fromId: TlObject? = null,
+    val fromName: String = "",
+    val date: Int = 0,
+) : TlObject {
+    override val typeId = 0x4e4df4bb.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+// Service message action types
+sealed interface MessageAction : TlObject
+
+data class MessageActionChatEditTitle(val title: String) : MessageAction {
+    override val typeId = 0xb5a1ce5a.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatAddUser(val users: List<Long>) : MessageAction {
+    override val typeId = 0x15cefd00.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatDeleteUser(val userId: Long) : MessageAction {
+    override val typeId = 0xa43f30cc.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+object MessageActionChatEditPhoto : MessageAction {
+    override val typeId = 0x7fcb13a8.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+object MessageActionChatDeletePhoto : MessageAction {
+    override val typeId = 0x95e3fbef.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatCreate(val title: String, val users: List<Long>) : MessageAction {
+    override val typeId = 0xbd47cbad.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatMigrateTo(val channelId: Long) : MessageAction {
+    override val typeId = 0xe1037f92.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionSetMessagesTTL(val period: Int) : MessageAction {
+    override val typeId = 0x3c134d7b.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionPhoneCall(val video: Boolean, val duration: Int, val reason: Int) : MessageAction {
+    override val typeId = 0x80e11a7f.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionChatJoinedByLink(val inviterId: Long) : MessageAction {
+    override val typeId = 0x031224c3.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+object MessageActionPinMessage : MessageAction {
+    override val typeId = 0x94bd38ed.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+object MessageActionChannelCreate : MessageAction {
+    override val typeId = 0x95d2ac92.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionTopicCreate(val title: String) : MessageAction {
+    override val typeId = 0x0d999256.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionGroupCall(val duration: Int) : MessageAction {
+    override val typeId = 0x7a0d7f42.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class MessageActionUnknown(val actionTypeId: Int) : MessageAction {
+    override val typeId = actionTypeId
+    override fun encode(buf: TlBuffer) {}
+}
+
 // Reaction types
 data class InputMessageReactionEmoji(val emoticon: String) : TlObject {
     override val typeId = 0x1b2286b8.toInt()
     override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putString(emoticon) }
+}
+
+data class InputMessageReactionCustomEmoji(val documentId: Long) : TlObject {
+    override val typeId = 0x8935fc73.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt64(documentId) }
+}
+
+// Typing action types
+object SendMessageTypingAction : TlObject {
+    override val typeId = 0x16bf744e.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+object SendMessageCancelAction : TlObject {
+    override val typeId = 0xfd5ec8f5.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+object SendMessageRecordVideoAction : TlObject {
+    override val typeId = 0xa187d66f.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+object SendMessageRecordAudioAction : TlObject {
+    override val typeId = 0xd52f73f7.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId) }
+}
+
+data class SendMessageUploadVideoAction(val progress: Int = 0) : TlObject {
+    override val typeId = 0xe9763aec.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
+}
+
+data class SendMessageUploadAudioAction(val progress: Int = 0) : TlObject {
+    override val typeId = 0xf351d7ab.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
+}
+
+data class SendMessageUploadDocumentAction(val progress: Int = 0) : TlObject {
+    override val typeId = 0xaa0cd9e4.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
+}
+
+data class SendMessageUploadPhotoAction(val progress: Int = 0) : TlObject {
+    override val typeId = 0xd1d739de.toInt()
+    override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(progress) }
 }
