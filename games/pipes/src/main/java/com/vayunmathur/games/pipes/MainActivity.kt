@@ -136,9 +136,6 @@ fun PackScreen(backStack: NavBackStack<Route>, viewModel: PipesViewModel, onOpen
                 IconButton(onClick = onOpenGameCenter) {
                     Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
                 }
-                com.vayunmathur.library.ui.BackupButtons(
-                    prefNames = listOf("level_stats")
-                )
             }
         )
     }) { paddingValues ->

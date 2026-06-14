@@ -125,7 +125,6 @@ fun HomeScreen(backStack: NavBackStack<Route>, viewModel: SolitaireViewModel) {
                 IconButton(onClick = { backStack.add(Route.GameCenter) }) {
                     Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
                 }
-                com.vayunmathur.library.ui.BackupButtons(prefNames = listOf("solitaire_stats"))
             }
         )
     }) { paddingValues ->

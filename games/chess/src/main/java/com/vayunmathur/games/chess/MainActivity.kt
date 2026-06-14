@@ -311,9 +311,6 @@ fun ChessGame(
                     IconButton(onClick = onOpenGameCenter) {
                         Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
                     }
-                    com.vayunmathur.library.ui.BackupButtons(
-                        datastoreNames = listOf("datastore_default")
-                    )
                 }
             )
         }
