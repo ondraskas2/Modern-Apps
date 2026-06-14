@@ -130,6 +130,10 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
         _placedElements.update { it + duplicatedItem }
     }
 
+    fun clearElements() {
+        _placedElements.update { emptyList() }
+    }
+
     /**
      * Test the moved element against the other placed elements for a recipe match.
      * If found, removes the two inputs, adds the outputs at the target's position,
@@ -181,6 +185,7 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
                 if (items.size > 4) achievementsManager.onAchievementUnlocked("first_creation")
                 achievementsManager.onProgressUpdated("collector_50", items.size)
                 achievementsManager.onProgressUpdated("collector_100", items.size)
+                achievementsManager.onProgressUpdated("all_discovered", items.size)
 
                 val all = _allItems.value
                 if (items.size >= all.size && all.isNotEmpty()) {

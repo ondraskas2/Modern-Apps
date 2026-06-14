@@ -114,14 +114,18 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(title = { Text(stringResource(R.string.app_name)) }, actions = {
+                if (activeItems.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.clearElements() }) {
+                        Icon(
+                            painterResource(id = android.R.drawable.ic_menu_close_clear_cancel), "Clear"
+                        )
+                    }
+                }
                 IconButton(onClick = onOpenGameCenter) {
                     Icon(
                         painterResource(id = android.R.drawable.btn_star_big_on), "Achievements"
                     )
                 }
-                com.vayunmathur.library.ui.BackupButtons(
-                    datastoreNames = listOf("datastore_default")
-                )
             })
         }) { paddingValues ->
         Box(
