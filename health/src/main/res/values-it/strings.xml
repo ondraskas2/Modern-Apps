@@ -144,4 +144,10 @@
     <string name="log_hydration">Registra idratazione</string>
     <string name="log_meal">Registra pasto</string>
     <string name="unit_fl">fl</string>
+    <string name="metric_exercise_duration">Esercizio</string>
+    <string name="label_exercise">Esercizio</string>
+    <string name="label_workouts">Allenamenti</string>
+    <string name="section_workouts">Allenamenti</string>
+    <string name="label_total_exercise">Esercizi totali</string>
+    <string name="no_workouts">Nessun allenamento registrato</string>
 </resources>
