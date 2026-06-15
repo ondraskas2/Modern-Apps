@@ -132,17 +132,15 @@ fun parseMarkdown(
 
             hideRange(markers.range.first, markers.range.last + 1)
 
-            addStyle(SpanStyle(fontWeight = FontWeight.Bold).copy(fontSize = if (process) fontSize else TextUnit.Unspecified), start, end)
-            if (process) {
-                addStyle(
-                    ParagraphStyle(
-                        lineHeight = fontSize * 1.3f,
-                        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
-                    ),
-                    start,
-                    end
-                )
-            }
+            addStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = fontSize), start, end)
+            addStyle(
+                ParagraphStyle(
+                    lineHeight = fontSize * 1.3f,
+                    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both)
+                ),
+                start,
+                end
+            )
         }
 
         // 2. Lists
@@ -157,11 +155,6 @@ fun parseMarkdown(
 
             if (!showMarkers) {
                 hideRange(match.groups[1]!!.range.first, match.groups[1]!!.range.last + 1)
-                if (taskStatus != null) {
-                    val taskMarkerStart = finalText.indexOf('[', start)
-                    val taskMarkerEnd = finalText.indexOf(']', taskMarkerStart) + 1
-                    hideRange(taskMarkerStart, taskMarkerEnd)
-                }
             }
 
             if (process) {
@@ -188,6 +181,10 @@ fun parseMarkdown(
                 start,
                 contentStart
             )
+
+            if (!showMarkers && taskStatus != null) {
+                addStyle(SpanStyle(color = Color.Transparent), match.groups[2]!!.range.first, contentStart)
+            }
 
             if (taskStatus != null && taskStatus.lowercase() == "x") {
                 addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = Color.Gray), contentStart, end)

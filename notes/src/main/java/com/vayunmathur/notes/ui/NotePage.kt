@@ -17,15 +17,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.plus
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatBold
@@ -67,9 +71,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -307,6 +313,16 @@ private fun tryToggleCheckbox(offset: Int, value: TextFieldValue): TextFieldValu
     val newChar = if (isChecked) " " else "x"
     val newText = text.substring(0, bracketOffset + 1) + newChar + text.substring(bracketOffset + 2)
     return value.copy(text = newText, selection = TextRange(offset))
+}
+
+private fun findCheckboxPositions(text: String): List<Pair<Int, Boolean>> {
+    val results = mutableListOf<Pair<Int, Boolean>>()
+    Regex("(?m)^(\\s*- )\\[([ xX])] ").findAll(text).forEach { match ->
+        val bracketOffset = match.groups[1]!!.range.last + 1
+        val isChecked = match.groups[2]!!.value.lowercase() == "x"
+        results.add(bracketOffset to isChecked)
+    }
+    return results
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -626,33 +642,62 @@ fun NotePage(
                         }
                     }
                 }
-                BasicTextField(
-                    displayValue,
-                    { newValue ->
-                        if (newValue.text == contentValue.text && newValue.selection.collapsed) {
-                            val toggled = tryToggleCheckbox(newValue.selection.start, contentValue)
-                            if (toggled != null) {
-                                note = note.copy(content = toggled.text)
-                                contentValue = toggled.copy(annotatedString = notesViewModel.parseDisplay(toggled.text))
-                                return@BasicTextField
+                var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+                val density = LocalDensity.current
+                Box {
+                    BasicTextField(
+                        displayValue,
+                        { newValue ->
+                            if (newValue.text == contentValue.text && newValue.selection.collapsed) {
+                                val toggled = tryToggleCheckbox(newValue.selection.start, contentValue)
+                                if (toggled != null) {
+                                    note = note.copy(content = toggled.text)
+                                    contentValue = toggled.copy(annotatedString = notesViewModel.parseDisplay(toggled.text))
+                                    return@BasicTextField
+                                }
+                            }
+                            note = note.copy(content = newValue.text)
+                            contentValue = newValue.copy(annotatedString = notesViewModel.parseDisplay(newValue.text))
+                        },
+                        Modifier.fillMaxSize(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = LocalContentColor.current),
+                        cursorBrush = SolidColor(LocalContentColor.current),
+                        onTextLayout = { textLayoutResult = it },
+                        decorationBox = { innerTextField ->
+                            Box {
+                                if (note.content.isEmpty()) Text(
+                                    text = stringResource(R.string.content),
+                                    style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                )
+                                innerTextField()
                             }
                         }
-                        note = note.copy(content = newValue.text)
-                        contentValue = newValue.copy(annotatedString = notesViewModel.parseDisplay(newValue.text))
-                    },
-                    Modifier.fillMaxSize(),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = LocalContentColor.current),
-                    cursorBrush = SolidColor(LocalContentColor.current),
-                    decorationBox = { innerTextField ->
-                        Box {
-                            if (note.content.isEmpty()) Text(
-                                text = stringResource(R.string.content),
-                                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            )
-                            innerTextField()
+                    )
+                    textLayoutResult?.let { layout ->
+                        val checkboxes = remember(note.content) { findCheckboxPositions(note.content) }
+                        checkboxes.forEach { (bracketOffset, isChecked) ->
+                            val rect = runCatching { layout.getBoundingBox(bracketOffset) }.getOrNull() ?: return@forEach
+                            val lineHeight = rect.bottom - rect.top
+                            with(density) {
+                                Icon(
+                                    imageVector = if (isChecked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                                    contentDescription = if (isChecked) "Checked" else "Unchecked",
+                                    tint = if (isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .offset(x = rect.left.toDp() - 12.dp, y = rect.top.toDp())
+                                        .size(lineHeight.toDp())
+                                        .clickable {
+                                            val toggled = tryToggleCheckbox(bracketOffset, contentValue)
+                                            if (toggled != null) {
+                                                note = note.copy(content = toggled.text)
+                                                contentValue = toggled.copy(annotatedString = notesViewModel.parseDisplay(toggled.text))
+                                            }
+                                        }
+                                )
+                            }
                         }
                     }
-                )
+                }
             }
         }
     }
