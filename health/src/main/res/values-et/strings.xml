@@ -54,4 +54,13 @@
     <string name="label_floors">Korruseid</string>
     <string name="label_distance">Vahemaa</string>
     <string name="label_heart_rate">Pulss</string>
+    <string name="metric_basal_metabolic_rate">Põhiainevahetuse kiirus</string>
+    <string name="metric_blood_pressure">Vererõhk</string>
+    <string name="metric_blood_glucose">Veresuhkur</string>
+    <string name="metric_breathing_rate">Hingamissagedus</string>
+    <string name="label_hrv_rmssd">HRV (RMSSD)</string>
+    <string name="label_oxygen_saturation">Hapnikusisaldus</string>
+    <string name="label_blood_glucose">Veresuhkur</string>
+    <string name="label_blood_pressure">Vererõhk</string>
+    <string name="label_breathing_rate">Hingamissagedus</string>
 </resources>
