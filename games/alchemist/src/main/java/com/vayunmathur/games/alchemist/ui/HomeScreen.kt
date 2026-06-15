@@ -2,6 +2,7 @@ package com.vayunmathur.games.alchemist.ui
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,13 +21,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -37,28 +34,24 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -68,6 +61,7 @@ import com.vayunmathur.games.alchemist.util.AlchemistViewModel
 import com.vayunmathur.games.alchemist.util.PlacedItem
 import com.vayunmathur.library.util.NavBackStack
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,22 +75,7 @@ fun HomeScreen(
     val activeItems by viewModel.placedElements.collectAsState()
 
     // --- UI-only filter state (per the plan: dialog/filter visibility stays in compose) ---
-    var activeCustomFilter by remember { mutableStateOf<String?>(null) }
-    var activeFilter by remember { mutableStateOf<String?>(null) }
-    val displayItems by remember(availableItems, activeFilter, activeCustomFilter) {
-        derivedStateOf {
-            availableItems.filter { item ->
-                val filterToApply = activeCustomFilter ?: activeFilter
-                when (filterToApply) {
-                    "A - F" -> item.name.firstOrNull()?.let { it in 'A'..'F' } ?: false
-                    "G - J" -> item.name.firstOrNull()?.let { it in 'G'..'J' } ?: false
-                    "K - Z" -> item.name.firstOrNull()?.let { it in 'K'..'Z' } ?: false
-                    null -> true
-                    else -> item.name.firstOrNull()?.let { it.uppercaseChar().toString() == filterToApply } ?: false
-                }
-            }
-        }
-    }
+    val scope = rememberCoroutineScope()
 
     var bottomBarTopInWindow by remember { mutableFloatStateOf(Float.MAX_VALUE) }
     var playAreaOffsetInWindow by remember { mutableStateOf(Offset.Zero) }
@@ -175,40 +154,42 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
+                // 2.1 INVENTORY COUNT (discovered / total)
+                Text(
+                    stringResource(
+                        R.string.counter, availableItems.size, allItems.size
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+
+                // 2.2 A-Z LETTER BAR
+                val activeLetters = remember(availableItems) {
+                    availableItems.mapNotNull { it.name.firstOrNull()?.uppercaseChar() }.toSet()
+                }
                 Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // 2.1 FILTER CHIPS
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val filters = listOf("A - F", "G - J", "K - Z")
-                        filters.forEach { filter ->
-                            FilterChip(
-                                selected = activeFilter == filter && activeCustomFilter == null,
-                                onClick = {
-                                    activeCustomFilter = null
-                                    activeFilter = if (activeFilter == filter) null else filter
-                                },
-                                label = { Text(filter) }
-                            )
-                        }
-                        InputFilterChip(
-                            selected = activeCustomFilter != null,
-                            value = activeCustomFilter ?: "",
-                            onValueChange = { activeFilter = null; activeCustomFilter = it }
+                    ('A'..'Z').filter { it in activeLetters }.forEach { letter ->
+                        Text(
+                            text = letter.toString(),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    val index = availableItems.indexOfFirst {
+                                        it.name.firstOrNull()?.uppercaseChar() == letter
+                                    }
+                                    if (index >= 0) {
+                                        scope.launch { lazyList.animateScrollToItem(index) }
+                                    }
+                                }
+                                .padding(horizontal = 2.dp, vertical = 4.dp)
                         )
                     }
-
-                    // 2.2 INVENTORY COUNT (discovered / total)
-                    Text(
-                        stringResource(
-                            R.string.counter, availableItems.size, allItems.size
-                        ),
-                        style = MaterialTheme.typography.labelSmall
-                    )
                 }
 
                 Surface(
@@ -247,7 +228,7 @@ fun HomeScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(displayItems, key = { it.id }) { item ->
+                                items(availableItems, key = { it.id }) { item ->
                                     var itemPosInWindow by remember { mutableStateOf(Offset.Zero) }
 
                                     Column(
@@ -339,67 +320,6 @@ fun HomeScreen(
             }
         }
     }
-}
-
-@Composable
-fun InputFilterChip(selected: Boolean, value: String, onValueChange: (String?) -> Unit) {
-    var isEditing by remember { mutableStateOf(false) }
-    val focusRequester = remember { FocusRequester() }
-
-    FilterChip(
-        selected = selected,
-        onClick = {
-            if (selected) onValueChange(null) else isEditing = true
-        },
-        label = {
-            Box {
-                if (isEditing) {
-                    LaunchedEffect(Unit) {
-                        focusRequester.requestFocus()
-                    }
-                    BasicTextField(
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
-                        value = value,
-                        keyboardOptions = KeyboardOptions.Default.copy(
-                            capitalization = KeyboardCapitalization.Characters,
-                            autoCorrectEnabled = false,
-                            imeAction = ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = {
-                                if (value.trim().isEmpty()) {
-                                    onValueChange(null)
-                                } else {
-                                    val lastChar = value.last()
-                                    if (lastChar.isLetter()) {
-                                        val letter = lastChar.uppercaseChar().toString()
-                                        onValueChange(letter)
-                                    }
-                                }
-                                isEditing = false
-                            }
-                        ),
-                        onValueChange = { newValue ->
-                            if (newValue.trim().isEmpty()) {
-                                onValueChange(null)
-                                isEditing = false
-                            } else {
-                                val lastChar = newValue.last()
-                                if (lastChar.isLetter()) {
-                                    val letter = lastChar.uppercaseChar().toString()
-                                    onValueChange(letter)
-                                    isEditing = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.focusRequester(focusRequester)
-                    )
-                } else {
-                    Text(if (value.isEmpty()) "Custom" else value.uppercase())
-                }
-            }
-        }
-    )
 }
 
 @Composable

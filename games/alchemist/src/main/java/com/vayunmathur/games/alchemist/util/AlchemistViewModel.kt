@@ -194,6 +194,9 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
                 if (items.any { it.final }) {
                     achievementsManager.onAchievementUnlocked("final_item")
                 }
+                if (items.any { it.id == 44L }) {
+                    achievementsManager.onAchievementUnlocked("created_life")
+                }
             }
         }
     }
