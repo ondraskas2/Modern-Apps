@@ -14,6 +14,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.io.encoding.Base64
 import kotlin.random.Random
+import kotlin.time.Clock
 
 object Networking {
     private const val URL = "https://findfamily.cc"
@@ -33,7 +34,7 @@ object Networking {
     private lateinit var userDao: UserDao
     private lateinit var dataStoreUtils: DataStoreUtils
 
-    suspend fun init(userDao: UserDao, dataStoreUtils: DataStoreUtils) {
+    suspend fun init(userDao: UserDao, dataStoreUtils: DataStoreUtils, meName: String) {
         Networking.dataStoreUtils = dataStoreUtils
         Networking.userDao = userDao
         val (privateKey, publicKey) = crypto.keyPairGenerator(digest = SHA512).generateKey().let { Pair(it.privateKey, it.publicKey) }
@@ -44,6 +45,21 @@ object Networking {
         publickey = crypto.publicKeyDecoder(SHA512).decodeFromByteArray(RSA.PublicKey.Format.PEM, dataStoreUtils.getByteArray("publicKey")!!)
         privatekey = crypto.privateKeyDecoder(SHA512).decodeFromByteArray(RSA.PrivateKey.Format.PEM, dataStoreUtils.getByteArray("privateKey")!!)
         userid = dataStoreUtils.getLong("userid")!!
+
+        if (userDao.getAll().none { it.id == userid }) {
+            userDao.upsert(
+                User(
+                    meName,
+                    null,
+                    "Unnamed Location",
+                    true,
+                    RequestStatus.MUTUAL_CONNECTION,
+                    Clock.System.now(),
+                    null,
+                    userid,
+                )
+            )
+        }
     }
 
     private suspend fun <T> checkNetworkDown(makeRequest: suspend ()->T?): T? {

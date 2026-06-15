@@ -290,7 +290,7 @@ class LocationTrackingService : Service(), SensorEventListener {
                 waypointDao = db.waypointDao()
                 locationValueDao = db.locationValueDao()
                 temporaryLinkDao = db.temporaryLinkDao()
-                Networking.init(userDao, DataStoreUtils.getInstance(this@LocationTrackingService))
+                Networking.init(userDao, DataStoreUtils.getInstance(this@LocationTrackingService), getString(R.string.me_label))
 
                 // Hoist the UWB ranging session into this foreground service
                 // so we can auto-accept incoming Find Nearby (UWB) requests

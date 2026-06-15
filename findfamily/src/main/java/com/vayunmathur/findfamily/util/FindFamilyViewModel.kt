@@ -17,11 +17,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.vayunmathur.findfamily.R
 import com.vayunmathur.findfamily.data.Coord
 import com.vayunmathur.findfamily.data.LocationValue
 import com.vayunmathur.findfamily.data.LocationValueDao
-import com.vayunmathur.findfamily.data.RequestStatus
 import com.vayunmathur.findfamily.data.TemporaryLink
 import com.vayunmathur.findfamily.data.TemporaryLinkDao
 import com.vayunmathur.findfamily.data.User
@@ -31,7 +29,6 @@ import com.vayunmathur.findfamily.data.WaypointDao
 import dev.whyoleg.cryptography.algorithms.RSA
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -348,29 +345,6 @@ class FindFamilyViewModel(
         }
         // Schedule the recurring sync work that drives location-tracking restarts.
         ensureSync(ctx)
-        // Self-register: previously lived in MapView's LaunchedEffect. The 1s
-        // delay matches the original, giving Networking.init() time to run in
-        // the LocationTrackingService before we read Networking.userid.
-        viewModelScope.launch {
-            delay(1000)
-            val allUsers = withContext(Dispatchers.IO) { userDao.getAll() }
-            if (allUsers.none { it.id == Networking.userid }) {
-                withContext(Dispatchers.IO) {
-                    userDao.upsert(
-                        User(
-                            ctx.getString(R.string.me_label),
-                            null,
-                            "Unnamed Location",
-                            true,
-                            RequestStatus.MUTUAL_CONNECTION,
-                            Clock.System.now(),
-                            null,
-                            Networking.userid,
-                        )
-                    )
-                }
-            }
-        }
     }
 }
 
