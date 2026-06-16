@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Alchemist</string>
-    <string name="alchemy_icon_content_description">Ikona Alchemz %1$d</string>
+    <string name="app_name">Alchemik</string>
+    <string name="alchemy_icon_content_description">Ikona Alchemii %1$d</string>
     <string name="see_details">Zobacz szczegóły</string>
     <string name="item_details">Szczegóły przedmiotu</string>
     <string name="counter">%1$d / %2$d</string>
