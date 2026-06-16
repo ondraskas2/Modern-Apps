@@ -31,6 +31,9 @@ fun EmailAccount.imapServer(): ServerConfig = ServerConfig(imapHost, imapPort, i
 /** Convenience: produce the SMTP server config used when sending from this account. */
 fun EmailAccount.smtpServer(): ServerConfig = ServerConfig(smtpHost, smtpPort, smtpUseSsl)
 
+/** The login identity for IMAP/SMTP auth — [username] if set, otherwise [email]. */
+fun EmailAccount.loginUser(): String = username.ifBlank { email }
+
 /**
  * Decrypt the stored credentials and produce an [EmailManager.AuthType] —
  * always app-password (the only auth scheme this app supports).
@@ -409,11 +412,12 @@ class EmailManager {
         cc: String? = null,
         attachments: List<Uri> = emptyList(),
         inReplyTo: String? = null,
-        references: String? = null
+        references: String? = null,
+        from: String? = null
     ) = withContext(Dispatchers.IO) {
         val session = getSmtpSession(auth, server)
         val message = MimeMessage(session)
-        message.setFrom(InternetAddress(user))
+        message.setFrom(InternetAddress(from ?: user))
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to))
         if (!cc.isNullOrBlank()) {
             message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(cc))

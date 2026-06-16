@@ -94,6 +94,13 @@ data class EmailAccount(
     @ColumnInfo(defaultValue = "1")
     val smtpUseSsl: Boolean = true,
     /**
+     * Optional login username for IMAP/SMTP authentication when it differs
+     * from the email address (common with custom providers). When null or
+     * blank, [email] is used for authentication.
+     */
+    @ColumnInfo(defaultValue = "")
+    val username: String = "",
+    /**
      * Auth scheme. Only `password` is supported now; the column is preserved
      * with its original default for legacy DB compatibility, but every newly
      * added account stores credentials as an encrypted app password.

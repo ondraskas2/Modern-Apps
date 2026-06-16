@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -135,6 +136,8 @@ private fun PasswordForm(
     val scope = rememberCoroutineScope()
 
     var email by rememberSaveable { mutableStateOf("") }
+    var useDifferentUsername by rememberSaveable { mutableStateOf(false) }
+    var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
 
@@ -170,6 +173,27 @@ private fun PasswordForm(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             modifier = Modifier.fillMaxWidth(),
         )
+        if (preset.id == PROVIDER_CUSTOM) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable { useDifferentUsername = !useDifferentUsername }
+            ) {
+                Checkbox(
+                    checked = useDifferentUsername,
+                    onCheckedChange = { useDifferentUsername = it },
+                )
+                Text("Username is not my email", style = MaterialTheme.typography.bodyMedium)
+            }
+            if (useDifferentUsername) {
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it.trim() },
+                    label = { Text("Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
@@ -227,6 +251,7 @@ private fun PasswordForm(
                         context = context,
                         providerId = preset.id,
                         email = email,
+                        username = if (useDifferentUsername) username else "",
                         password = password,
                         imap = imap,
                         smtp = smtp,
@@ -328,14 +353,16 @@ private suspend fun testAndPersistAccount(
     context: Context,
     providerId: String,
     email: String,
+    username: String,
     password: String,
     imap: ServerConfig,
     smtp: ServerConfig,
 ): String? = withContext(Dispatchers.IO) {
+    val loginUser = username.ifBlank { email }
     try {
         EmailManager().fetchFolders(
             server = imap,
-            user = email,
+            user = loginUser,
             auth = EmailManager.AuthType.Password(password),
         )
     } catch (e: javax.mail.AuthenticationFailedException) {
@@ -352,6 +379,7 @@ private suspend fun testAndPersistAccount(
 
     val account = EmailAccount(
         email = email,
+        username = username,
         provider = providerId,
         imapHost = imap.host,
         imapPort = imap.port,

@@ -17,6 +17,7 @@ import com.vayunmathur.email.EmailManager
 import com.vayunmathur.email.R
 import com.vayunmathur.email.authType
 import com.vayunmathur.email.imapServer
+import com.vayunmathur.email.loginUser
 import javax.mail.Folder
 import javax.mail.event.MessageCountAdapter
 import javax.mail.event.MessageCountEvent
@@ -107,7 +108,7 @@ class ImapIdleService : Service() {
             val mgr = EmailManager()
             mgr.withStore(
                 server = account.imapServer(),
-                user = account.email,
+                user = account.loginUser(),
                 auth = account.authType(),
             ) { store ->
                 val folder = store.getFolder("INBOX") as IMAPFolder

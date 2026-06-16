@@ -186,7 +186,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 emailManager.setSeenFlag(
                     server = account.imapServer(),
-                    user = account.email,
+                    user = account.loginUser(),
                     auth = account.authType(),
                     folderName = folderName,
                     uid = uid,
@@ -264,7 +264,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
                 emailManager.sendMessage(
                     context = getApplication(),
                     server = acct.smtpServer(),
-                    user = acct.email,
+                    user = acct.loginUser(),
                     auth = acct.authType(),
                     to = to,
                     subject = subject,
@@ -273,6 +273,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
                     attachments = attachments,
                     inReplyTo = inReplyTo,
                     references = references,
+                    from = acct.email,
                 )
             }
 
@@ -320,7 +321,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             suspend fun attempt(acct: EmailAccount): Triple<String?, Boolean, List<Attachment>> {
                 return emailManager.fetchMessageBody(
                     server = acct.imapServer(),
-                    user = acct.email,
+                    user = acct.loginUser(),
                     auth = acct.authType(),
                     folderName = message.folderName,
                     uid = message.id,
@@ -359,7 +360,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
                 val path = emailManager.downloadAttachment(
                     context = getApplication(),
                     server = account.imapServer(),
-                    user = account.email,
+                    user = account.loginUser(),
                     auth = account.authType(),
                     folderName = attachment.folderName,
                     uid = attachment.messageId,

@@ -20,7 +20,7 @@ import com.vayunmathur.email.OutboxEntry
         Attachment::class,
         OutboxEntry::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class EmailDatabase : RoomDatabase() {
@@ -92,6 +92,13 @@ abstract class EmailDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE EmailAccount ADD COLUMN username TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE EmailAccount SET username = email")
+            }
+        }
+
         fun getInstance(context: Context): EmailDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -99,7 +106,7 @@ abstract class EmailDatabase : RoomDatabase() {
                     EmailDatabase::class.java,
                     "email-db"
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .build().also { instance = it }
             }
         }

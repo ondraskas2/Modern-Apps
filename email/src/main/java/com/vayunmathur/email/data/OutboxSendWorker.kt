@@ -13,6 +13,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.vayunmathur.email.EmailManager
 import com.vayunmathur.email.OutboxEntry
+import com.vayunmathur.email.loginUser
 import com.vayunmathur.email.authType
 import com.vayunmathur.email.smtpServer
 import kotlinx.serialization.json.Json
@@ -106,7 +107,7 @@ class OutboxSendWorker(
             manager.sendMessage(
                 context = applicationContext,
                 server = account.smtpServer(),
-                user = account.email,
+                user = account.loginUser(),
                 auth = account.authType(),
                 to = entry.to,
                 subject = entry.subject,
@@ -115,6 +116,7 @@ class OutboxSendWorker(
                 attachments = uris,
                 inReplyTo = entry.inReplyTo,
                 references = entry.references,
+                from = account.email,
             )
         }
         if (result.isSuccess) return SendResult.Success

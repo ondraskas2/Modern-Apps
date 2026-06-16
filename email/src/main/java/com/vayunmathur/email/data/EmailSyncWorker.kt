@@ -6,6 +6,7 @@ import androidx.work.*
 import com.vayunmathur.email.EmailManager
 import com.vayunmathur.email.authType
 import com.vayunmathur.email.imapServer
+import com.vayunmathur.email.loginUser
 import com.vayunmathur.email.widget.EmailWidget
 import androidx.glance.appwidget.updateAll
 import java.util.concurrent.TimeUnit
@@ -36,7 +37,7 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                 // Open a SINGLE store for the whole account — folders + every
                 // folder's message sync all reuse one TCP/TLS connection.
                 suspend fun runSync(authToUse: EmailManager.AuthType, accountToUse: com.vayunmathur.email.EmailAccount) {
-                    manager.withStore(accountToUse.imapServer(), accountToUse.email, authToUse) { store ->
+                    manager.withStore(accountToUse.imapServer(), accountToUse.loginUser(), authToUse) { store ->
                         Log.d("EmailSync", "Fetching folders for ${accountToUse.email}...")
                         val folders = manager.fetchFoldersInStore(store, accountToUse.email)
                         dao.insertFolders(folders)
@@ -59,7 +60,7 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                                 val knownUids = dao.getKnownUids(accountToUse.email, folder.fullName).toSet()
                                 val (messages, attachments) = manager.fetchMessagesInStore(
                                     store = store,
-                                    user = accountToUse.email,
+                                    user = accountToUse.loginUser(),
                                     folderName = folder.fullName,
                                     limit = 50,
                                     // Don't fetch full message bodies here — that's the
@@ -129,7 +130,7 @@ class EmailSyncWorker(appContext: Context, workerParams: WorkerParameters) :
                                     if (current.body != null) continue
                                     val (body, isHtml, attachments) = manager.fetchMessageBodyInStore(
                                         store = store,
-                                        user = accountToUse.email,
+                                        user = accountToUse.loginUser(),
                                         folderName = msg.folderName,
                                         uid = msg.id,
                                     )
