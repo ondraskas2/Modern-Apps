@@ -83,7 +83,13 @@ class DownloadService : Service() {
                     }
                 }
             }
-            ds.setBoolean("dbSetupComplete", true)
+            val allDone = urls.indices.all { index ->
+                val fileName = fileNames[index]
+                ds.getBoolean("done_$fileName", false) && verifyFile(urls[index], fileName)
+            }
+            if (allDone) {
+                ds.setBoolean("dbSetupComplete", true)
+            }
             cleanupAndStop()
         }
 
@@ -160,6 +166,13 @@ class DownloadService : Service() {
         ds.setBoolean("done_$fileName", true)
         ds.setDouble("progress_$fileName", 1.0)
         ds.setDouble("speed_$fileName", 0.0)
+    }
+
+    private suspend fun verifyFile(url: String, fileName: String): Boolean {
+        val file = File(getExternalFilesDir(null), fileName)
+        if (!file.exists() || file.length() == 0L) return false
+        val expectedSize = client.getContentLength(url) ?: return true
+        return file.length() == expectedSize
     }
 
     private fun cleanupAndStop() {
