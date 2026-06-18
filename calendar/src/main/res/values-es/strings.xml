@@ -1,3 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    </resources>
+    <string name="app_name">Calendario</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Cancelar</string>
+    <string name="close">Cerrar</string>
+    <string name="delete">Borrar</string>
+    <string name="rename">Renombrar</string>
+    <string name="create">Crear</string>
+    <string name="remove">Eliminar</string>
+    <string name="search">Buscar</string>
+    <string name="no_title">(Sin título)</string>
+    <string name="event_not_found">Evento no encontrado</string>
+    <string name="all_day">Todo el día</string>
+    <string name="does_not_repeat">No se repite</string>
+    <string name="repeats">Se repite</string>
+    <string name="settings">Configuración</string>
+    <string name="repeat">Repetir</string>
+    <string name="on_days_of_week">En los días de la semana</string>
+    <string name="monthly_type">Tipo mensual</string>
+    <string name="end">Fin</string>
+    <string name="never">Nunca</string>
+    <string name="choose_color">Elige color:</string>
+    <string name="change_color_for">Cambia el color de este calendario</string>
+    <string name="change_color">Cambia el color</string>
+    <string name="delete_calendar">Borrar calendario</string>
+    <string name="delete_calendar_confirm">¿Estás seguro de que quieres borrar este calendario? Esto eliminará todos los eventos del calendario.</string>
+    <string name="delete_calendar_name_confirm">¿Estás seguro de que quieres borrar \"%1$s\"? Esto eliminará todos los eventos del calendario.</string>
+    <string name="rename_calendar">Renombrar calendario</string>
+    <string name="new_name">Nuevo nombre</string>
+    <string name="create_a_calendar">Crear un calendario</string>
+    <string name="choose_timezone">Elige zona horaria</string>
+    <string name="open_location_in_navigation">Abrir ubicación</string>
+    <string name="delete_this_event">Borrar este evento</string>
+    <string name="delete_all_events">Borrar todos los eventos</string>
+    <string name="import_events_title">Importar eventos</string>
+    <string name="select_calendar_to_import">Selecciona calendario para importar:</string>
+</resources>
