@@ -7,6 +7,16 @@ This ecosystem also contains apps that aren't as well covered by the open-source
 
 This ecosystem also includes games, which I personally believe are an important part of a good phone experience (at least the kind from the "golden age" of mobile games are), so I have remade some mobile games I enjoyed and might add more as time goes on.
 
+### My Motivations
+**I personally use every app here.** My motivation for creating these apps is because I want to use them. I share them because it's the right thing to do, and because collaboration will only help bring this large project to fruition.
+
+### History of Modern-Apps (and Vayun Mathur)
+The history of Modern-Apps goes long before this repository was created. 3 years ago, I switched from iOS to GrapheneOS out of a simple desire to control the technology I used. Out of this desire, I taught myself Android app development, to try and build my own apps, giving birth to Material-Suite: https://github.com/vayun-mathur/Material-Suite. Though I learned a lot doing it, Material-Suite would end up going nowhere, and I switched back to using apps built by others.
+
+My interest in building my own apps was reborn just over a year ago, when I learned about the privacy practices of Life360. Unfortunely for me, at that time, there were no privacy respecting alternatives with the same features. So over the next year, I built one myself: FindFamily (originally here: https://github.com/vayun-mathur/Find-Family). Though it took a lot of time and effort, eventually, I was able to build the first (and to my knowledge only) free and open source, end-to-end-encrypted, cross platform, location sharing app.
+
+Motivated by the success of FindFamily, I started to build more apps ([Contacts](https://github.com/vayun-mathur/Contacts), [OpenAssistant](https://github.com/vayun-mathur/OpenAssistant), [PDF](https://github.com/vayun-mathur/PDF), and more). After several months of developing these applications independently of each other, I decided to build them together with a consistent design scheme and common components to get back that ecosystem feel that I had back when I was on iOS, so I moved all their code to this repo and the rest is history!
+
 ### Certificate
 All APK files made by me will match this SHA-256 certificate:
 `17:6F:CB:25:25:57:3E:5B:E8:E1:CB:3A:49:6D:D9:7B:13:7E:81:CA:5B:88:7A:1D:32:CB:89:4B:4E:57:17:B4`
