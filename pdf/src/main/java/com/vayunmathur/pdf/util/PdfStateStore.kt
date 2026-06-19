@@ -1,24 +1,23 @@
 package com.vayunmathur.pdf.util
 import android.content.Context
 import android.net.Uri
-import androidx.compose.ui.geometry.Offset
 import androidx.core.content.edit
 import androidx.pdf.PdfPoint
-import androidx.pdf.compose.PdfViewerState
+import androidx.pdf.view.PdfView
 
 object PdfStateStore {
     private const val PREFS_NAME = "pdf_viewer_state"
 
-    // Save state as a simple comma-separated string: "page,left,top"
-    fun save(context: Context, uri: Uri, centerOffset: Offset, state: PdfViewerState) {
+    fun save(context: Context, uri: Uri, pdfView: PdfView) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val key = uri.toString()
-        val pdfPoint = state.visibleOffsetToPdfPoint(centerOffset) ?: return
-        val value = "${state.zoom},${pdfPoint.pageNum},${pdfPoint.x},${pdfPoint.y}"
+        val page = pdfView.firstVisiblePage
+        val zoom = pdfView.zoom
+        val value = "$zoom,$page,0.0,0.0"
         prefs.edit { putString(key, value) }
     }
 
-    fun restore(context: Context, uri: Uri): (suspend (PdfViewerState) -> Unit)? {
+    fun restore(context: Context, uri: Uri): (suspend (PdfView) -> Unit)? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val key = uri.toString()
         val value = prefs.getString(key, null) ?: return null
@@ -33,4 +32,3 @@ object PdfStateStore {
         }
     }
 }
-

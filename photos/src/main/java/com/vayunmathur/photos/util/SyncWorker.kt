@@ -122,7 +122,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.REPLACE,
                 request
             )
         }

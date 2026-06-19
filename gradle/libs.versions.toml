@@ -120,6 +120,7 @@ androidx-pdf-compose = { module = "androidx.pdf:pdf-compose", version.ref = "pdf
 androidx-pdf-ink = { module = "androidx.pdf:pdf-ink", version.ref = "pdfViewer" }
 androidx-pdf-document-service = { module = "androidx.pdf:pdf-document-service", version.ref = "pdfViewer" }
 androidx-pdf-viewer = { module = "androidx.pdf:pdf-viewer", version.ref = "pdfViewer" }
+androidx-pdf-viewer-fragment = { module = "androidx.pdf:pdf-viewer-fragment", version.ref = "pdfViewer" }
 
 # Maps
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre" }

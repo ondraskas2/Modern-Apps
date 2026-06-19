@@ -34,8 +34,7 @@ import kotlinx.coroutines.withContext
  *
  * UI-only state stays in compose: CameraX PreviewView, FocusRequester, LazyListState,
  * the in-progress drag rect inside [com.vayunmathur.pdf.ui.CropScreen], dialog visibility
- * booleans, search query/index, animation specs, and [androidx.pdf.compose.PdfViewerState]
- * (which is a compose state holder for the viewer).
+ * booleans, search query/index, animation specs, and the PdfView scroll/zoom state.
  */
 class PdfViewModel(application: Application) : AndroidViewModel(application) {
 

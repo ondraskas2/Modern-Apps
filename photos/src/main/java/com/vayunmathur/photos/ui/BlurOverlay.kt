@@ -51,8 +51,9 @@ fun BlurOverlay(
                 val rad = Math.toRadians(blurParams.angle.toDouble())
                 val nx = -sin(rad).toFloat()
                 val ny = cos(rad).toFloat()
-                val dx = ny * w
-                val dy = -nx * h
+                val extent = max(w, h)
+                val dx = ny * extent
+                val dy = -nx * extent
                 drawLine(guideColor, Offset(cx + dx - nx * r, cy + dy - ny * r), Offset(cx - dx - nx * r, cy - dy - ny * r), strokeWidth = guideStroke.width)
                 drawLine(guideColor, Offset(cx + dx + nx * r, cy + dy + ny * r), Offset(cx - dx + nx * r, cy - dy + ny * r), strokeWidth = guideStroke.width)
                 drawCircle(Color.White, 4.dp.toPx(), Offset(cx, cy))

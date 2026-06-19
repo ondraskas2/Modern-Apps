@@ -75,8 +75,8 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
     val thumbnails: StateFlow<Map<String, Bitmap>> = _thumbnails.asStateFlow()
 
     fun setVault(dao: VaultPhotoDao, password: String) {
-        _vaultPhotoDao.value = dao
         _vaultPassword.value = password
+        _vaultPhotoDao.value = dao
     }
 
     fun unlock(

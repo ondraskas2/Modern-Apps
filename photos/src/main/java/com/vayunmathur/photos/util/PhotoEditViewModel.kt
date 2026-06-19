@@ -23,6 +23,8 @@ import com.vayunmathur.photos.data.CurvesAdjustment
 import com.vayunmathur.photos.data.HealingStrokes
 import com.vayunmathur.photos.data.HslAdjustments
 import com.vayunmathur.photos.data.ImageAdjustments
+import com.vayunmathur.photos.data.applyPixelEffects
+import com.vayunmathur.photos.data.hasPixelEffects
 import com.vayunmathur.photos.data.PerspectiveCorners
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoFilter
@@ -79,19 +81,33 @@ class PhotoEditViewModel(
     private var pendingSaveOnComplete: (() -> Unit)? = null
 
     fun updateAdjustment(update: (ImageAdjustments) -> ImageAdjustments) {
+        val prev = adjustments.value
         adjustments.value = update(adjustments.value)
+        val curr = adjustments.value
+        if (prev.sharpness != curr.sharpness || prev.vignette != curr.vignette || prev.grain != curr.grain) {
+            requestPreviewUpdate()
+        }
     }
 
     fun applyFilter(filter: PhotoFilter?) {
+        val prev = adjustments.value
         selectedFilter.value = filter
         if (filter != null) {
             adjustments.value = filter.adjustments
         }
+        val curr = adjustments.value
+        if (prev.sharpness != curr.sharpness || prev.vignette != curr.vignette || prev.grain != curr.grain) {
+            requestPreviewUpdate()
+        }
     }
 
     fun resetAdjustments() {
+        val prev = adjustments.value
         adjustments.value = ImageAdjustments()
         selectedFilter.value = null
+        if (prev.hasPixelEffects()) {
+            requestPreviewUpdate()
+        }
     }
 
     fun updateCurves(curves: CurvesAdjustment) { curvesAdjustment.value = curves }
@@ -135,6 +151,16 @@ class PhotoEditViewModel(
         previewJob = viewModelScope.launch(Dispatchers.Default) {
             delay(150)
             val source = _transformedBitmap.value ?: return@launch
+            val adj = adjustments.value
+            val hsl = hslAdjustments.value
+            val blur = blurParams.value
+            val selective = selectiveEdits.value
+            val hasPixelEffects = adj.hasPixelEffects() ||
+                !hsl.isIdentity() || !blur.isIdentity() || !selective.isIdentity()
+            if (!hasPixelEffects) {
+                _previewBitmap.value = null
+                return@launch
+            }
             val maxDim = 512
             val scale = min(maxDim.toFloat() / source.width, maxDim.toFloat() / source.height).coerceAtMost(1f)
             var preview = Bitmap.createScaledBitmap(
@@ -143,15 +169,15 @@ class PhotoEditViewModel(
                 (source.height * scale).roundToInt().coerceAtLeast(1),
                 true,
             )
-            val hsl = hslAdjustments.value
+            if (adj.hasPixelEffects()) {
+                preview = adj.applyPixelEffects(preview)
+            }
             if (!hsl.isIdentity()) {
                 preview = hsl.applyHslToBitmap(preview)
             }
-            val blur = blurParams.value
             if (!blur.isIdentity()) {
                 preview = blur.applyBlurToBitmap(preview)
             }
-            val selective = selectiveEdits.value
             if (!selective.isIdentity()) {
                 preview = selective.applySelectiveEdits(preview)
             }
@@ -243,6 +269,7 @@ class PhotoEditViewModel(
         strokes: List<SerializedStroke>,
         texts: List<TextElement>,
         viewportWidth: Float,
+        viewportHeight: Float,
         asCopy: Boolean,
         imageAdjustments: ImageAdjustments = ImageAdjustments(),
         curves: CurvesAdjustment = CurvesAdjustment(),
@@ -257,7 +284,7 @@ class PhotoEditViewModel(
         val ctx: Context = getApplication()
         viewModelScope.launch {
             val result = withContext(Dispatchers.Default) {
-                prepareAndWrite(ctx, photo, rotation, cropRect, strokes, texts, viewportWidth, asCopy, imageAdjustments, curves, hsl, blur, selective, healing, perspective)
+                prepareAndWrite(ctx, photo, rotation, cropRect, strokes, texts, viewportWidth, viewportHeight, asCopy, imageAdjustments, curves, hsl, blur, selective, healing, perspective)
             }
             when (result) {
                 is WriteResult.Success -> onComplete()
@@ -347,6 +374,7 @@ class PhotoEditViewModel(
             strokes: List<SerializedStroke>,
             texts: List<TextElement>,
             viewportWidth: Float,
+            viewportHeight: Float,
             asCopy: Boolean,
             imageAdjustments: ImageAdjustments = ImageAdjustments(),
             curves: CurvesAdjustment = CurvesAdjustment(),
@@ -422,18 +450,18 @@ class PhotoEditViewModel(
             val canvas = android.graphics.Canvas(resultBitmap)
             if (strokes.isNotEmpty()) {
                 val renderer = androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create()
-                val scaleMatrix = Matrix().apply {
-                    setScale(
-                        resultBitmap.width / viewportWidth,
-                        resultBitmap.width / viewportWidth,
-                    )
-                }
+                val identityMatrix = Matrix()
+                val scaleX = resultBitmap.width.toFloat() / viewportWidth
+                val scaleY = resultBitmap.height.toFloat() / viewportHeight
+                canvas.save()
+                canvas.scale(scaleX, scaleY)
                 strokes.forEach { serialized ->
                     try {
                         val stroke = serialized.deserialize()
-                        renderer.draw(canvas, stroke, scaleMatrix)
+                        renderer.draw(canvas, stroke, identityMatrix)
                     } catch (_: Exception) {}
                 }
+                canvas.restore()
             }
 
             // 11. Render text overlays
@@ -480,7 +508,21 @@ class PhotoEditViewModel(
                 resultBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)
             }.toByteArray()
 
-            Log.d(TAG, "Requesting write permission via createWriteRequest for $uri (${jpegBytes.size} bytes)")
+            // Try direct write first (works with MANAGE_MEDIA permission)
+            try {
+                resolver.openOutputStream(uri, "w")?.use { out ->
+                    out.write(jpegBytes)
+                }
+                val updateValues = ContentValues().apply {
+                    put(MediaStore.Images.Media.DATE_MODIFIED, nowSeconds)
+                    put(MediaStore.Images.Media.SIZE, jpegBytes.size.toLong())
+                }
+                resolver.update(uri, updateValues, null, null)
+                Log.d(TAG, "Direct overwrite SUCCESS for $uri")
+                return WriteResult.Success
+            } catch (e: Exception) {
+                Log.d(TAG, "Direct write failed, falling back to createWriteRequest", e)
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val pendingIntent = MediaStore.createWriteRequest(resolver, listOf(uri))

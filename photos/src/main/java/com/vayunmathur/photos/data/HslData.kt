@@ -73,7 +73,7 @@ fun hslToRgb(h: Float, s: Float, l: Float): IntArray {
 }
 
 private fun hueWeight(pixelHue: Float, centerHue: Float): Float {
-    val diff = abs(((pixelHue - centerHue + 180f) % 360f) - 180f)
+    val diff = abs(((pixelHue - centerHue + 180f + 360f) % 360f) - 180f)
     return (1f - (diff / 30f)).coerceIn(0f, 1f)
 }
 

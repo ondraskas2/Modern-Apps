@@ -107,21 +107,17 @@ fun InkCanvasView(
             val frameLayout = FrameLayout(context)
             val state = InkState()
 
-            val inProgressStrokesView = InProgressStrokesView(context)
-            frameLayout.addView(inProgressStrokesView)
-
             val finishedStrokesView = FinishedStrokesView(context)
             frameLayout.addView(finishedStrokesView)
 
+            val inProgressStrokesView = InProgressStrokesView(context)
             @SuppressLint("ClickableViewAccessibility")
-            val touchView = View(context).apply {
-                setOnTouchListener(StrokeTouchListener(
-                    inProgressStrokesView = inProgressStrokesView,
-                    finishedStrokesView = finishedStrokesView,
-                    state = state,
-                ))
-            }
-            frameLayout.addView(touchView)
+            val unused = inProgressStrokesView.setOnTouchListener(StrokeTouchListener(
+                inProgressStrokesView = inProgressStrokesView,
+                finishedStrokesView = finishedStrokesView,
+                state = state,
+            ))
+            frameLayout.addView(inProgressStrokesView)
 
             inProgressStrokesView.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
                 override fun onStrokesFinished(strokes: Map<androidx.ink.authoring.InProgressStrokeId, Stroke>) {

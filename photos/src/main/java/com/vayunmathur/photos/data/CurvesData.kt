@@ -51,12 +51,17 @@ fun CurvesAdjustment.toColorMatrix(): ColorMatrix {
     val rMid = interpolateSpline(red, 3)
     val gMid = interpolateSpline(green, 3)
     val bMid = interpolateSpline(blue, 3)
-    val rScale = mid[1] * rMid[1] * 2f
-    val gScale = mid[1] * gMid[1] * 2f
-    val bScale = mid[1] * bMid[1] * 2f
-    val rOffset = (mid[0] + rMid[0] - 0f) * 255f
-    val gOffset = (mid[0] + gMid[0] - 0f) * 255f
-    val bOffset = (mid[0] + bMid[0] - 0f) * 255f
+    val combinedScale = mid[2] - mid[0]
+    val combinedOff = mid[0]
+    val rChScale = rMid[2] - rMid[0]
+    val gChScale = gMid[2] - gMid[0]
+    val bChScale = bMid[2] - bMid[0]
+    val rScale = combinedScale * rChScale
+    val gScale = combinedScale * gChScale
+    val bScale = combinedScale * bChScale
+    val rOffset = (rChScale * combinedOff + rMid[0]) * 255f
+    val gOffset = (gChScale * combinedOff + gMid[0]) * 255f
+    val bOffset = (bChScale * combinedOff + bMid[0]) * 255f
     return ColorMatrix(floatArrayOf(
         rScale, 0f, 0f, 0f, rOffset,
         0f, gScale, 0f, 0f, gOffset,

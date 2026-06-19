@@ -185,6 +185,23 @@ fun ImageAdjustments.applyToBitmap(bitmap: Bitmap): Bitmap {
     return result
 }
 
+fun ImageAdjustments.hasPixelEffects(): Boolean =
+    sharpness != 0f || vignette != 0f || grain != 0f
+
+fun ImageAdjustments.applyPixelEffects(bitmap: Bitmap): Bitmap {
+    var result = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+    if (sharpness > 0f) {
+        result = applySharpen(result, sharpness / 100f)
+    }
+    if (vignette > 0f) {
+        applyVignette(result, vignette / 100f)
+    }
+    if (grain > 0f) {
+        applyGrain(result, grain / 100f)
+    }
+    return result
+}
+
 private fun applySharpen(src: Bitmap, amount: Float): Bitmap {
     val w = src.width
     val h = src.height

@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import com.vayunmathur.photos.data.DrawingTool
 import com.vayunmathur.photos.data.ImageAdjustments
+import com.vayunmathur.photos.data.hasPixelEffects
 import com.vayunmathur.photos.data.PhotoFilter
 import com.vayunmathur.photos.data.PhotoFilters
 import com.vayunmathur.photos.data.TextElement
@@ -381,7 +382,7 @@ family = StockBrushes.pressurePen(),
             photoEditViewModel.savePhoto(
                 it, rotation, cropRect,
                 inkStrokes.map { s -> s.serialize() },
-                texts.toList(), currentViewportWidth, asCopy, adjustments,
+                texts.toList(), currentViewportWidth, currentViewportHeight, asCopy, adjustments,
                 curvesAdjustment, hslAdjustments, blurParams,
                 selectiveEdits, healingStrokes, perspectiveCorners,
             ) { context.finish() }
@@ -580,8 +581,9 @@ family = StockBrushes.pressurePen(),
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        val displayBitmap = when (editorMode) {
-                            EditorMode.HSL, EditorMode.Blur, EditorMode.Selective -> previewBitmap ?: transformedBitmap
+                        val displayBitmap = when {
+                            editorMode == EditorMode.HSL || editorMode == EditorMode.Blur || editorMode == EditorMode.Selective -> previewBitmap ?: transformedBitmap
+                            adjustments.hasPixelEffects() -> previewBitmap ?: transformedBitmap
                             else -> transformedBitmap
                         }
                         displayBitmap?.let { bitmap ->

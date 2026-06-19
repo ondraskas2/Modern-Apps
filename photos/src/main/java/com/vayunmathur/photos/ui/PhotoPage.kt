@@ -85,7 +85,7 @@ data class ZoomState(val scale: Float = 1f, val offset: Offset = Offset.Zero)
 @Composable
 fun PhotoPage(galleryViewModel: GalleryViewModel, photoMapViewModel: PhotoMapViewModel, id: Long, overridePhotosList: List<Photo>?) {
     val photosAll by galleryViewModel.photos.collectAsState()
-    val photos = overridePhotosList ?: photosAll
+    val photos = overridePhotosList ?: photosAll.filter { !it.isTrashed }
     val context = LocalContext.current
     val photosSorted = remember(photos) { photos.sortedByDescending { it.date } }
 
@@ -144,11 +144,6 @@ fun PhotoPage(galleryViewModel: GalleryViewModel, photoMapViewModel: PhotoMapVie
                             val intent =
                                     Intent(context, EditActivity::class.java).apply {
                                         putExtra("photo_id", photo.id)
-                                        // Use NEW_DOCUMENT to treat this as a separate document in
-                                        // Recents
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
-                                        // MULTIPLE_TASK ensures it doesn't just recycle an old task
-                                        addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                                     }
                             context.startActivity(intent)
                         }

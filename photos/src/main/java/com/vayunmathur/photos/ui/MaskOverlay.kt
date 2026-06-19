@@ -69,8 +69,9 @@ fun MaskOverlay(
                     val rad = Math.toRadians(mask.angle.toDouble())
                     val nx = -sin(rad).toFloat()
                     val ny = cos(rad).toFloat()
-                    val dx = ny * w
-                    val dy = -nx * h
+                    val extent = max(w, h)
+                    val dx = ny * extent
+                    val dy = -nx * extent
                     drawLine(Color.White.copy(alpha = 0.6f), Offset(cx + dx - nx * r, cy + dy - ny * r), Offset(cx - dx - nx * r, cy - dy - ny * r), strokeWidth = 1.5.dp.toPx())
                     drawLine(Color.White.copy(alpha = 0.6f), Offset(cx + dx + nx * r, cy + dy + ny * r), Offset(cx - dx + nx * r, cy - dy + ny * r), strokeWidth = 1.5.dp.toPx())
                     drawCircle(Color.White, 4.dp.toPx(), Offset(cx, cy))
