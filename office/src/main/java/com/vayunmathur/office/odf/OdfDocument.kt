@@ -45,10 +45,11 @@ sealed class OdfContentBlock {
     data class Table(val table: OdfTable) : OdfContentBlock()
     data class Image(val image: OdfImage) : OdfContentBlock()
     data class Chart(val chart: OdfChart) : OdfContentBlock()
+    data class Formula(val mathml: String) : OdfContentBlock()
     data object PageBreak : OdfContentBlock()
 }
 
-enum class ChartType { BAR, LINE, PIE, AREA }
+enum class ChartType { BAR, LINE, PIE, AREA, DONUT, SCATTER, STACKED_BAR }
 
 data class OdfChartSeries(val name: String, val values: List<Float>)
 
@@ -71,12 +72,60 @@ data class OdfParagraph(
     val listLevel: Int = 0,
     val listType: ListType = ListType.BULLET,
     val listItemIndex: Int = 0,
-    val direction: LayoutDirection? = null
+    val direction: LayoutDirection? = null,
+    // Line spacing as a multiple of normal (1.0 = single, 1.5 = 150%); null = unspecified. (A6)
+    val lineHeightPercent: Float? = null,
+    // Paragraph border color (single uniform border) if any. (A7)
+    val borderColor: Long? = null,
+    // Number format for numbered lists: "1", "a", "A", "i", "I". (F42)
+    val listNumberFormat: String = "1",
+    // Bullet glyph for bullet lists. (F42)
+    val listBulletChar: String = "\u2022",
+    // Number prefix/suffix (e.g. "(" and ")" for "(1)"). (F42)
+    val listNumberPrefix: String = "",
+    val listNumberSuffix: String = ".",
+    // Tab stop positions in px (96dpi). (A4)
+    val tabStops: List<Float> = emptyList()
 )
 
 enum class ParagraphStyle { HEADING1, HEADING2, HEADING3, HEADING4, BODY, LIST_ITEM, TABLE_HEADER }
 
 enum class ListType { BULLET, NUMBERED }
+
+/** Formats a 1-based list item index using an ODF number-format token ("1","a","A","i","I"). (F42) */
+fun formatListNumber(index: Int, format: String): String {
+    val n = index.coerceAtLeast(1)
+    return when (format) {
+        "a" -> toAlpha(n).lowercase()
+        "A" -> toAlpha(n)
+        "i" -> toRoman(n).lowercase()
+        "I" -> toRoman(n)
+        else -> n.toString()
+    }
+}
+
+private fun toAlpha(n: Int): String {
+    val sb = StringBuilder()
+    var v = n
+    while (v > 0) {
+        val rem = (v - 1) % 26
+        sb.insert(0, ('A' + rem))
+        v = (v - 1) / 26
+    }
+    return sb.toString()
+}
+
+private fun toRoman(n: Int): String {
+    if (n !in 1..3999) return n.toString()
+    val values = intArrayOf(1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1)
+    val symbols = arrayOf("M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I")
+    val sb = StringBuilder()
+    var v = n
+    for (i in values.indices) {
+        while (v >= values[i]) { sb.append(symbols[i]); v -= values[i] }
+    }
+    return sb.toString()
+}
 
 data class OdfSpan(
     val text: String,
@@ -100,7 +149,9 @@ data class OdfImage(
     val imageData: ByteArray,
     val width: Float = 0f,
     val height: Float = 0f,
-    val anchorType: String = ""
+    val anchorType: String = "",
+    // Rotation in degrees clockwise (E38).
+    val rotationDegrees: Float = 0f
 )
 
 data class OdfTable(
@@ -140,7 +191,26 @@ data class OdfCell(
     val italic: Boolean = false,
     val alignment: TextAlign? = null,
     val borderColor: Long? = null,
-    val isCovered: Boolean = false
+    val isCovered: Boolean = false,
+    // OpenFormula source (e.g. "of:=SUM([.A1:.A3])"), if this is a formula cell. (H49)
+    val formula: String? = null,
+    // ODF value type: "float", "string", "date", "percentage", "currency", "boolean". (H50/H54)
+    val valueType: String? = null,
+    // Cached numeric value from office:value, if numeric. (H54)
+    val numberValue: Double? = null,
+    // Resolved number/date/currency display format. (H50)
+    val numberFormat: OdfNumberFormat? = null,
+    // Wrap text in cell. (H53)
+    val wrap: Boolean = false
+)
+
+/** Resolved spreadsheet number-format descriptor (H50). */
+data class OdfNumberFormat(
+    val decimals: Int? = null,
+    val percent: Boolean = false,
+    val currencySymbol: String? = null,
+    val grouping: Boolean = false,
+    val isDate: Boolean = false
 )
 
 data class OdfSlide(

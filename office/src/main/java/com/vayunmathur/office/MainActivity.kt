@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,13 +124,17 @@ class MainActivity : ComponentActivity() {
             val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let { documentUri = it; viewModel.loadDocument(it, it.lastPathSegment ?: "document") }
             }
+            val csvImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                uri?.let { documentUri = it; viewModel.loadCsv(it, it.lastPathSegment ?: "import.csv") }
+            }
 
             OfficeLightTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     when (val s = state) {
                         is OfficeViewModel.ViewState.Empty -> InitialScreen(
                             viewModel = viewModel,
-                            onOpenDocument = { filePickerLauncher.launch(odfMimeTypes) }
+                            onOpenDocument = { filePickerLauncher.launch(odfMimeTypes) },
+                            onImportCsv = { csvImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*")) }
                         )
                         is OfficeViewModel.ViewState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                         is OfficeViewModel.ViewState.Loaded -> DocumentScreen(
@@ -151,7 +156,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit) {
+fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit, onImportCsv: () -> Unit = {}) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         Text("Office", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
@@ -167,6 +172,8 @@ fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit) {
             OutlinedButton(onClick = { viewModel.createNewSpreadsheet() }, Modifier.weight(1f)) { Text("New Sheet") }
             OutlinedButton(onClick = { viewModel.createNewPresentation() }, Modifier.weight(1f)) { Text("New Slides") }
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onImportCsv, modifier = Modifier.fillMaxWidth()) { Text("Import CSV") }
     }
 }
 
@@ -183,6 +190,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     var activeTableBlock by remember { mutableIntStateOf(-1) }
     var activeTableRow by remember { mutableIntStateOf(-1) }
     var activeTableCol by remember { mutableIntStateOf(-1) }
+    var showChartEditor by remember { mutableStateOf(false) }
+    var editingChartBlock by remember { mutableIntStateOf(-1) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showReplaceBar by remember { mutableStateOf(false) }
     var replaceText by remember { mutableStateOf("") }
@@ -192,17 +201,19 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     var showInsertTable by remember { mutableStateOf(false) }
     var showInsertLink by remember { mutableStateOf(false) }
     var showAddBookmark by remember { mutableStateOf(false) }
+    var showSpecialChars by remember { mutableStateOf(false) }
+    var showFootnote by remember { mutableStateOf(false) }
+    var showComment by remember { mutableStateOf(false) }
+    var showHeaderFooter by remember { mutableStateOf(false) }
+    var matchCase by remember { mutableStateOf(false) }
+    var wholeWord by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var timerSeconds by remember { mutableIntStateOf(0) }
     var selStart by remember { mutableIntStateOf(0) }
     var selEnd by remember { mutableIntStateOf(0) }
     var fileMenu by remember { mutableStateOf(false) }
-    var editMenu by remember { mutableStateOf(false) }
     var insertMenu by remember { mutableStateOf(false) }
-    var formatMenu by remember { mutableStateOf(false) }
     var viewMenu by remember { mutableStateOf(false) }
-    var styleMenu by remember { mutableStateOf(false) }
-    var alignMenu by remember { mutableStateOf(false) }
 
     val isEditMode by viewModel.isEditMode.collectAsState()
     val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsState()
@@ -233,6 +244,21 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         uri?.let {
             val csv = viewModel.exportCsv()
             context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(csv) }
+        }
+    }
+    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            try {
+                val bytes = context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() } ?: return@let
+                val name = it.lastPathSegment?.substringAfterLast('/') ?: "image.png"
+                viewModel.insertImage(maxOf(0, focusedPara), name, bytes)
+            } catch (_: Exception) {}
+        }
+    }
+    val flatExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/xml")) { uri ->
+        uri?.let {
+            val xml = viewModel.exportFlat()
+            if (xml.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(xml) }
         }
     }
 
@@ -291,6 +317,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                             }
                         },
                         actions = {
+                            if (canEdit) IconButton(onClick = { showSearch = !showSearch }) { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_search_24), contentDescription = "Search") }
                             IconButton(onClick = { viewModel.undo() }, enabled = canUndo) { Icon(painterResource(com.vayunmathur.library.R.drawable.undo_24px), contentDescription = "Undo") }
                             IconButton(onClick = { viewModel.redo() }, enabled = canRedo) { Icon(painterResource(R.drawable.redo_24px), contentDescription = "Redo") }
                             IconButton(onClick = { viewModel.save() }, enabled = hasUnsavedChanges && !isSaving) {
@@ -312,43 +339,35 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                         DropdownMenuItem(text = { Text(stringResource(R.string.share)) }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.share_24px), null) }, onClick = { fileMenu = false; context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, null)) })
                                     }
                                     DropdownMenuItem(text = { Text("Export as Text") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_file_download_24), null) }, onClick = { fileMenu = false; val t = viewModel.exportAsPlainText(); if (t.isNotEmpty()) context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, t) }, null)) })
+                                    DropdownMenuItem(text = { Text("Export flat ODF…") }, onClick = { fileMenu = false; val ext = when { isTextDoc -> ".fodt"; isSpreadsheet -> ".fods"; isPresentation -> ".fodp"; else -> ".fodg" }; flatExportLauncher.launch(document.title.substringBeforeLast('.') + ext) })
                                     if (isSpreadsheet) DropdownMenuItem(text = { Text("Export as CSV") }, onClick = { fileMenu = false; csvExportLauncher.launch("export.csv") })
                                     HorizontalDivider()
                                     DropdownMenuItem(text = { Text(stringResource(R.string.document_info)) }, onClick = { fileMenu = false; showMetadata = true })
                                     DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.settings_24px), null) }, onClick = { fileMenu = false; showSettings = true })
                                 }
                             }
-                            // Edit
-                            Box {
-                                TextButton(onClick = { editMenu = true }) { Text("Edit") }
-                                DropdownMenu(expanded = editMenu, onDismissRequest = { editMenu = false }) {
-                                    DropdownMenuItem(text = { Text(stringResource(R.string.search)) }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_search_24), null) }, onClick = { editMenu = false; showSearch = true })
-                                    if (isTextDoc) {
-                                        HorizontalDivider()
-                                        DropdownMenuItem(text = { Text("Duplicate paragraph") }, enabled = focusedPara >= 0, onClick = { editMenu = false; viewModel.duplicateParagraph(focusedPara) })
-                                        DropdownMenuItem(text = { Text("Move paragraph up") }, enabled = focusedPara > 0, onClick = { editMenu = false; viewModel.moveParagraphUp(focusedPara) })
-                                        DropdownMenuItem(text = { Text("Move paragraph down") }, enabled = focusedPara >= 0, onClick = { editMenu = false; viewModel.moveParagraphDown(focusedPara) })
-                                        DropdownMenuItem(text = { Text("Delete paragraph", color = MaterialTheme.colorScheme.error) }, enabled = focusedPara >= 0, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.delete_24px), null) }, onClick = { editMenu = false; viewModel.deleteParagraph(focusedPara) })
-                                    }
-                                }
-                            }
+                            // Edit menu removed: Search moved to a top-bar icon; paragraph ops live in the bottom bar's ⋮ menu.
                             // Insert
                             if (isTextDoc) Box {
                                 TextButton(onClick = { insertMenu = true }) { Text("Insert") }
                                 DropdownMenu(expanded = insertMenu, onDismissRequest = { insertMenu = false }) {
                                     DropdownMenuItem(text = { Text("Paragraph") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.add_24px), null) }, onClick = { insertMenu = false; viewModel.addParagraphAfter(maxOf(0, focusedPara)) })
+                                    DropdownMenuItem(text = { Text("Image…") }, onClick = { insertMenu = false; imagePickerLauncher.launch("image/*") })
                                     DropdownMenuItem(text = { Text("Hyperlink") }, onClick = { insertMenu = false; showInsertLink = true })
+                                    DropdownMenuItem(text = { Text("Chart") }, onClick = { insertMenu = false; editingChartBlock = -1; showChartEditor = true })
+                                    DropdownMenuItem(text = { Text("Special character…") }, onClick = { insertMenu = false; showSpecialChars = true })
+                                    DropdownMenuItem(text = { Text("Date") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())) })
+                                    DropdownMenuItem(text = { Text("Time") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())) })
                                     DropdownMenuItem(text = { Text("Bookmark") }, onClick = { insertMenu = false; showAddBookmark = true })
+                                    DropdownMenuItem(text = { Text("Footnote…") }, onClick = { insertMenu = false; showFootnote = true })
+                                    DropdownMenuItem(text = { Text("Comment…") }, enabled = focusedPara >= 0, onClick = { insertMenu = false; showComment = true })
+                                    DropdownMenuItem(text = { Text("Table of contents") }, onClick = { insertMenu = false; viewModel.insertTableOfContents() })
+                                    DropdownMenuItem(text = { Text("Header & footer…") }, onClick = { insertMenu = false; showHeaderFooter = true })
+                                    DropdownMenuItem(text = { Text("Horizontal line") }, onClick = { insertMenu = false; viewModel.insertHorizontalLine(maxOf(0, focusedPara)) })
                                     DropdownMenuItem(text = { Text("Page break") }, onClick = { insertMenu = false; viewModel.insertPageBreak(maxOf(0, focusedPara)) })
                                 }
                             }
-                            // Format
-                            if (isTextDoc) Box {
-                                TextButton(onClick = { formatMenu = true }) { Text("Format") }
-                                DropdownMenu(expanded = formatMenu, onDismissRequest = { formatMenu = false }) {
-                                    DropdownMenuItem(text = { Text(stringResource(R.string.font_size)) }, enabled = focusedPara >= 0, onClick = { formatMenu = false; showFontSizePicker = true })
-                                }
-                            }
+                            // Format menu removed: font size, clear formatting, and list level/restart moved to the bottom bar's ⋮ menu.
                             // View
                             Box {
                                 TextButton(onClick = { viewMenu = true }) { Text("View") }
@@ -358,6 +377,16 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     if (isTextDoc && wordCount > 0) DropdownMenuItem(text = { Text("$wordCount words · $charCount chars · ~${readingTime} min") }, enabled = false, onClick = { })
                                     if (isPresentation) DropdownMenuItem(text = { Text("Presentation timer") }, onClick = { viewMenu = false; showTimer = !showTimer })
                                 }
+                            }
+                        }
+                    }
+                    AnimatedVisibility(visible = showTimer && isPresentation) {
+                        Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("⏱ %02d:%02d".format(timerSeconds / 60, timerSeconds % 60), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = { timerSeconds = 0 }) { Text("Reset") }
+                                TextButton(onClick = { showTimer = false }) { Text("Stop") }
                             }
                         }
                     }
@@ -373,11 +402,17 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     }
                                 })
                             AnimatedVisibility(visible = showReplaceBar && searchQuery.isNotEmpty()) {
-                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    TextField(value = replaceText, onValueChange = { replaceText = it }, placeholder = { Text(stringResource(R.string.replace_hint)) }, singleLine = true, modifier = Modifier.weight(1f),
-                                        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant))
-                                    TextButton(onClick = { viewModel.replaceInDocument(searchQuery, replaceText, false) }) { Text("One") }
-                                    TextButton(onClick = { val n = viewModel.replaceInDocument(searchQuery, replaceText, true); if (n > 0) searchQuery = "" }) { Text("All") }
+                                Column {
+                                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        TextField(value = replaceText, onValueChange = { replaceText = it }, placeholder = { Text(stringResource(R.string.replace_hint)) }, singleLine = true, modifier = Modifier.weight(1f),
+                                            colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant))
+                                        TextButton(onClick = { viewModel.replaceInDocument(searchQuery, replaceText, false, matchCase, wholeWord) }) { Text("One") }
+                                        TextButton(onClick = { val n = viewModel.replaceInDocument(searchQuery, replaceText, true, matchCase, wholeWord); if (n > 0) searchQuery = "" }) { Text("All") }
+                                    }
+                                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(onClick = { matchCase = !matchCase }) { Text(if (matchCase) "☑ Case" else "☐ Case") }
+                                        TextButton(onClick = { wholeWord = !wholeWord }) { Text(if (wholeWord) "☑ Word" else "☐ Word") }
+                                    }
                                 }
                             }
                         }
@@ -394,16 +429,17 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                 }
             },
             bottomBar = {
-                if (isTextDoc) QuickFormatBar(document = document, runStart = activeRunStart, runEnd = activeRunEnd, selStart = selStart, selEnd = selEnd, activeTableBlock = activeTableBlock, activeTableRow = activeTableRow, activeTableCol = activeTableCol, viewModel = viewModel, onColorClick = { showColorPicker = true }, onInsertTable = { showInsertTable = true })
+                if (isTextDoc) QuickFormatBar(document = document, runStart = activeRunStart, runEnd = activeRunEnd, selStart = selStart, selEnd = selEnd, activeTableBlock = activeTableBlock, activeTableRow = activeTableRow, activeTableCol = activeTableCol, viewModel = viewModel, onColorClick = { showColorPicker = true }, onInsertTable = { showInsertTable = true }, onFontSize = { showFontSizePicker = true })
             }
         ) { paddingValues ->
             Box(Modifier.padding(paddingValues)) {
                 when (document) {
                     is OdfDocument.TextDocument -> TextDocumentView(doc = document, searchQuery = searchQuery, fontSizeMultiplier = fontSizeMultiplier, listState = listState,
-                        onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge },
+                        onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge; activeTableBlock = -1; activeTableRow = -1; activeTableCol = -1 },
                         onRunTextChange = { rs, re, text -> viewModel.updateParagraphRun(rs, re, text) },
                         onCellTextChange = { bi, r, c, text -> viewModel.updateTextTableCell(bi, r, c, text) },
-                        onCellFocus = { bi, r, c -> activeTableBlock = bi; activeTableRow = r; activeTableCol = c })
+                        onCellFocus = { bi, r, c -> activeTableBlock = bi; activeTableRow = r; activeTableCol = c },
+                        onChartClick = { bi -> editingChartBlock = bi; showChartEditor = true })
                     is OdfDocument.Spreadsheet -> SpreadsheetView(doc = document, searchQuery = searchQuery, fontSizeMultiplier = fontSizeMultiplier, isEditMode = isEditMode,
                         onCellTextChange = { s, r, c, t -> viewModel.updateCellText(s, r, c, t) }, onAddRow = { s, r -> viewModel.addRow(s, r) }, onAddColumn = { s -> viewModel.addColumn(s) },
                         onDeleteRow = { s, r -> viewModel.deleteRow(s, r) }, onDeleteColumn = { s, c -> viewModel.deleteColumn(s, c) },
@@ -415,14 +451,18 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onSort = { s, col, asc -> viewModel.sortRows(s, col, asc) })
                     is OdfDocument.Presentation -> PresentationView(doc = document, isEditMode = isEditMode,
                         onAddSlide = { viewModel.addSlide(it) }, onDeleteSlide = { viewModel.deleteSlide(it) },
-                        onDuplicateSlide = { viewModel.duplicateSlide(it) }, onMoveSlideUp = { viewModel.moveSlideUp(it) }, onMoveSlideDown = { viewModel.moveSlideDown(it) })
+                        onDuplicateSlide = { viewModel.duplicateSlide(it) }, onMoveSlideUp = { viewModel.moveSlideUp(it) }, onMoveSlideDown = { viewModel.moveSlideDown(it) },
+                        onElementTextChange = { s, e, t -> viewModel.updateSlideElementText(s, e, t) }, onAddTextBox = { viewModel.addTextBoxToSlide(it) },
+                        onElementBold = { s, e -> viewModel.toggleSlideElementBold(s, e) }, onElementItalic = { s, e -> viewModel.toggleSlideElementItalic(s, e) },
+                        onElementUnderline = { s, e -> viewModel.toggleSlideElementUnderline(s, e) }, onElementColor = { s, e, c -> viewModel.setSlideElementColor(s, e, c) },
+                        onElementAlign = { s, e, a -> viewModel.setSlideElementAlignment(s, e, a) })
                     is OdfDocument.Drawing -> DrawingView(document)
                 }
             }
         }
     }
 
-    if (showMetadata) MetadataDialog(metadata = document.metadata, onDismiss = { showMetadata = false })
+    if (showMetadata) MetadataDialog(metadata = document.metadata, onSave = { m -> viewModel.updateMetadata { m } }, onDismiss = { showMetadata = false })
     if (showUnsavedDialog) AlertDialog(onDismissRequest = { showUnsavedDialog = false }, title = { Text(stringResource(R.string.unsaved_changes)) },
         text = { Text(stringResource(R.string.unsaved_changes_message)) },
         confirmButton = { TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text(stringResource(R.string.discard), color = MaterialTheme.colorScheme.error) } },
@@ -436,10 +476,30 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     if (showInsertTable) InsertTableDialog(onInsert = { r, c -> viewModel.insertTable(maxOf(0, focusedPara), r, c) }, onDismiss = { showInsertTable = false })
     if (showInsertLink) InsertHyperlinkDialog(onInsert = { t, u -> viewModel.insertHyperlink(maxOf(0, focusedPara), t, u) }, onDismiss = { showInsertLink = false })
     if (showAddBookmark) AddBookmarkDialog(onAdd = { viewModel.addBookmark(it, maxOf(0, focusedPara)) }, onDismiss = { showAddBookmark = false })
+    if (showSpecialChars) SpecialCharsDialog(onPick = { ch -> if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, ch) }, onDismiss = { showSpecialChars = false })
+    if (showFootnote) FootnoteDialog(onAdd = { body -> if (activeRunStart >= 0) viewModel.insertFootnote(activeRunStart, activeRunEnd, selStart, body) }, onDismiss = { showFootnote = false })
+    if (showComment) CommentDialog(onAdd = { author, text -> if (focusedPara >= 0) viewModel.insertComment(focusedPara, author, text) }, onDismiss = { showComment = false })
+    if (showHeaderFooter) {
+        val td = document as? OdfDocument.TextDocument
+        HeaderFooterDialog(
+            initialHeader = td?.headerParagraphs?.joinToString("\n") { p -> p.spans.joinToString("") { it.text } } ?: "",
+            initialFooter = td?.footerParagraphs?.joinToString("\n") { p -> p.spans.joinToString("") { it.text } } ?: "",
+            onSave = { h, f -> viewModel.setHeaderText(h); viewModel.setFooterText(f) },
+            onDismiss = { showHeaderFooter = false }
+        )
+    }
+    if (showChartEditor) {
+        val existing = if (editingChartBlock >= 0) ((document as? OdfDocument.TextDocument)?.content?.getOrNull(editingChartBlock) as? OdfContentBlock.Chart)?.chart else null
+        ChartEditorDialog(
+            initial = existing,
+            onConfirm = { ch -> if (editingChartBlock >= 0) viewModel.updateChart(editingChartBlock, ch) else viewModel.insertChart(maxOf(0, focusedPara), ch) },
+            onDismiss = { showChartEditor = false; editingChartBlock = -1 }
+        )
+    }
 }
 
 @Composable
-private fun QuickFormatBar(document: OdfDocument, runStart: Int, runEnd: Int, selStart: Int, selEnd: Int, activeTableBlock: Int, activeTableRow: Int, activeTableCol: Int, viewModel: OfficeViewModel, onColorClick: () -> Unit, onInsertTable: () -> Unit) {
+private fun QuickFormatBar(document: OdfDocument, runStart: Int, runEnd: Int, selStart: Int, selEnd: Int, activeTableBlock: Int, activeTableRow: Int, activeTableCol: Int, viewModel: OfficeViewModel, onColorClick: () -> Unit, onInsertTable: () -> Unit, onFontSize: () -> Unit = {}) {
     val doc = document as? OdfDocument.TextDocument ?: return
     val enabled = runStart >= 0
     val focusedPara = if (enabled) viewModel.runParagraphIndexAt(runStart, runEnd, selStart) else -1
@@ -513,6 +573,29 @@ private fun QuickFormatBar(document: OdfDocument, runStart: Int, runEnd: Int, se
                     DropdownMenuItem(text = { Text("Insert column right") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.textTableAddColumn(activeTableBlock, activeTableCol) })
                     DropdownMenuItem(text = { Text("Delete row") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.textTableDeleteRow(activeTableBlock, activeTableRow) })
                     DropdownMenuItem(text = { Text("Delete column") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.textTableDeleteColumn(activeTableBlock, activeTableCol) })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Bold cell") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.setTextTableCellSpanFormat(activeTableBlock, activeTableRow, activeTableCol) { it.copy(bold = !it.bold) } })
+                    DropdownMenuItem(text = { Text("Italic cell") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.setTextTableCellSpanFormat(activeTableBlock, activeTableRow, activeTableCol) { it.copy(italic = !it.italic) } })
+                    DropdownMenuItem(text = { Text("Merge with right") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.mergeTextTableCells(activeTableBlock, activeTableRow, activeTableCol, activeTableRow, activeTableCol + 1) })
+                    DropdownMenuItem(text = { Text("Merge with below") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.mergeTextTableCells(activeTableBlock, activeTableRow, activeTableCol, activeTableRow + 1, activeTableCol) })
+                    DropdownMenuItem(text = { Text("Unmerge cell") }, enabled = tableEnabled, onClick = { tableMenu = false; viewModel.unmergeTextTableCells(activeTableBlock, activeTableRow, activeTableCol) })
+                }
+            }
+            Box {
+                var moreMenu by remember { mutableStateOf(false) }
+                FmtIcon(R.drawable.more_vert_24px, false, enabled, "More") { moreMenu = true }
+                DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                    DropdownMenuItem(text = { Text("Font size…") }, onClick = { moreMenu = false; onFontSize() })
+                    DropdownMenuItem(text = { Text("Clear formatting") }, onClick = { moreMenu = false; viewModel.clearRunFormatting(runStart, runEnd, selStart, selEnd) })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Demote list item") }, enabled = focusedPara >= 0, onClick = { moreMenu = false; if (focusedPara >= 0) viewModel.changeListLevel(focusedPara, 1) })
+                    DropdownMenuItem(text = { Text("Promote list item") }, enabled = focusedPara >= 0, onClick = { moreMenu = false; if (focusedPara >= 0) viewModel.changeListLevel(focusedPara, -1) })
+                    DropdownMenuItem(text = { Text("Restart numbering") }, enabled = focusedPara >= 0, onClick = { moreMenu = false; if (focusedPara >= 0) viewModel.restartNumbering(focusedPara) })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("Duplicate paragraph") }, enabled = focusedPara >= 0, onClick = { moreMenu = false; viewModel.duplicateParagraph(focusedPara) })
+                    DropdownMenuItem(text = { Text("Move paragraph up") }, enabled = focusedPara > 0, onClick = { moreMenu = false; viewModel.moveParagraphUp(focusedPara) })
+                    DropdownMenuItem(text = { Text("Move paragraph down") }, enabled = focusedPara >= 0, onClick = { moreMenu = false; viewModel.moveParagraphDown(focusedPara) })
+                    DropdownMenuItem(text = { Text("Delete paragraph", color = MaterialTheme.colorScheme.error) }, enabled = focusedPara >= 0, onClick = { moreMenu = false; viewModel.deleteParagraph(focusedPara) })
                 }
             }
         }
@@ -526,26 +609,45 @@ private fun QuickFormatBar(document: OdfDocument, runStart: Int, runEnd: Int, se
 }
 
 @Composable
-private fun MetadataDialog(metadata: OdfMetadata, onDismiss: () -> Unit) {
+private fun MetadataDialog(metadata: OdfMetadata, onSave: (OdfMetadata) -> Unit, onDismiss: () -> Unit) {
+    var title by remember { mutableStateOf(metadata.title ?: "") }
+    var author by remember { mutableStateOf(metadata.author ?: "") }
+    var subject by remember { mutableStateOf(metadata.subject ?: "") }
+    var description by remember { mutableStateOf(metadata.description ?: "") }
+    var keywords by remember { mutableStateOf(metadata.keywords.joinToString(", ")) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.document_info)) },
         text = {
-            Column {
-                metadata.title?.let { MetadataRow(stringResource(R.string.meta_title), it) }
-                metadata.author?.let { MetadataRow(stringResource(R.string.meta_author), it) }
-                metadata.creator?.let { MetadataRow(stringResource(R.string.meta_creator), it) }
+            androidx.compose.foundation.layout.Column(Modifier.verticalScroll(rememberScrollState())) {
+                TextField(value = title, onValueChange = { title = it }, label = { Text(stringResource(R.string.meta_title)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                TextField(value = author, onValueChange = { author = it }, label = { Text(stringResource(R.string.meta_author)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                TextField(value = subject, onValueChange = { subject = it }, label = { Text(stringResource(R.string.meta_subject)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                TextField(value = description, onValueChange = { description = it }, label = { Text(stringResource(R.string.meta_description)) }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                TextField(value = keywords, onValueChange = { keywords = it }, label = { Text(stringResource(R.string.meta_keywords)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
                 metadata.creationDate?.let { MetadataRow(stringResource(R.string.meta_created), it) }
                 metadata.modifiedDate?.let { MetadataRow(stringResource(R.string.meta_modified), it) }
-                metadata.subject?.let { MetadataRow(stringResource(R.string.meta_subject), it) }
-                metadata.description?.let { MetadataRow(stringResource(R.string.meta_description), it) }
-                if (metadata.keywords.isNotEmpty()) MetadataRow(stringResource(R.string.meta_keywords), metadata.keywords.joinToString(", "))
                 metadata.pageCount?.let { MetadataRow(stringResource(R.string.meta_pages), it.toString()) }
                 metadata.wordCount?.let { MetadataRow(stringResource(R.string.meta_words), it.toString()) }
                 metadata.fileSize?.let { MetadataRow("File Size", formatFileSize(it)) }
-                if (listOfNotNull(metadata.title, metadata.author, metadata.creator, metadata.creationDate, metadata.modifiedDate, metadata.subject, metadata.description, metadata.pageCount, metadata.wordCount, metadata.fileSize).isEmpty() && metadata.keywords.isEmpty())
-                    Text(stringResource(R.string.meta_none), style = MaterialTheme.typography.bodyMedium)
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } })
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(metadata.copy(
+                    title = title.ifBlank { null },
+                    author = author.ifBlank { null },
+                    subject = subject.ifBlank { null },
+                    description = description.ifBlank { null },
+                    keywords = keywords.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                ))
+                onDismiss()
+            }) { Text(stringResource(R.string.save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable private fun MetadataRow(label: String, value: String) {
@@ -589,6 +691,7 @@ private fun documentToHtml(document: OdfDocument): String {
                 is OdfContentBlock.Table -> { sb.append("<table>"); for (row in block.table.rows) { sb.append("<tr>"); for (cell in row.cells) { if (cell.isCovered) continue; sb.append("<td"); if (cell.colSpan > 1) sb.append(""" colspan="${cell.colSpan}""""); if (cell.rowSpan > 1) sb.append(""" rowspan="${cell.rowSpan}""""); sb.append(">"); for (para in cell.paragraphs) for (span in para.spans) sb.append(span.text.replace("&", "&amp;").replace("<", "&lt;")); sb.append("</td>") }; sb.append("</tr>") }; sb.append("</table>") }
                 is OdfContentBlock.Image -> sb.append("<p>[Image]</p>")
                 is OdfContentBlock.Chart -> sb.append("<p>[Chart]</p>")
+                is OdfContentBlock.Formula -> sb.append("<p><i>${OdfMath.parse(block.mathml)?.let { OdfMath.toText(it) }.orEmpty().replace("&", "&amp;").replace("<", "&lt;")}</i></p>")
                 is OdfContentBlock.PageBreak -> sb.append("""<hr style="page-break-after:always">""")
             }
         }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,9 +21,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,6 +38,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +54,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,7 +71,10 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -76,6 +85,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
@@ -90,6 +100,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.vayunmathur.office.odf.*
 
 // --- Headings for outline ---
@@ -197,6 +209,82 @@ fun FontSizePickerDialog(onSizeSelected: (Float) -> Unit, onDismiss: () -> Unit)
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+// --- Special Characters Dialog ---
+
+@Composable
+fun SpecialCharsDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val chars = listOf(
+        "©", "®", "™", "°", "±", "×", "÷", "≈", "≠", "≤", "≥", "∞",
+        "•", "·", "—", "–", "…", "§", "¶", "†", "‡", "★", "☆", "✓",
+        "→", "←", "↑", "↓", "⇒", "⇔", "€", "£", "¥", "¢", "α", "β",
+        "γ", "δ", "π", "Σ", "Ω", "µ", "½", "¼", "¾", "²", "³", "“"
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Special Character") },
+        text = {
+            Column {
+                for (row in chars.chunked(6)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (ch in row) {
+                            Surface(
+                                modifier = Modifier.size(40.dp).clickable { onPick(ch); onDismiss() },
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) { Box(contentAlignment = Alignment.Center) { Text(ch, style = MaterialTheme.typography.titleMedium) } }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+// --- Footnote / Comment / Header-Footer Dialogs ---
+
+@Composable
+fun FootnoteDialog(onAdd: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Insert Footnote") },
+        text = { TextField(value = text, onValueChange = { text = it }, label = { Text("Footnote text") }, modifier = Modifier.fillMaxWidth()) },
+        confirmButton = { TextButton(onClick = { if (text.isNotBlank()) { onAdd(text); onDismiss() } }) { Text("Insert") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+fun CommentDialog(onAdd: (author: String, text: String) -> Unit, onDismiss: () -> Unit) {
+    var author by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Insert Comment") },
+        text = {
+            Column {
+                TextField(value = author, onValueChange = { author = it }, label = { Text("Author") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                TextField(value = text, onValueChange = { text = it }, label = { Text("Comment") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { TextButton(onClick = { if (text.isNotBlank()) { onAdd(author, text); onDismiss() } }) { Text("Insert") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+fun HeaderFooterDialog(initialHeader: String, initialFooter: String, onSave: (header: String, footer: String) -> Unit, onDismiss: () -> Unit) {
+    var header by remember { mutableStateOf(initialHeader) }
+    var footer by remember { mutableStateOf(initialFooter) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Header & Footer") },
+        text = {
+            Column {
+                TextField(value = header, onValueChange = { header = it }, label = { Text("Header") }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                TextField(value = footer, onValueChange = { footer = it }, label = { Text("Footer") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(header, footer); onDismiss() }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 // --- Insert Table Dialog ---
@@ -364,6 +452,51 @@ fun SortDialog(maxCols: Int, onSort: (colIndex: Int, ascending: Boolean) -> Unit
     )
 }
 
+@Composable
+fun ChartEditorDialog(initial: OdfChart?, onConfirm: (OdfChart) -> Unit, onDismiss: () -> Unit) {
+    var type by remember { mutableStateOf(initial?.type ?: ChartType.BAR) }
+    var categories by remember { mutableStateOf((initial?.categories ?: listOf("Category 1", "Category 2", "Category 3")).joinToString(", ")) }
+    var seriesText by remember {
+        mutableStateOf(
+            (initial?.series ?: listOf(OdfChartSeries("Series 1", listOf(3f, 5f, 2f))))
+                .joinToString("\n") { s -> s.name + ": " + s.values.joinToString(", ") { formatAxis(it) } }
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "Insert Chart" else "Edit Chart") },
+        text = {
+            Column {
+                Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Type:", modifier = Modifier.padding(end = 4.dp))
+                    for (t in ChartType.entries) {
+                        TextButton(onClick = { type = t }) {
+                            Text(t.name.lowercase().replaceFirstChar { it.uppercase() }, color = if (type == t) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+                TextField(value = categories, onValueChange = { categories = it }, label = { Text("Categories (comma separated)") }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                TextField(value = seriesText, onValueChange = { seriesText = it }, label = { Text("Series (Name: v1, v2, ...)") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val cats = categories.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val series = seriesText.lines().mapNotNull { line ->
+                    if (line.isBlank()) return@mapNotNull null
+                    val name = (if (line.contains(":")) line.substringBefore(":") else "Series").trim().ifEmpty { "Series" }
+                    val valsPart = if (line.contains(":")) line.substringAfter(":") else line
+                    val vals = valsPart.split(",").mapNotNull { it.trim().toFloatOrNull() }
+                    if (vals.isEmpty()) null else OdfChartSeries(name, vals)
+                }
+                if (cats.isNotEmpty() && series.isNotEmpty()) { onConfirm(OdfChart(type, cats, series)); onDismiss() }
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
 // --- Text Document (continuous editor) ---
 
 private sealed class DocSegment {
@@ -395,7 +528,8 @@ fun TextDocumentView(
     onRunSelectionChange: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     onRunTextChange: (Int, Int, String) -> Unit = { _, _, _ -> },
     onCellTextChange: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> },
-    onCellFocus: (Int, Int, Int) -> Unit = { _, _, _ -> }
+    onCellFocus: (Int, Int, Int) -> Unit = { _, _, _ -> },
+    onChartClick: (Int) -> Unit = {}
 ) {
     val segments = remember(doc.content) { buildSegments(doc.content) }
 
@@ -422,7 +556,8 @@ fun TextDocumentView(
                         else Box(modifier = Modifier.clickable { fullScreen = true }) { OdfImageView(block.image) }
                     }
                     is OdfContentBlock.PageBreak -> PageBreakView()
-                    is OdfContentBlock.Chart -> OdfChartView(block.chart)
+                    is OdfContentBlock.Chart -> OdfChartView(block.chart, onClick = { onChartClick(seg.index) })
+                    is OdfContentBlock.Formula -> MathView(block.mathml)
                     is OdfContentBlock.Paragraph -> {}
                 }
             }
@@ -457,10 +592,42 @@ private fun headingSizeSp(style: ParagraphStyle): Float? = when (style) {
     else -> null
 }
 
-private fun listPrefix(para: OdfParagraph): String = when {
-    para.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.NUMBERED -> "${para.listItemIndex}.  "
-    para.style == ParagraphStyle.LIST_ITEM -> "•  "
-    else -> ""
+/** Visible list prefix (indent + bullet/number) for a paragraph. (A1/F42) */
+fun listPrefixFor(para: OdfParagraph): String {
+    if (para.listLevel <= 0 && para.style != ParagraphStyle.LIST_ITEM) return ""
+    val level = maxOf(para.listLevel, 1)
+    val indent = "    ".repeat(level - 1)
+    return if (para.listType == ListType.NUMBERED) {
+        indent + para.listNumberPrefix + formatListNumber(para.listItemIndex, para.listNumberFormat) + para.listNumberSuffix + "  "
+    } else {
+        indent + para.listBulletChar + "  "
+    }
+}
+
+/** OffsetMapping for list prefixes injected at the start of each paragraph in a run. (A1) */
+private class PrefixOffsetMapping(
+    private val origStarts: IntArray,
+    private val transStarts: IntArray,
+    private val prefixLens: IntArray,
+    private val lens: IntArray,
+    private val origLen: Int,
+    private val transLen: Int
+) : OffsetMapping {
+    override fun originalToTransformed(offset: Int): Int {
+        val o = offset.coerceIn(0, origLen)
+        var p = 0
+        for (i in origStarts.indices) { if (origStarts[i] <= o) p = i else break }
+        val inPara = (o - origStarts[p]).coerceIn(0, lens[p])
+        return (transStarts[p] + prefixLens[p] + inPara).coerceIn(0, transLen)
+    }
+    override fun transformedToOriginal(offset: Int): Int {
+        val t = offset.coerceIn(0, transLen)
+        var p = 0
+        for (i in transStarts.indices) { if (transStarts[i] <= t) p = i else break }
+        val afterPrefix = t - transStarts[p] - prefixLens[p]
+        val inPara = afterPrefix.coerceIn(0, lens[p])
+        return (origStarts[p] + inPara).coerceIn(0, origLen)
+    }
 }
 
 @Composable
@@ -480,9 +647,11 @@ private fun ContinuousParagraphEditor(
         tfv = TextFieldValue(plainText, TextRange(caret))
     }
     val onSurface = MaterialTheme.colorScheme.onSurface
+    val prefixColor = MaterialTheme.colorScheme.onSurfaceVariant
     val lens = remember(paras) { paras.map { p -> p.spans.sumOf { it.text.length } } }
-    val transformation = remember(paras, fontSizeMultiplier, onSurface) {
-        VisualTransformation { TransformedText(buildDocAnnotated(it.text, paras, lens, onSurface, fontSizeMultiplier), OffsetMapping.Identity) }
+    val prefixes = remember(paras) { paras.map { listPrefixFor(it) } }
+    val transformation = remember(paras, fontSizeMultiplier, onSurface, prefixColor) {
+        VisualTransformation { buildDocTransformed(it.text, paras, lens, prefixes, onSurface, prefixColor, fontSizeMultiplier) }
     }
     BasicTextField(
         value = tfv,
@@ -499,44 +668,75 @@ private fun ContinuousParagraphEditor(
     )
 }
 
-private fun buildDocAnnotated(text: String, paras: List<OdfParagraph>, lens: List<Int>, baseColor: Color, mult: Float): AnnotatedString = buildAnnotatedString {
-    append(text)
-    var base = 0
-    for (i in paras.indices) {
-        val pStart = base
-        val pEnd = (base + lens[i]).coerceAtMost(text.length)
-        val para = paras[i]
-        val paraEnd = if (i < paras.size - 1) (pEnd + 1).coerceAtMost(text.length) else text.length
-        addStyle(
-            androidx.compose.ui.text.ParagraphStyle(
-                textAlign = para.alignment ?: TextAlign.Unspecified,
-                textIndent = if (para.style == ParagraphStyle.LIST_ITEM || para.marginLeft > 0) androidx.compose.ui.text.style.TextIndent(firstLine = 0.sp, restLine = 0.sp) else androidx.compose.ui.text.style.TextIndent.None
-            ),
-            pStart, paraEnd
-        )
-        headingSizeSp(para.style)?.let { addStyle(SpanStyle(fontSize = (it * mult).sp, fontWeight = FontWeight.Bold), pStart, pEnd) }
-        var off = pStart
-        for (span in para.spans) {
-            val segEnd = (off + span.text.length).coerceAtMost(pEnd)
-            if (segEnd > off) {
-                val decorations = mutableListOf<TextDecoration>()
-                if (span.underline) decorations.add(TextDecoration.Underline)
-                if (span.strikethrough) decorations.add(TextDecoration.LineThrough)
-                addStyle(
-                    SpanStyle(
-                        fontWeight = if (span.bold) FontWeight.Bold else null,
-                        fontStyle = if (span.italic) FontStyle.Italic else null,
-                        fontSize = span.fontSize?.let { (it * mult).sp } ?: TextUnit.Unspecified,
-                        textDecoration = if (decorations.isNotEmpty()) TextDecoration.combine(decorations) else null,
-                        color = span.color?.let { Color(it.toInt()) } ?: Color.Unspecified,
-                        background = span.backgroundColor?.let { Color(it.toInt()) } ?: Color.Unspecified
-                    ), off, segEnd
-                )
-            }
-            off = segEnd
-        }
-        base = pEnd + 1
+private fun buildDocTransformed(
+    text: String, paras: List<OdfParagraph>, lens: List<Int>, prefixes: List<String>,
+    baseColor: Color, prefixColor: Color, mult: Float
+): TransformedText {
+    val n = paras.size
+    val origStarts = IntArray(n)
+    val transStarts = IntArray(n)
+    val prefixLens = IntArray(n) { prefixes[it].length }
+    var oAcc = 0; var tAcc = 0
+    for (i in 0 until n) {
+        origStarts[i] = oAcc
+        transStarts[i] = tAcc
+        oAcc += lens[i] + 1
+        tAcc += prefixLens[i] + lens[i] + 1
     }
+    val origLen = text.length
+    val transLen = if (n == 0) 0 else transStarts[n - 1] + prefixLens[n - 1] + lens[n - 1]
+
+    val annotated = buildAnnotatedString {
+        for (i in paras.indices) {
+            val para = paras[i]
+            // prefix (styled muted, never bold/italic)
+            if (prefixes[i].isNotEmpty()) {
+                withStyle(SpanStyle(color = prefixColor)) { append(prefixes[i]) }
+            }
+            // paragraph text from original
+            val pStartOrig = origStarts[i]
+            val pEndOrig = (pStartOrig + lens[i]).coerceAtMost(text.length)
+            val paraText = if (pEndOrig > pStartOrig) text.substring(pStartOrig, pEndOrig) else ""
+            val textStart = length
+            append(paraText)
+            val textEnd = length
+            // paragraph style: alignment, first-line/hanging indent (A5), line spacing (A6)
+            val firstLineIndent = if (para.textIndent != 0f) para.textIndent.sp else 0.sp
+            addStyle(
+                androidx.compose.ui.text.ParagraphStyle(
+                    textAlign = para.alignment ?: TextAlign.Unspecified,
+                    lineHeight = para.lineHeightPercent?.let { (22f * mult * it).sp } ?: TextUnit.Unspecified,
+                    textIndent = if (para.textIndent != 0f) androidx.compose.ui.text.style.TextIndent(firstLine = firstLineIndent, restLine = 0.sp) else androidx.compose.ui.text.style.TextIndent.None
+                ),
+                if (prefixes[i].isNotEmpty()) textStart - prefixLens[i] else textStart,
+                textEnd
+            )
+            headingSizeSp(para.style)?.let { addStyle(SpanStyle(fontSize = (it * mult).sp, fontWeight = FontWeight.Bold), textStart, textEnd) }
+            var off = textStart
+            for (span in para.spans) {
+                val segEnd = (off + span.text.length).coerceAtMost(textEnd)
+                if (segEnd > off) {
+                    val decorations = mutableListOf<TextDecoration>()
+                    if (span.underline) decorations.add(TextDecoration.Underline)
+                    if (span.strikethrough) decorations.add(TextDecoration.LineThrough)
+                    addStyle(
+                        SpanStyle(
+                            fontWeight = if (span.bold) FontWeight.Bold else null,
+                            fontStyle = if (span.italic) FontStyle.Italic else null,
+                            fontSize = span.fontSize?.let { (it * mult).sp } ?: TextUnit.Unspecified,
+                            textDecoration = if (decorations.isNotEmpty()) TextDecoration.combine(decorations) else null,
+                            color = span.color?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                            background = span.backgroundColor?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                            baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null }
+                        ), off, segEnd
+                    )
+                }
+                off = segEnd
+            }
+            if (i < paras.size - 1) append("\n")
+        }
+    }
+    return TransformedText(annotated, PrefixOffsetMapping(origStarts, transStarts, prefixLens, lens.toIntArray(), origLen, transLen))
 }
 
 // --- Paragraph rendering (read-only: used for headers, footers, footnotes, table cells, slides) ---
@@ -557,13 +757,7 @@ private fun paragraphBaseStyle(style: ParagraphStyle): TextStyle = when (style) 
 @Composable
 fun ParagraphView(paragraph: OdfParagraph, searchQuery: String = "", fontSizeMultiplier: Float = 1f, nightTextColor: Color = Color.Unspecified) {
     val baseStyle = paragraphBaseStyle(paragraph.style)
-    val prefix = when {
-        paragraph.style == ParagraphStyle.LIST_ITEM && paragraph.listType == ListType.NUMBERED ->
-            "  " + "  ".repeat(maxOf(0, paragraph.listLevel - 1)) + "${paragraph.listItemIndex}.  "
-        paragraph.style == ParagraphStyle.LIST_ITEM ->
-            "  " + "  ".repeat(maxOf(0, paragraph.listLevel - 1)) + "\u2022  "
-        else -> ""
-    }
+    val prefix = listPrefixFor(paragraph)
     val hasLinks = paragraph.spans.any { it.href != null }
     val hasAnnotations = paragraph.spans.any { it.annotation != null }
     val context = LocalContext.current
@@ -620,11 +814,16 @@ fun ParagraphView(paragraph: OdfParagraph, searchQuery: String = "", fontSizeMul
     val bottomPad = if (paragraph.marginBottom > 0) paragraph.marginBottom.dp else verticalPadding
     val modifier = Modifier.fillMaxWidth()
         .then(if (indentDp > 0.dp) Modifier.padding(start = indentDp) else Modifier)
+        .then(paragraph.borderColor?.let { Modifier.border(1.dp, Color(it.toInt())) } ?: Modifier)
         .then(paragraph.backgroundColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
         .padding(top = topPad, bottom = bottomPad)
+    val lineHeight = paragraph.lineHeightPercent?.let { lh ->
+        val fs = if (baseStyle.fontSize != TextUnit.Unspecified) baseStyle.fontSize else 16.sp
+        fs * fontSizeMultiplier * lh
+    } ?: TextUnit.Unspecified
     val scaledStyle = if (fontSizeMultiplier != 1f && baseStyle.fontSize != TextUnit.Unspecified) {
-        baseStyle.copy(fontSize = baseStyle.fontSize * fontSizeMultiplier, textAlign = paragraph.alignment ?: TextAlign.Unspecified, color = if (nightTextColor != Color.Unspecified) nightTextColor else baseStyle.color)
-    } else baseStyle.copy(textAlign = paragraph.alignment ?: TextAlign.Unspecified, color = if (nightTextColor != Color.Unspecified) nightTextColor else baseStyle.color)
+        baseStyle.copy(fontSize = baseStyle.fontSize * fontSizeMultiplier, textAlign = paragraph.alignment ?: TextAlign.Unspecified, lineHeight = lineHeight, color = if (nightTextColor != Color.Unspecified) nightTextColor else baseStyle.color)
+    } else baseStyle.copy(textAlign = paragraph.alignment ?: TextAlign.Unspecified, lineHeight = lineHeight, color = if (nightTextColor != Color.Unspecified) nightTextColor else baseStyle.color)
 
     if (hasLinks || hasAnnotations) {
         var expandedAnnotation by remember { mutableStateOf<String?>(null) }
@@ -677,7 +876,7 @@ private fun TableView(
     searchQuery: String = "",
     fontSizeMultiplier: Float = 1f,
     onCellTextChange: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> },
-    onCellFocus: (Int) -> Unit = {}
+    onCellFocus: (Int, Int, Int) -> Unit = { _, _, _ -> }
 ) {
     val onSurface = MaterialTheme.colorScheme.onSurface
     fun colWidthDp(start: Int, span: Int): androidx.compose.ui.unit.Dp {
@@ -714,10 +913,20 @@ private fun EditableCell(cell: OdfTableCell, onSurface: Color, mult: Float, onFo
     val plain = cell.paragraphs.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
     var tfv by remember { mutableStateOf(TextFieldValue(plain)) }
     if (tfv.text != plain) tfv = TextFieldValue(plain, TextRange(tfv.selection.end.coerceIn(0, plain.length)))
+    // Reflect uniform cell character formatting (C26).
+    val firstSpan = cell.paragraphs.firstOrNull()?.spans?.firstOrNull()
+    val cellAlign = cell.paragraphs.firstOrNull()?.alignment
+    val style = MaterialTheme.typography.bodyMedium.copy(
+        color = firstSpan?.color?.let { Color(it.toInt()) } ?: onSurface,
+        fontSize = (14f * mult).sp,
+        fontWeight = if (firstSpan?.bold == true) FontWeight.Bold else null,
+        fontStyle = if (firstSpan?.italic == true) FontStyle.Italic else null,
+        textAlign = cellAlign ?: TextAlign.Unspecified
+    )
     BasicTextField(
         value = tfv,
         onValueChange = { nv -> val changed = nv.text != tfv.text; tfv = nv; if (changed) onChange(nv.text) },
-        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface, fontSize = (14f * mult).sp),
+        textStyle = style,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onFocus() }
     )
@@ -729,12 +938,25 @@ fun OdfImageView(image: OdfImage, modifier: Modifier = Modifier) {
         if (image.imageData.isNotEmpty()) try { BitmapFactory.decodeByteArray(image.imageData, 0, image.imageData.size) } catch (_: Exception) { null } else null
     }
     if (bitmap != null) {
-        val aspect = if (bitmap.height > 0) bitmap.width.toFloat() / bitmap.height.toFloat() else 1.5f
-        Image(
-            bitmap = bitmap.asImageBitmap(), contentDescription = null,
-            modifier = modifier.fillMaxWidth().aspectRatio(aspect.coerceIn(0.3f, 4f)).padding(vertical = 4.dp),
-            contentScale = ContentScale.Fit
-        )
+        val rot = if (image.rotationDegrees != 0f) Modifier.rotate(image.rotationDegrees) else Modifier
+        val useExplicit = image.width > 0f && image.height > 0f
+        if (useExplicit) {
+            // Honor the frame's svg:width/height (px@96dpi -> dp), capped to a readable width. (A2)
+            val widthDp = (image.width * (160f / 96f)).coerceAtMost(700f)
+            val aspect = (image.width / image.height).coerceIn(0.1f, 10f)
+            Image(
+                bitmap = bitmap.asImageBitmap(), contentDescription = null,
+                modifier = modifier.width(widthDp.dp).aspectRatio(aspect).then(rot).padding(vertical = 4.dp),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            val aspect = if (bitmap.height > 0) bitmap.width.toFloat() / bitmap.height.toFloat() else 1.5f
+            Image(
+                bitmap = bitmap.asImageBitmap(), contentDescription = null,
+                modifier = modifier.fillMaxWidth().aspectRatio(aspect.coerceIn(0.3f, 4f)).then(rot).padding(vertical = 4.dp),
+                contentScale = ContentScale.Fit
+            )
+        }
     } else {
         Box(modifier.fillMaxWidth().height(120.dp).padding(vertical = 4.dp).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
             Text("[Image]", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -750,10 +972,10 @@ private val chartPalette = listOf(
 private fun formatAxis(v: Float): String = if (v == v.toLong().toFloat()) v.toLong().toString() else "%.1f".format(v)
 
 @Composable
-private fun OdfChartView(chart: OdfChart) {
+private fun OdfChartView(chart: OdfChart, onClick: () -> Unit = {}) {
     val onSurface = MaterialTheme.colorScheme.onSurface
     val gridColor = MaterialTheme.colorScheme.outlineVariant
-    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+    Column(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp)) {
         chart.title?.let { Text(it, style = MaterialTheme.typography.titleSmall, color = onSurface, modifier = Modifier.padding(bottom = 4.dp)) }
         // Legend
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -803,7 +1025,21 @@ private fun OdfChartView(chart: OdfChart) {
                         drawContext.canvas.nativeCanvas.drawText(chart.categories[ci], x, topPad + plotH + 34f, centerPaint)
                     }
                 }
-                ChartType.PIE -> {
+                ChartType.SCATTER -> {
+                    val stepX = if (catCount > 1) plotW / (catCount - 1) else plotW
+                    chart.series.forEachIndexed { si, ser ->
+                        val col = chartPalette[si % chartPalette.size]
+                        for (ci in 0 until catCount) {
+                            val v = ser.values.getOrNull(ci) ?: 0f
+                            drawCircle(col, 7f, Offset(leftPad + stepX * ci, topPad + plotH - plotH * (v / maxV)))
+                        }
+                    }
+                    for (ci in 0 until catCount) {
+                        val x = leftPad + (if (catCount > 1) plotW / (catCount - 1) else plotW) * ci
+                        drawContext.canvas.nativeCanvas.drawText(chart.categories.getOrElse(ci) { "" }, x, topPad + plotH + 34f, centerPaint)
+                    }
+                }
+                ChartType.PIE, ChartType.DONUT -> {
                     val values = chart.series.firstOrNull()?.values ?: emptyList()
                     val total = values.sum().coerceAtLeast(0.0001f)
                     val d = minOf(plotW, plotH)
@@ -813,6 +1049,26 @@ private fun OdfChartView(chart: OdfChart) {
                         val sweep = 360f * (v / total)
                         drawArc(chartPalette[i % chartPalette.size], startAngle, sweep, true, topLeft, Size(d, d))
                         startAngle += sweep
+                    }
+                    if (chart.type == ChartType.DONUT) {
+                        val hole = d * 0.5f
+                        drawArc(Color.White, 0f, 360f, true, Offset(topLeft.x + (d - hole) / 2, topLeft.y + (d - hole) / 2), Size(hole, hole))
+                    }
+                }
+                ChartType.STACKED_BAR -> {
+                    val groupW = plotW / catCount
+                    val pad = groupW * 0.2f
+                    val barW = groupW - 2 * pad
+                    val stackMax = (0 until catCount).maxOfOrNull { ci -> chart.series.sumOf { (it.values.getOrNull(ci) ?: 0f).toDouble() }.toFloat() }?.coerceAtLeast(1f) ?: 1f
+                    for (ci in 0 until catCount) {
+                        var yCursor = topPad + plotH
+                        chart.series.forEachIndexed { si, ser ->
+                            val v = ser.values.getOrNull(ci) ?: 0f
+                            val h = plotH * (v / stackMax)
+                            drawRect(chartPalette[si % chartPalette.size], Offset(leftPad + groupW * ci + pad, yCursor - h), Size(barW, h))
+                            yCursor -= h
+                        }
+                        drawContext.canvas.nativeCanvas.drawText(chart.categories.getOrElse(ci) { "" }, leftPad + groupW * ci + groupW / 2, topPad + plotH + 34f, centerPaint)
                     }
                 }
                 else -> { // BAR / AREA -> grouped bars
@@ -840,6 +1096,70 @@ private fun PageBreakView() {
     HorizontalDivider(modifier = Modifier.padding(vertical = 24.dp), thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 }
 
+// --- Math (MathML) layout rendering (D34) ---
+
+@Composable
+fun MathView(mathml: String) {
+    val node = remember(mathml) { OdfMath.parse(mathml) }
+    Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+        if (node == null) {
+            Text(mathml.take(200), style = MaterialTheme.typography.bodyMedium, fontStyle = FontStyle.Italic)
+        } else {
+            MathNodeView(node, 20f, MaterialTheme.colorScheme.onSurface)
+        }
+    }
+}
+
+@Composable
+private fun MathNodeView(node: MathNode, sizeSp: Float, color: Color) {
+    when (node) {
+        is MathNode.Row -> Row(verticalAlignment = Alignment.CenterVertically) {
+            for (child in node.children) MathNodeView(child, sizeSp, color)
+        }
+        is MathNode.Token -> Text(
+            node.text,
+            fontSize = sizeSp.sp,
+            color = color,
+            fontStyle = if (!node.isOperator && node.text.length == 1 && node.text[0].isLetter()) FontStyle.Italic else FontStyle.Normal,
+            modifier = Modifier.padding(horizontal = if (node.isOperator) 3.dp else 0.5.dp)
+        )
+        is MathNode.Frac -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 3.dp).width(IntrinsicSize.Max)) {
+            MathNodeView(node.numerator, sizeSp * 0.95f, color)
+            HorizontalDivider(color = color, thickness = 1.5.dp, modifier = Modifier.fillMaxWidth())
+            MathNodeView(node.denominator, sizeSp * 0.95f, color)
+        }
+        is MathNode.Sup -> Row(verticalAlignment = Alignment.Top) {
+            MathNodeView(node.base, sizeSp, color)
+            MathNodeView(node.exponent, sizeSp * 0.7f, color)
+        }
+        is MathNode.Sub -> Row(verticalAlignment = Alignment.Bottom) {
+            MathNodeView(node.base, sizeSp, color)
+            MathNodeView(node.subscript, sizeSp * 0.7f, color)
+        }
+        is MathNode.SubSup -> Row(verticalAlignment = Alignment.CenterVertically) {
+            MathNodeView(node.base, sizeSp, color)
+            Column {
+                MathNodeView(node.superscript, sizeSp * 0.7f, color)
+                MathNodeView(node.subscript, sizeSp * 0.7f, color)
+            }
+        }
+        is MathNode.Sqrt -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("\u221A", fontSize = sizeSp.sp, color = color)
+            Column { HorizontalDivider(color = color, thickness = 1.dp); Box(Modifier.padding(top = 1.dp)) { MathNodeView(node.radicand, sizeSp, color) } }
+        }
+        is MathNode.Root -> Row(verticalAlignment = Alignment.CenterVertically) {
+            MathNodeView(node.index, sizeSp * 0.6f, color)
+            Text("\u221A", fontSize = sizeSp.sp, color = color)
+            Column { HorizontalDivider(color = color, thickness = 1.dp); Box(Modifier.padding(top = 1.dp)) { MathNodeView(node.radicand, sizeSp, color) } }
+        }
+        is MathNode.Fenced -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(node.open, fontSize = sizeSp.sp, color = color)
+            MathNodeView(node.body, sizeSp, color)
+            Text(node.close, fontSize = sizeSp.sp, color = color)
+        }
+    }
+}
+
 // --- Spreadsheet ---
 
 @Composable
@@ -861,14 +1181,14 @@ fun SpreadsheetView(
 
     var selectedSheet by remember { mutableIntStateOf(0) }
     var editingCell by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
-    var editText by remember { mutableStateOf("") }
+    var editText by remember { mutableStateOf(TextFieldValue("")) }
     var showRenameSheet by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var showColorPicker by remember { mutableStateOf(false) }
     var showBgColorPicker by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         if (doc.sheets.size > 1 || isEditMode) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PrimaryScrollableTabRow(selectedTabIndex = selectedSheet, modifier = Modifier.weight(1f)) {
@@ -885,11 +1205,26 @@ fun SpreadsheetView(
 
         if (isEditMode && editingCell != null) {
             val (_, ri, ci) = editingCell!!
+            val focusRequester = remember { FocusRequester() }
+            val rowCount = doc.sheets[selectedSheet].rows.size
+            LaunchedEffect(editingCell) { try { focusRequester.requestFocus() } catch (_: Exception) {} }
+            fun commitAndAdvance() {
+                val (si, r, c) = editingCell!!
+                onCellTextChange(si, r, c, editText.text)
+                if (r + 1 < rowCount) {
+                    editingCell = Triple(si, r + 1, c)
+                    val nextText = doc.sheets[si].rows.getOrNull(r + 1)?.cells?.getOrNull(c)?.let { it.formula ?: it.text } ?: ""
+                    editText = TextFieldValue(nextText, TextRange(0, nextText.length))
+                } else editingCell = null
+            }
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("${columnLabel(ci)}${ri + 1}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
-                TextField(value = editText, onValueChange = { editText = it }, singleLine = true, modifier = Modifier.weight(1f),
+                TextField(value = editText, onValueChange = { editText = it }, singleLine = true,
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { commitAndAdvance() }, onDone = { commitAndAdvance() }),
                     colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant))
-                TextButton(onClick = { val (si, r, c) = editingCell!!; onCellTextChange(si, r, c, editText); editingCell = null }) { Text("Done") }
+                TextButton(onClick = { val (si, r, c) = editingCell!!; onCellTextChange(si, r, c, editText.text); editingCell = null }) { Text("Done") }
             }
             // Cell formatting toolbar
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -921,6 +1256,14 @@ fun SpreadsheetView(
 
         val sheet = doc.sheets[selectedSheet]
         val maxCols = sheet.rows.maxOfOrNull { it.cells.count { c -> !c.isCovered } } ?: 0
+        fun colWidthDp(start: Int, span: Int): androidx.compose.ui.unit.Dp {
+            var w = 0f
+            for (k in start until start + span) {
+                val px = sheet.columnWidths.getOrNull(k)
+                w += if (px != null && px > 0f) (px * (160f / 96f)).coerceIn(40f, 400f) else 84f
+            }
+            return w.dp
+        }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             item {
@@ -928,13 +1271,13 @@ fun SpreadsheetView(
                     Column {
                         Row {
                             Box(Modifier.defaultMinSize(minWidth = 40.dp).background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) { Text("") }
-                            for (col in 0 until maxCols) Box(Modifier.defaultMinSize(minWidth = 80.dp).background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) {
+                            for (col in 0 until maxCols) Box(Modifier.width(colWidthDp(col, 1)).background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) {
                                 Text(columnLabel(col), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
                         }
                         for ((rowIdx, row) in sheet.rows.withIndex()) {
-                            Row {
-                                Box(Modifier.defaultMinSize(minWidth = 40.dp).background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) {
+                            Row(Modifier.height(IntrinsicSize.Min)) {
+                                Box(Modifier.defaultMinSize(minWidth = 40.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) {
                                     Text("${rowIdx + 1}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                 }
                                 for ((cellIdx, cell) in row.cells.withIndex()) {
@@ -942,18 +1285,21 @@ fun SpreadsheetView(
                                     val isEditing = editingCell?.let { it.first == selectedSheet && it.second == rowIdx && it.third == cellIdx } == true
                                     val isMatch = searchQuery.isNotEmpty() && cell.text.contains(searchQuery, ignoreCase = true)
                                     Box(
-                                        Modifier.defaultMinSize(minWidth = (80 * cell.spannedColumns).dp)
-                                            .border(if (isEditing) 2.dp else 0.5.dp, if (isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                                        Modifier.width(colWidthDp(cellIdx, cell.spannedColumns))
+                                            .fillMaxHeight()
+                                            .border(if (isEditing) 2.dp else 0.5.dp, if (isEditing) MaterialTheme.colorScheme.primary else (cell.borderColor?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.outline))
                                             .then(if (isMatch) Modifier.background(Color(0xFFFFEB3B).copy(alpha = 0.3f)) else cell.backgroundColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
-                                            .then(if (isEditMode) Modifier.clickable { editingCell = Triple(selectedSheet, rowIdx, cellIdx); editText = cell.text } else Modifier)
+                                            .then(if (isEditMode) Modifier.clickable { editingCell = Triple(selectedSheet, rowIdx, cellIdx); val t = cell.formula ?: cell.text; editText = TextFieldValue(t, TextRange(0, t.length)) } else Modifier)
                                             .padding(8.dp, 4.dp)
                                     ) {
-                                        Text(cell.text,
+                                        val displayText = OdfFormulaEngine.displayValue(sheet, rowIdx, cellIdx)
+                                        val cellAlign = cell.alignment ?: if (OdfFormulaEngine.isNumeric(sheet, rowIdx, cellIdx)) TextAlign.End else null
+                                        Text(displayText,
                                             style = MaterialTheme.typography.bodyMedium.let { if (fontSizeMultiplier != 1f && it.fontSize != TextUnit.Unspecified) it.copy(fontSize = it.fontSize * fontSizeMultiplier) else it },
                                             fontWeight = if (cell.bold) FontWeight.Bold else null,
                                             fontStyle = if (cell.italic) FontStyle.Italic else null,
                                             color = cell.textColor?.let { Color(it.toInt()) } ?: Color.Unspecified,
-                                            textAlign = cell.alignment, maxLines = 3)
+                                            textAlign = cellAlign, maxLines = if (cell.wrap) Int.MAX_VALUE else 3)
                                     }
                                 }
                             }
@@ -1000,15 +1346,27 @@ fun PresentationView(
     onDeleteSlide: (Int) -> Unit = {},
     onDuplicateSlide: (Int) -> Unit = {},
     onMoveSlideUp: (Int) -> Unit = {},
-    onMoveSlideDown: (Int) -> Unit = {}
+    onMoveSlideDown: (Int) -> Unit = {},
+    onElementTextChange: (slideIndex: Int, elementIndex: Int, text: String) -> Unit = { _, _, _ -> },
+    onAddTextBox: (Int) -> Unit = {},
+    onElementBold: (Int, Int) -> Unit = { _, _ -> },
+    onElementItalic: (Int, Int) -> Unit = { _, _ -> },
+    onElementUnderline: (Int, Int) -> Unit = { _, _ -> },
+    onElementColor: (Int, Int, Long?) -> Unit = { _, _, _ -> },
+    onElementAlign: (Int, Int, TextAlign?) -> Unit = { _, _, _ -> }
 ) {
     if (doc.slides.isEmpty()) { Text("Empty presentation", modifier = Modifier.padding(16.dp)); return }
 
     var currentSlide by remember { mutableIntStateOf(0) }
     var showGoToSlide by remember { mutableStateOf(false) }
+    var showSlideshow by remember { mutableStateOf(false) }
     var dragAccumulator by remember { mutableFloatStateOf(0f) }
+    var focusedEl by remember { mutableIntStateOf(-1) }
+    var showSlideColor by remember { mutableStateOf(false) }
+    currentSlide = currentSlide.coerceIn(0, doc.slides.size - 1)
+    LaunchedEffect(currentSlide) { focusedEl = -1 }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         // Main slide with swipe gesture
         Box(
             modifier = Modifier.weight(1f).pointerInput(doc.slides.size) {
@@ -1023,20 +1381,43 @@ fun PresentationView(
             }
         ) {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp)) {
-                item { SlideCard(doc.slides[currentSlide]) }
+                item {
+                    SlideCard(
+                        slide = doc.slides[currentSlide],
+                        editMode = isEditMode,
+                        onElementTextChange = { ei, t -> onElementTextChange(currentSlide, ei, t) },
+                        onElementFocus = { focusedEl = it }
+                    )
+                }
             }
         }
 
         // Slide editing controls
         if (isEditMode) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { onAddSlide(currentSlide) }) { Text("+ Slide") }
+                TextButton(onClick = { onAddTextBox(currentSlide) }) { Text("+ Text") }
                 TextButton(onClick = { onDuplicateSlide(currentSlide) }) { Text("Dup") }
                 TextButton(onClick = { onMoveSlideUp(currentSlide); if (currentSlide > 0) currentSlide-- }) { Text("↑") }
                 TextButton(onClick = { onMoveSlideDown(currentSlide); if (currentSlide < doc.slides.size - 1) currentSlide++ }) { Text("↓") }
-                Spacer(Modifier.weight(1f))
                 if (doc.slides.size > 1) TextButton(onClick = { onDeleteSlide(currentSlide); currentSlide = minOf(currentSlide, doc.slides.size - 2).coerceAtLeast(0) }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
+        // Slide text formatting bar (visible when a text box is focused). (I62)
+        if (isEditMode && focusedEl in doc.slides[currentSlide].elements.indices) {
+            val el = focusedEl
+            Surface(tonalElevation = 3.dp) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { onElementBold(currentSlide, el) }) { Text("B", fontWeight = FontWeight.Bold) }
+                    TextButton(onClick = { onElementItalic(currentSlide, el) }) { Text("I", fontStyle = FontStyle.Italic) }
+                    TextButton(onClick = { onElementUnderline(currentSlide, el) }) { Text("U", textDecoration = TextDecoration.Underline) }
+                    TextButton(onClick = { showSlideColor = true }) { Text("A", color = Color.Red) }
+                    TextButton(onClick = { onElementAlign(currentSlide, el, TextAlign.Start) }) { Text("←") }
+                    TextButton(onClick = { onElementAlign(currentSlide, el, TextAlign.Center) }) { Text("↔") }
+                    TextButton(onClick = { onElementAlign(currentSlide, el, TextAlign.End) }) { Text("→") }
                 }
             }
         }
@@ -1055,6 +1436,7 @@ fun PresentationView(
         Surface(tonalElevation = 3.dp) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = { if (currentSlide > 0) currentSlide-- }, enabled = currentSlide > 0) { Text("◀ Prev") }
+                TextButton(onClick = { showSlideshow = true }) { Text("▶ Play") }
                 TextButton(onClick = { showGoToSlide = true }) {
                     Text("Slide ${currentSlide + 1} of ${doc.slides.size}", style = MaterialTheme.typography.titleSmall)
                 }
@@ -1064,6 +1446,46 @@ fun PresentationView(
     }
 
     if (showGoToSlide) GoToSlideDialog(doc.slides.size, onGo = { currentSlide = it }, onDismiss = { showGoToSlide = false })
+    if (showSlideshow) SlideshowDialog(doc.slides, currentSlide, onSlideChange = { currentSlide = it }, onDismiss = { showSlideshow = false })
+    if (showSlideColor && focusedEl in doc.slides[currentSlide].elements.indices) {
+        val el = focusedEl
+        ColorPickerDialog("Text Color", onColorSelected = { onElementColor(currentSlide, el, it); showSlideColor = false }, onDismiss = { showSlideColor = false })
+    }
+}
+
+/** Editable text field for a slide element, bound by a stable key so it resets per slide/element. (I62) */
+@Composable
+private fun SlideElementTextField(key: String, initial: String, label: String, onChange: (String) -> Unit) {
+    var tfv by remember(key) { mutableStateOf(TextFieldValue(initial)) }
+    TextField(
+        value = tfv,
+        onValueChange = { tfv = it; onChange(it.text) },
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        colors = TextFieldDefaults.colors(focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant, unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant)
+    )
+}
+
+/** Fullscreen slideshow: tap right half = next, left half = previous. (I63) */
+@Composable
+private fun SlideshowDialog(slides: List<OdfSlide>, startIndex: Int, onSlideChange: (Int) -> Unit, onDismiss: () -> Unit) {
+    var index by remember { mutableIntStateOf(startIndex.coerceIn(0, slides.size - 1)) }
+    Dialog(onDismissRequest = { onSlideChange(index); onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            val slide = slides[index]
+            val (refW, refH) = slideBounds(slide)
+            Box(Modifier.fillMaxWidth().aspectRatio((refW / refH).coerceIn(0.5f, 3f)).align(Alignment.Center).background(Color.White)) {
+                SlideCanvas(slide, refW, refH)
+            }
+            // Tap zones
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxHeight().clickable { if (index > 0) { index--; onSlideChange(index) } })
+                Box(Modifier.weight(1f).fillMaxHeight().clickable { if (index < slides.size - 1) { index++; onSlideChange(index) } else { onSlideChange(index); onDismiss() } })
+            }
+            Text("${index + 1} / ${slides.size}", color = Color.White, style = MaterialTheme.typography.labelMedium, modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp))
+            TextButton(onClick = { onSlideChange(index); onDismiss() }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) { Text("Close", color = Color.White) }
+        }
+    }
 }
 
 @Composable
@@ -1105,16 +1527,12 @@ fun DrawingView(doc: OdfDocument.Drawing) {
 }
 
 @Composable
-private fun SlideCard(slide: OdfSlide) {
+private fun SlideCard(slide: OdfSlide, editMode: Boolean = false, onElementTextChange: (Int, String) -> Unit = { _, _ -> }, onElementFocus: (Int) -> Unit = {}) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Text(slide.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        Card(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).padding(horizontal = 8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
-            Column(Modifier.fillMaxWidth().then(slide.backgroundColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier).padding(16.dp)) {
-                for (element in slide.elements) when (element) {
-                    is OdfSlideElement.Frame -> FrameView(element.frame)
-                    is OdfSlideElement.Shape -> ShapeView(element.shape)
-                }
-            }
+        val (refW, refH) = slideBounds(slide)
+        Card(modifier = Modifier.fillMaxWidth().aspectRatio((refW / refH).coerceIn(0.5f, 3f)).padding(horizontal = 8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
+            SlideCanvas(slide, refW, refH, editMode, onElementTextChange, onElementFocus)
         }
         if (slide.notes.isNotEmpty()) {
             var expanded by remember { mutableStateOf(false) }
@@ -1124,23 +1542,95 @@ private fun SlideCard(slide: OdfSlide) {
     }
 }
 
+/** Default ODF slide coordinate space (28cm x 21cm in px@96), or element bounds if larger. (I60) */
+private fun slideBounds(slide: OdfSlide): Pair<Float, Float> {
+    var maxR = 0f; var maxB = 0f
+    for (el in slide.elements) {
+        val (x, y, w, h) = when (el) {
+            is OdfSlideElement.Frame -> listOf(el.frame.x, el.frame.y, el.frame.width, el.frame.height)
+            is OdfSlideElement.Shape -> listOf(el.shape.x, el.shape.y, el.shape.width, el.shape.height)
+        }
+        maxR = maxOf(maxR, x + w); maxB = maxOf(maxB, y + h)
+    }
+    val refW = maxOf(maxR, 1058f)
+    val refH = maxOf(maxB, 794f)
+    return refW to refH
+}
+
 @Composable
-private fun FrameView(frame: OdfFrame) {
-    Column(modifier = Modifier.padding(vertical = 2.dp)) {
-        frame.image?.let { OdfImageView(it) }
-        for (para in frame.paragraphs) ParagraphView(para)
+private fun SlideCanvas(slide: OdfSlide, refW: Float, refH: Float, editMode: Boolean = false, onElementTextChange: (Int, String) -> Unit = { _, _ -> }, onElementFocus: (Int) -> Unit = {}) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize()
+            .then(slide.backgroundColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
+    ) {
+        val scaleW = maxWidth / refW
+        val scaleH = maxHeight / refH
+        // Scale text proportionally to the slide canvas (pt -> px@96 -> scaled dp). (I60 fix)
+        val fontScale = ((96f / 72f) * (maxWidth.value / refW)).coerceIn(0.2f, 4f)
+        slide.elements.forEachIndexed { ei, element ->
+            when (element) {
+                is OdfSlideElement.Frame -> {
+                    val f = element.frame
+                    val base = Modifier.offset(x = scaleW * f.x, y = scaleH * f.y).width((scaleW * f.width).coerceAtLeast(1.dp))
+                    if (f.image != null) {
+                        Box(base.height((scaleH * f.height).coerceAtLeast(1.dp))) { PositionedFrame(f, fontScale, editMode, "${slide.name}#$ei", { onElementTextChange(ei, it) }, { onElementFocus(ei) }) }
+                    } else {
+                        // Text frames wrap height so large fonts are not truncated.
+                        Box(base) { PositionedFrame(f, fontScale, editMode, "${slide.name}#$ei", { onElementTextChange(ei, it) }, { onElementFocus(ei) }) }
+                    }
+                }
+                is OdfSlideElement.Shape -> {
+                    val s = element.shape
+                    Box(Modifier.offset(x = scaleW * s.x, y = scaleH * s.y).size(width = (scaleW * s.width).coerceAtLeast(1.dp), height = (scaleH * s.height).coerceAtLeast(1.dp))) {
+                        PositionedShape(s, fontScale, editMode, "${slide.name}#$ei", { onElementTextChange(ei, it) }, { onElementFocus(ei) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Editable in-place text overlay for a slide element. (I62) */
+@Composable
+private fun SlideTextEditor(key: String, paragraphs: List<OdfParagraph>, fontScale: Float, onChange: (String) -> Unit, onFocus: () -> Unit = {}) {
+    val initial = paragraphs.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
+    var tfv by remember(key) { mutableStateOf(TextFieldValue(initial)) }
+    val baseSp = (paragraphs.firstOrNull()?.spans?.firstOrNull()?.fontSize ?: 18f) * fontScale
+    val bold = paragraphs.firstOrNull()?.spans?.firstOrNull()?.bold == true
+    val italic = paragraphs.firstOrNull()?.spans?.firstOrNull()?.italic == true
+    val color = paragraphs.firstOrNull()?.spans?.firstOrNull()?.color?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.onSurface
+    BasicTextField(
+        value = tfv,
+        onValueChange = { tfv = it; onChange(it.text) },
+        textStyle = TextStyle(color = color, fontSize = baseSp.coerceAtLeast(8f).sp, fontWeight = if (bold) FontWeight.Bold else null, fontStyle = if (italic) FontStyle.Italic else null),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) onFocus() }
+    )
+}
+
+@Composable
+private fun PositionedFrame(frame: OdfFrame, fontScale: Float, editMode: Boolean = false, editKey: String = "", onTextChange: (String) -> Unit = {}, onFocus: () -> Unit = {}) {
+    Box(Modifier.fillMaxSize()
+        .then(frame.fillColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
+        .then(if (editMode && frame.image == null) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant) else Modifier)
+        .then(frame.strokeColor?.let { Modifier.border((frame.strokeWidth ?: 1f).dp.coerceAtLeast(0.5.dp), Color(it.toInt())) } ?: Modifier)
+    ) {
+        frame.image?.let { OdfImageView(it, Modifier.fillMaxSize()) }
+        if (editMode && frame.image == null) {
+            SlideTextEditor(editKey, frame.paragraphs, fontScale, onTextChange, onFocus)
+        } else {
+            Column { for (para in frame.paragraphs) ParagraphView(para, fontSizeMultiplier = fontScale) }
+        }
     }
 }
 
 @Composable
-private fun ShapeView(shape: OdfShape) {
+private fun PositionedShape(shape: OdfShape, fontScale: Float, editMode: Boolean = false, editKey: String = "", onTextChange: (String) -> Unit = {}, onFocus: () -> Unit = {}) {
     val fillColor = shape.fillColor?.let { Color(it.toInt()) } ?: Color.Transparent
     val strokeColor = shape.strokeColor?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.outline
     val strokeW = shape.strokeWidth ?: 1f
-    val shapeW = if (shape.width > 0) shape.width.dp else 100.dp
-    val shapeH = if (shape.height > 0) shape.height.dp else 60.dp
-    Box(modifier = Modifier.size(shapeW, shapeH).padding(2.dp)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxSize()) {
             when (shape) {
                 is OdfShape.Rect -> { drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
                 is OdfShape.Ellipse -> { drawOval(fillColor); drawOval(strokeColor, style = Stroke(strokeW)) }
@@ -1148,6 +1638,10 @@ private fun ShapeView(shape: OdfShape) {
                 is OdfShape.CustomShape -> { drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
             }
         }
-        if (shape.text.isNotEmpty()) Column(Modifier.padding(4.dp).align(Alignment.Center)) { for (para in shape.text) ParagraphView(para) }
+        if (editMode && shape !is OdfShape.Line) {
+            Box(Modifier.padding(4.dp).align(Alignment.Center)) { SlideTextEditor(editKey, shape.text, fontScale, onTextChange, onFocus) }
+        } else if (shape.text.isNotEmpty()) {
+            Column(Modifier.padding(4.dp).align(Alignment.Center)) { for (para in shape.text) ParagraphView(para, fontSizeMultiplier = fontScale) }
+        }
     }
 }

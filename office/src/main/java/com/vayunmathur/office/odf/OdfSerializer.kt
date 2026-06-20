@@ -15,6 +15,42 @@ object OdfSerializer {
         }
     }
 
+    /** Serializes to a flat ODF (.fodt/.fods/.fodp) single-XML document (K75). */
+    fun serializeFlat(document: OdfDocument): String {
+        val content = serialize(document)
+        val mimetype = when (document) {
+            is OdfDocument.TextDocument -> "application/vnd.oasis.opendocument.text"
+            is OdfDocument.Spreadsheet -> "application/vnd.oasis.opendocument.spreadsheet"
+            is OdfDocument.Presentation -> "application/vnd.oasis.opendocument.presentation"
+            is OdfDocument.Drawing -> "application/vnd.oasis.opendocument.graphics"
+        }
+        val metaFull = serializeMeta(document.metadata)
+        val metaInner = if (metaFull.contains("<office:meta>"))
+            "<office:meta>" + metaFull.substringAfter("<office:meta>").substringBefore("</office:meta>") + "</office:meta>"
+        else ""
+        var s = content.replace("<office:document-content", "<office:document")
+        s = s.replace("""office:version="1.3">""", """office:mimetype="$mimetype" office:version="1.3">$metaInner""")
+        s = s.replace("</office:document-content>", "</office:document>")
+        return s
+    }
+
+    /** Generates meta.xml so edited document metadata persists on save (G47). */
+    fun serializeMeta(meta: OdfMetadata): String {
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
+        sb.append("""<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta>""")
+        meta.title?.let { sb.append("<dc:title>${esc(it)}</dc:title>") }
+        meta.creator?.let { sb.append("<meta:initial-creator>${esc(it)}</meta:initial-creator>") }
+        meta.author?.let { sb.append("<dc:creator>${esc(it)}</dc:creator>") }
+        meta.subject?.let { sb.append("<dc:subject>${esc(it)}</dc:subject>") }
+        meta.description?.let { sb.append("<dc:description>${esc(it)}</dc:description>") }
+        for (kw in meta.keywords) sb.append("<meta:keyword>${esc(kw)}</meta:keyword>")
+        meta.creationDate?.let { sb.append("<meta:creation-date>${esc(it)}</meta:creation-date>") }
+        meta.modifiedDate?.let { sb.append("<dc:date>${esc(it)}</dc:date>") }
+        sb.append("</office:meta></office:document-meta>")
+        return sb.toString()
+    }
+
     private fun serializeTextDocument(doc: OdfDocument.TextDocument): String {
         val styles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
@@ -52,6 +88,10 @@ object OdfSerializer {
                     if (listOpen) { body.append("</text:list>"); listOpen = false }
                     // Charts are embedded OLE objects; not re-serialized (preserved only when not re-saved).
                 }
+                is OdfContentBlock.Formula -> {
+                    if (listOpen) { body.append("</text:list>"); listOpen = false }
+                    // Formulas are embedded math objects; preserved via original package, not re-serialized inline.
+                }
                 is OdfContentBlock.PageBreak -> {
                     if (listOpen) { body.append("</text:list>"); listOpen = false }
                 }
@@ -59,16 +99,24 @@ object OdfSerializer {
         }
         if (listOpen) body.append("</text:list>")
 
-        return buildDocument("office:text", styles, paraStyles, body.toString())
+        return buildDocument("office:text", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), body.toString())
     }
 
     private fun serializeSpreadsheet(doc: OdfDocument.Spreadsheet): String {
+        val cellStyles = LinkedHashMap<String, CellStyleDef>()
+        val colStyles = LinkedHashMap<String, Float>()
         val body = StringBuilder()
         for (sheet in doc.sheets) {
             body.append("""<table:table table:name="${esc(sheet.name)}">""")
             val maxCols = sheet.rows.maxOfOrNull { it.cells.size } ?: 0
-            if (maxCols > 0) {
-                body.append("""<table:table-column table:number-columns-repeated="$maxCols"/>""")
+            for (c in 0 until maxCols) {
+                val w = sheet.columnWidths.getOrNull(c)
+                if (w != null && w > 0f) {
+                    val name = getOrCreateColStyle(w, colStyles)
+                    body.append("""<table:table-column table:style-name="$name"/>""")
+                } else {
+                    body.append("<table:table-column/>")
+                }
             }
             for (row in sheet.rows) {
                 body.append("<table:table-row>")
@@ -77,13 +125,19 @@ object OdfSerializer {
                         body.append("<table:covered-table-cell/>")
                     } else {
                         body.append("<table:table-cell")
+                        val styleName = getOrCreateCellStyle(cell, cellStyles)
+                        if (styleName != null) body.append(""" table:style-name="$styleName"""")
                         if (cell.spannedColumns > 1) body.append(""" table:number-columns-spanned="${cell.spannedColumns}"""")
                         if (cell.rowSpan > 1) body.append(""" table:number-rows-spanned="${cell.rowSpan}"""")
-                        if (cell.text.isNotEmpty()) body.append(""" office:value-type="string"""")
-                        body.append(">")
-                        if (cell.text.isNotEmpty()) {
-                            body.append("<text:p>${esc(cell.text)}</text:p>")
+                        if (cell.formula != null) body.append(""" table:formula="${esc(cell.formula)}"""")
+                        val numeric = cell.numberValue ?: cell.text.toDoubleOrNull()
+                        if (numeric != null && cell.valueType != "string") {
+                            body.append(""" office:value-type="float" office:value="$numeric"""")
+                        } else if (cell.text.isNotEmpty()) {
+                            body.append(""" office:value-type="string"""")
                         }
+                        body.append(">")
+                        if (cell.text.isNotEmpty()) body.append("<text:p>${esc(cell.text)}</text:p>")
                         body.append("</table:table-cell>")
                     }
                 }
@@ -91,7 +145,7 @@ object OdfSerializer {
             }
             body.append("</table:table>")
         }
-        return buildDocument("office:spreadsheet", mutableMapOf(), mutableMapOf(), body.toString())
+        return buildDocument("office:spreadsheet", mutableMapOf(), mutableMapOf(), cellStyles, colStyles, body.toString())
     }
 
     private fun serializePresentation(doc: OdfDocument.Presentation): String {
@@ -108,7 +162,7 @@ object OdfSerializer {
             }
             body.append("</draw:page>")
         }
-        return buildDocument("office:presentation", styles, paraStyles, body.toString())
+        return buildDocument("office:presentation", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), body.toString())
     }
 
     private fun serializeParagraph(
@@ -234,7 +288,37 @@ object OdfSerializer {
         val superscript: Boolean = false, val subscript: Boolean = false
     )
 
-    private data class ParaStyleDef(val alignment: TextAlign? = null)
+    private data class ParaStyleDef(
+        val alignment: TextAlign? = null,
+        val marginLeft: Float = 0f,
+        val textIndent: Float = 0f,
+        val lineHeightPercent: Float? = null,
+        val borderColor: Long? = null,
+        val backgroundColor: Long? = null
+    )
+
+    private data class CellStyleDef(
+        val backgroundColor: Long? = null, val textColor: Long? = null,
+        val bold: Boolean = false, val italic: Boolean = false,
+        val alignment: TextAlign? = null, val borderColor: Long? = null
+    )
+
+    private fun getOrCreateCellStyle(cell: OdfCell, styles: MutableMap<String, CellStyleDef>): String? {
+        if (cell.backgroundColor == null && cell.textColor == null && !cell.bold && !cell.italic &&
+            cell.alignment == null && cell.borderColor == null) return null
+        val def = CellStyleDef(cell.backgroundColor, cell.textColor, cell.bold, cell.italic, cell.alignment, cell.borderColor)
+        for ((name, existing) in styles) if (existing == def) return name
+        val name = "ce${styles.size + 1}"
+        styles[name] = def
+        return name
+    }
+
+    private fun getOrCreateColStyle(width: Float, styles: MutableMap<String, Float>): String {
+        for ((name, existing) in styles) if (existing == width) return name
+        val name = "co${styles.size + 1}"
+        styles[name] = width
+        return name
+    }
 
     private fun getOrCreateSpanStyle(span: OdfSpan, styles: MutableMap<String, SpanStyleDef>): String {
         val def = SpanStyleDef(span.bold, span.italic, span.underline, span.strikethrough,
@@ -246,8 +330,10 @@ object OdfSerializer {
     }
 
     private fun getOrCreateParaStyle(para: OdfParagraph, styles: MutableMap<String, ParaStyleDef>): String? {
-        if (para.alignment == null) return null
-        val def = ParaStyleDef(para.alignment)
+        val hasProps = para.alignment != null || para.marginLeft != 0f || para.textIndent != 0f ||
+            para.lineHeightPercent != null || para.borderColor != null || para.backgroundColor != null
+        if (!hasProps) return null
+        val def = ParaStyleDef(para.alignment, para.marginLeft, para.textIndent, para.lineHeightPercent, para.borderColor, para.backgroundColor)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "P${styles.size + 1}"
         styles[name] = def
@@ -260,6 +346,8 @@ object OdfSerializer {
         bodyType: String,
         spanStyles: Map<String, SpanStyleDef>,
         paraStyles: Map<String, ParaStyleDef>,
+        cellStyles: Map<String, CellStyleDef>,
+        colStyles: Map<String, Float>,
         bodyContent: String
     ): String {
         val sb = StringBuilder()
@@ -297,6 +385,33 @@ object OdfSerializer {
                 TextAlign.Justify -> sb.append(""" fo:text-align="justify"""")
                 else -> {}
             }
+            if (def.marginLeft != 0f) sb.append(""" fo:margin-left="${def.marginLeft / 37.8f}cm"""")
+            if (def.textIndent != 0f) sb.append(""" fo:text-indent="${def.textIndent / 37.8f}cm"""")
+            if (def.lineHeightPercent != null) sb.append(""" fo:line-height="${(def.lineHeightPercent * 100).toInt()}%"""")
+            if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
+            if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
+            sb.append("/></style:style>")
+        }
+        for ((name, width) in colStyles) {
+            sb.append("""<style:style style:name="$name" style:family="table-column"><style:table-column-properties style:column-width="${width / 37.8f}cm"/></style:style>""")
+        }
+        for ((name, def) in cellStyles) {
+            sb.append("""<style:style style:name="$name" style:family="table-cell">""")
+            sb.append("<style:table-cell-properties")
+            if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
+            if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
+            sb.append("/>")
+            when (def.alignment) {
+                TextAlign.Start, TextAlign.Left -> sb.append("""<style:paragraph-properties fo:text-align="start"/>""")
+                TextAlign.Center -> sb.append("""<style:paragraph-properties fo:text-align="center"/>""")
+                TextAlign.End, TextAlign.Right -> sb.append("""<style:paragraph-properties fo:text-align="end"/>""")
+                TextAlign.Justify -> sb.append("""<style:paragraph-properties fo:text-align="justify"/>""")
+                else -> {}
+            }
+            sb.append("<style:text-properties")
+            if (def.bold) sb.append(""" fo:font-weight="bold"""")
+            if (def.italic) sb.append(""" fo:font-style="italic"""")
+            if (def.textColor != null) sb.append(""" fo:color="${formatColor(def.textColor)}"""")
             sb.append("/></style:style>")
         }
         sb.append("</office:automatic-styles>")
