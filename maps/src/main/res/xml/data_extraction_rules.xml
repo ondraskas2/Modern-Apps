@@ -4,7 +4,8 @@
   `external` storage, but for this module that domain holds tens to hundreds
   of megabytes of downloaded offline-zone data (zone_*.pmtiles,
   nodes_zone_*.bin, edges_zone_*.bin, transit_voyages_zone_*.bin,
-  amenities.db, metadata.bin, road_names.bin, world_z0-6.pmtiles).
+  transit_attributes_zone_*.bin, amenities.db, metadata.bin,
+  road_names.bin, intermediate.bin, world_z0-6.pmtiles).
 
   Cloud Auto Backup has a 25 MB quota; including these files would blow past
   it on the first sync and silently disable backup for the whole app. They're
