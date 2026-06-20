@@ -16,6 +16,8 @@
     <string name="pdf_saved">PDF saved successfully</string>
     <string name="pdf_save_error">Error saving PDF</string>
     <string name="share_pdf">Share PDF</string>
+    <string name="pdf_save">Save</string>
+    <string name="pdf_save_as_copy">Save as copy</string>
     <string name="crop_image">Crop Image</string>
     <string name="continue_label">Continue</string>
     <string name="auto_detect">Auto Detect</string>

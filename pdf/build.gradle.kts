@@ -12,7 +12,6 @@ dependencies {
     // pdf
     implementation(libs.androidx.pdf.viewer)
     implementation(libs.androidx.pdf.compose)
-    implementation(libs.androidx.pdf.ink)
     implementation(libs.androidx.pdf.document.service)
 
     implementation(libs.androidx.camera.core)

@@ -1,7 +1,6 @@
 package com.vayunmathur.pdf.ui
 
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -10,20 +9,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.BottomAppBar
-import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,6 +33,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -68,21 +65,16 @@ import androidx.pdf.compose.FastScrollConfiguration
 import androidx.pdf.compose.PdfViewer
 import androidx.pdf.compose.PdfViewerState
 import androidx.pdf.view.Highlight
-import com.vayunmathur.library.ui.IconClose
-import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconMenu
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.ui.IconShare
-import com.vayunmathur.library.ui.IconUndo
 import com.vayunmathur.pdf.R
 import com.vayunmathur.pdf.util.PdfStateStore
 import com.vayunmathur.pdf.util.PdfViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private enum class ViewerMode { VIEW, EDIT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,7 +91,6 @@ fun PdfViewerScreen(
     val linkDestinations by viewModel.linkDestinations.collectAsState()
     val outlineEntries by viewModel.outlineEntries.collectAsState()
 
-    var mode by remember { mutableStateOf(ViewerMode.VIEW) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     LaunchedEffect(pdfDocument) {
@@ -129,6 +120,7 @@ fun PdfViewerScreen(
     var searchResults by remember { mutableStateOf(emptyList<PdfRect>()) }
     var searchIndex by remember(searchResults) { mutableIntStateOf(0) }
     var searchText by remember { mutableStateOf("") }
+    var showSaveMenu by remember { mutableStateOf(false) }
 
     BackHandler {
         when {
@@ -137,7 +129,6 @@ fun PdfViewerScreen(
                 showSearchBar = false
                 searchResults = emptyList()
             }
-            mode == ViewerMode.EDIT -> mode = ViewerMode.VIEW
             else -> onBack()
         }
     }
@@ -181,12 +172,12 @@ fun PdfViewerScreen(
     var changesMade by remember { mutableStateOf(false) }
 
     LaunchedEffect(searchResults, searchIndex) {
-        pdfState.setHighlights(
-            searchResults.mapIndexed { idx, it ->
-                Highlight(
-                    it, if (idx == searchIndex) 0xFFFFA500.toInt() else Color.Yellow.toArgb()
-                )
-            })
+        val allHighlights = searchResults.mapIndexed { idx, it ->
+            Highlight(
+                it, if (idx == searchIndex) 0xFFFFA500.toInt() else Color.Yellow.toArgb()
+            )
+        }
+        pdfState.setHighlights(allHighlights)
         if (searchResults.isNotEmpty()) {
             pdfState.scrollToPosition(
                 searchResults[searchIndex].let { PdfPoint(it.pageNum, it.left, it.top) })
@@ -251,7 +242,7 @@ fun PdfViewerScreen(
                         if (showSearchBar) {
                             TextField(
                                 value = searchText,
-                            onValueChange = { searchText = it },
+                                onValueChange = { searchText = it },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .focusRequester(focusRequestor),
@@ -284,11 +275,32 @@ fun PdfViewerScreen(
                     },
                     actions = {
                         if (!showSearchBar) {
-                            if (mode != ViewerMode.EDIT) {
-                                IconButton({ mode = ViewerMode.EDIT }) { IconEdit() }
-                            }
                             IconButton({ showSearchBar = true }) { IconSearch() }
-                            IconButton({ downloadLauncher.launch(pdfName) }) { IconSave() }
+                            Box {
+                                IconButton(onClick = { showSaveMenu = true }) {
+                                    IconSave()
+                                }
+                                DropdownMenu(
+                                    expanded = showSaveMenu,
+                                    onDismissRequest = { showSaveMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.pdf_save)) },
+                                        onClick = {
+                                            showSaveMenu = false
+                                            viewModel.saveDocumentChanges(pdfDocument, pdfDocument.uri)
+                                            Toast.makeText(context, pdfSavedMessage, Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.pdf_save_as_copy)) },
+                                        onClick = {
+                                            showSaveMenu = false
+                                            downloadLauncher.launch(pdfName)
+                                        }
+                                    )
+                                }
+                            }
                             IconButton({ shareAction() }) { IconShare() }
                         } else {
                             if (searchResults.isNotEmpty()) {
@@ -303,98 +315,80 @@ fun PdfViewerScreen(
                         }
                     })
             },
-            bottomBar = {
-                if (mode == ViewerMode.EDIT) {
-                    BottomAppBar(
-                        actions = {
-                            IconButton({ mode = ViewerMode.VIEW }) { IconClose() }
-                            Spacer(Modifier.weight(1f))
-                            IconButton({ downloadLauncher.launch(pdfName) }) { IconSave() }
-                            IconButton({ shareAction() }) { IconShare() }
-                        }
-                    )
-                }
-            },
             floatingActionButton = {
-                Column {
-                    if (showSearchBar) {
-                        Column {
-                            SmallFloatingActionButton({ if (searchIndex > 0) searchIndex-- }) {
-                                Icon(painterResource(R.drawable.keyboard_arrow_up_24px), null)
-                            }
-                            SmallFloatingActionButton({
-                                if (searchIndex < searchResults.size - 1) searchIndex++
-                            }) { Icon(painterResource(R.drawable.keyboard_arrow_down_24px), null) }
+                if (showSearchBar) {
+                    Column {
+                        SmallFloatingActionButton({ if (searchIndex > 0) searchIndex-- }) {
+                            Icon(painterResource(R.drawable.keyboard_arrow_up_24px), null)
                         }
-                    }
-                    if (changesMade && mode != ViewerMode.EDIT) {
-                        FloatingActionButton({
-                            changesMade = false
-                            viewModel.saveDocumentChanges(pdfDocument, pdfDocument.uri)
-                        }) { IconSave() }
+                        SmallFloatingActionButton({
+                            if (searchIndex < searchResults.size - 1) searchIndex++
+                        }) { Icon(painterResource(R.drawable.keyboard_arrow_down_24px), null) }
                     }
                 }
             },
             contentWindowInsets = WindowInsets(0)
         ) { innerPadding ->
-            Column(Modifier.padding(innerPadding)) {
-                Box(Modifier.fillMaxSize()) {
-                    PdfViewer(
-                        pdfDocument = pdfDocument,
-                        state = pdfState,
-                        modifier = Modifier.onGloballyPositioned { coordinates ->
-                            centerRef.offset = coordinates.size.center.toOffset()
-                        },
-                        fastScrollConfig = FastScrollConfiguration.withDrawableIdsAndDp(
-                            fastScrollPageIndicatorBackgroundDrawableRes = R.drawable.pdf_page_indicator_background,
-                            fastScrollVerticalThumbDrawableRes = R.drawable.pdf_fast_scroll_thumb,
-                            fastScrollPageIndicatorMarginEnd = 42.dp,
-                            fastScrollVerticalThumbMarginEnd = 0.dp,
-                        ),
-                        isFormFillingEnabled = true,
-                        isImageSelectionEnabled = true,
-                        onFormWidgetInfoUpdated = { editInfo ->
-                            coroutineScope.launch {
-                                pdfDocument.applyEdit(editInfo)
-                                changesMade = true
-                            }
-                        },
-                    ) { uri ->
-                        Log.d("PdfViewer", "Link clicked: uri=$uri scheme=${uri.scheme} fragment=${uri.fragment}")
-                        if (uri.scheme == "file") {
-                            val destPage = linkDestinations[uri.toString()]
-                            if (destPage != null) {
-                                Log.d("PdfViewer", "Resolved via index: page $destPage")
-                                coroutineScope.launch { pdfState.scrollToPage(destPage) }
-                                return@PdfViewer true
-                            }
-                            val pathOnly = uri.buildUpon().fragment(null).build().toString()
-                            val fallback = linkDestinations.entries
-                                .firstOrNull { it.key.startsWith(pathOnly) }?.value
-                            if (fallback != null) {
-                                Log.d("PdfViewer", "Resolved via path match: page $fallback")
-                                coroutineScope.launch { pdfState.scrollToPage(fallback) }
-                                return@PdfViewer true
-                            }
-                            Log.d("PdfViewer", "Unresolved internal link: $uri")
+            Box(
+                Modifier
+                    .padding(innerPadding)
+                    .fillMaxSize()
+            ) {
+                PdfViewer(
+                    pdfDocument = pdfDocument,
+                    state = pdfState,
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        centerRef.offset = coordinates.size.center.toOffset()
+                    },
+                    fastScrollConfig = FastScrollConfiguration.withDrawableIdsAndDp(
+                        fastScrollPageIndicatorBackgroundDrawableRes = R.drawable.pdf_page_indicator_background,
+                        fastScrollVerticalThumbDrawableRes = R.drawable.pdf_fast_scroll_thumb,
+                        fastScrollPageIndicatorMarginEnd = 42.dp,
+                        fastScrollVerticalThumbMarginEnd = 0.dp,
+                    ),
+                    isFormFillingEnabled = true,
+                    isImageSelectionEnabled = true,
+                    onFormWidgetInfoUpdated = { editInfo ->
+                        coroutineScope.launch {
+                            pdfDocument.applyEdit(editInfo)
+                            changesMade = true
+                        }
+                    },
+                ) { uri ->
+                    Log.d("PdfViewer", "Link clicked: uri=$uri scheme=${uri.scheme} fragment=${uri.fragment}")
+                    if (uri.scheme == "file") {
+                        val destPage = linkDestinations[uri.toString()]
+                        if (destPage != null) {
+                            Log.d("PdfViewer", "Resolved via index: page $destPage")
+                            coroutineScope.launch { pdfState.scrollToPage(destPage) }
                             return@PdfViewer true
                         }
-                        val fragment = uri.fragment
-                        if (fragment != null) {
-                            val page = Regex("page=(\\d+)").find(fragment)
-                                ?.groupValues?.get(1)?.toIntOrNull()
-                                ?: fragment.toIntOrNull()
-                            if (page != null && page in 1..pdfDocument.pageCount) {
-                                coroutineScope.launch { pdfState.scrollToPage(page - 1) }
-                                return@PdfViewer true
-                            }
+                        val pathOnly = uri.buildUpon().fragment(null).build().toString()
+                        val fallback = linkDestinations.entries
+                            .firstOrNull { it.key.startsWith(pathOnly) }?.value
+                        if (fallback != null) {
+                            Log.d("PdfViewer", "Resolved via path match: page $fallback")
+                            coroutineScope.launch { pdfState.scrollToPage(fallback) }
+                            return@PdfViewer true
                         }
-                        if (uri.scheme == "http" || uri.scheme == "https" || uri.scheme == "mailto") {
-                            val intent = Intent(Intent.ACTION_VIEW, uri)
-                            context.startActivity(intent)
-                        }
-                        true
+                        Log.d("PdfViewer", "Unresolved internal link: $uri")
+                        return@PdfViewer true
                     }
+                    val fragment = uri.fragment
+                    if (fragment != null) {
+                        val page = Regex("page=(\\d+)").find(fragment)
+                            ?.groupValues?.get(1)?.toIntOrNull()
+                            ?: fragment.toIntOrNull()
+                        if (page != null && page in 1..pdfDocument.pageCount) {
+                            coroutineScope.launch { pdfState.scrollToPage(page - 1) }
+                            return@PdfViewer true
+                        }
+                    }
+                    if (uri.scheme == "http" || uri.scheme == "https" || uri.scheme == "mailto") {
+                        val intent = Intent(Intent.ACTION_VIEW, uri)
+                        context.startActivity(intent)
+                    }
+                    true
                 }
             }
         }
