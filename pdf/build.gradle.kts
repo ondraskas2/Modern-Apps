@@ -11,12 +11,9 @@ android {
 dependencies {
     // pdf
     implementation(libs.androidx.pdf.viewer)
-    implementation(libs.androidx.pdf.viewer.fragment)
+    implementation(libs.androidx.pdf.compose)
     implementation(libs.androidx.pdf.ink)
     implementation(libs.androidx.pdf.document.service)
-
-    // fragment support for AppCompatActivity
-    implementation(libs.androidx.fragment.ktx)
 
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)

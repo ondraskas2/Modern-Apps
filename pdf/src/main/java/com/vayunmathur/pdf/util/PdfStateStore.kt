@@ -1,23 +1,40 @@
 package com.vayunmathur.pdf.util
 import android.content.Context
 import android.net.Uri
+import androidx.compose.ui.geometry.Offset
 import androidx.core.content.edit
-import androidx.pdf.view.PdfView
+import androidx.pdf.PdfPoint
+import androidx.pdf.compose.PdfViewerState
 
 object PdfStateStore {
     private const val PREFS_NAME = "pdf_viewer_state"
 
-    fun save(context: Context, uri: Uri, pdfView: PdfView) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
-            putString(uri.toString(), pdfView.firstVisiblePage.toString())
-        }
+    // Save state as a simple comma-separated string: "page,left,top"
+    fun save(context: Context, uri: Uri, centerOffset: Offset, state: PdfViewerState) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val key = uri.toString()
+        val pdfPoint = state.visibleOffsetToPdfPoint(centerOffset) ?: return
+        val value = "${state.zoom},${pdfPoint.pageNum},${pdfPoint.x},${pdfPoint.y}"
+        prefs.edit { putString(key, value) }
     }
 
-    fun restore(context: Context, uri: Uri): (suspend (PdfView) -> Unit)? {
-        val value = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(uri.toString(), null) ?: return null
-        val page = if (',' in value) value.split(',').getOrNull(1)?.toIntOrNull()
-                   else value.toIntOrNull()
-        return page?.let { p -> { pdfView: PdfView -> pdfView.scrollToPage(p) } }
+    fun restore(context: Context, uri: Uri): (suspend (PdfViewerState) -> Unit)? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val key = uri.toString()
+        val value = try {
+            prefs.getString(key, null)
+        } catch (_: ClassCastException) {
+            prefs.edit { remove(key) }
+            null
+        } ?: return null
+        val parts = value.split(',')
+        if (parts.size < 3) return null
+        val page = parts[1].toIntOrNull() ?: 0
+        val left = parts[2].toFloatOrNull() ?: 0f
+        val top = parts[3].toFloatOrNull() ?: 0f
+        return {
+            it.scrollToPage(page)
+            it.scrollToPosition(PdfPoint(page, left, top))
+        }
     }
 }

@@ -3,9 +3,11 @@ package com.vayunmathur.pdf.util
 import android.app.Application
 import android.net.Uri
 import android.util.Log
+import androidx.compose.ui.geometry.Rect
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.pdf.EditablePdfDocument
+import androidx.pdf.PdfDocument
 import androidx.pdf.PdfPasswordException
 import androidx.pdf.SandboxedPdfLoader
 import com.vayunmathur.pdf.R
@@ -21,6 +23,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+data class OutlineEntry(val label: String, val pageNum: Int)
 
 class PdfViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -47,6 +51,14 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
         val current = _capturedImages.value
         if (from !in current.indices || to !in current.indices) return
         _capturedImages.value = current.toMutableList().also { it.add(to, it.removeAt(from)) }
+    }
+
+    fun updateCrop(index: Int, crop: Rect) {
+        val current = _capturedImages.value
+        if (index !in current.indices) return
+        _capturedImages.value = current.toMutableList().also {
+            it[index] = it[index].copy(cropRect = crop, quadrilateral = Quadrilateral.fromRect(crop))
+        }
     }
 
     fun updateQuadrilateral(index: Int, quadrilateral: Quadrilateral) {
@@ -132,6 +144,7 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
         _passwordRequired.value = false
         _passwordError.value = null
         _linkDestinations.value = emptyMap()
+        _outlineEntries.value = emptyList()
     }
 
     // --- Internal link resolution -------------------------------------------
@@ -169,6 +182,33 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
                 Log.d(TAG, "  $uri -> page $dest")
             }
             _linkDestinations.value = map
+        }
+    }
+
+    // --- Outline ------------------------------------------------------------
+
+    private val _outlineEntries = MutableStateFlow<List<OutlineEntry>>(emptyList())
+    val outlineEntries: StateFlow<List<OutlineEntry>> = _outlineEntries.asStateFlow()
+
+    fun buildOutline(document: PdfDocument) {
+        viewModelScope.launch(Dispatchers.Default) {
+            val entries = mutableListOf<OutlineEntry>()
+            for (page in 0 until document.pageCount) {
+                try {
+                    val content = document.getPageContent(page)
+                    val firstText = content?.textContents?.firstOrNull()?.text
+                    val firstLine = firstText?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
+                    val label = if (!firstLine.isNullOrEmpty()) {
+                        firstLine.take(80)
+                    } else {
+                        "Page ${page + 1}"
+                    }
+                    entries.add(OutlineEntry(label, page))
+                } catch (e: Exception) {
+                    entries.add(OutlineEntry("Page ${page + 1}", page))
+                }
+            }
+            _outlineEntries.value = entries
         }
     }
 
