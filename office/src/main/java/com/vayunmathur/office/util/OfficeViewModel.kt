@@ -1444,6 +1444,65 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         updateDocument(doc.copy(slides = slides))
     }
 
+    /** Sets crop insets on an image frame element of a slide. (Phase 5) */
+    fun setSlideImageCrop(slideIndex: Int, elementIndex: Int, left: Float, top: Float, right: Float, bottom: Float) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
+        val slides = doc.slides.toMutableList()
+        val slide = slides.getOrNull(slideIndex) ?: return
+        val elements = slide.elements.toMutableList()
+        elements[elementIndex] = cropElementImage(elements.getOrNull(elementIndex) ?: return, left, top, right, bottom)
+        slides[slideIndex] = slide.copy(elements = elements)
+        updateDocument(doc.copy(slides = slides))
+    }
+
+    /** Sets crop insets on an image frame element of a sheet's floating layer. (Phase 5) */
+    fun setSheetImageCrop(sheetIndex: Int, elementIndex: Int, left: Float, top: Float, right: Float, bottom: Float) {
+        mutateSheetFloating(sheetIndex) { list ->
+            if (elementIndex !in list.indices) list
+            else list.toMutableList().also { it[elementIndex] = cropElementImage(it[elementIndex], left, top, right, bottom) }
+        }
+    }
+
+    private fun cropElementImage(el: OdfSlideElement, l: Float, t: Float, r: Float, b: Float): OdfSlideElement =
+        if (el is OdfSlideElement.Frame && el.frame.image != null)
+            OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(cropLeftPct = l, cropTopPct = t, cropRightPct = r, cropBottomPct = b)))
+        else el
+
+    /** Sets fill color on a slide shape/frame element. (extra) */
+    fun setSlideElementFill(slideIndex: Int, elementIndex: Int, color: Long?) =
+        setSlideElementColors(slideIndex, elementIndex, fill = color, setFill = true)
+
+    /** Sets stroke (border) color on a slide shape/frame element. (extra) */
+    fun setSlideElementStroke(slideIndex: Int, elementIndex: Int, color: Long?) =
+        setSlideElementColors(slideIndex, elementIndex, stroke = color, setStroke = true)
+
+    private fun setSlideElementColors(slideIndex: Int, elementIndex: Int, fill: Long? = null, stroke: Long? = null, setFill: Boolean = false, setStroke: Boolean = false) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
+        val slides = doc.slides.toMutableList()
+        val slide = slides.getOrNull(slideIndex) ?: return
+        val elements = slide.elements.toMutableList()
+        val el = elements.getOrNull(elementIndex) ?: return
+        elements[elementIndex] = when (el) {
+            is OdfSlideElement.Frame -> OdfSlideElement.Frame(el.frame.copy(
+                fillColor = if (setFill) fill else el.frame.fillColor,
+                strokeColor = if (setStroke) stroke else el.frame.strokeColor
+            ))
+            is OdfSlideElement.Shape -> {
+                val s = el.shape
+                val nf = if (setFill) fill else s.fillColor
+                val ns = if (setStroke) stroke else s.strokeColor
+                OdfSlideElement.Shape(when (s) {
+                    is OdfShape.Rect -> s.copy(fillColor = nf, strokeColor = ns)
+                    is OdfShape.Ellipse -> s.copy(fillColor = nf, strokeColor = ns)
+                    is OdfShape.Line -> s.copy(fillColor = nf, strokeColor = ns)
+                    is OdfShape.CustomShape -> s.copy(fillColor = nf, strokeColor = ns)
+                })
+            }
+        }
+        slides[slideIndex] = slide.copy(elements = elements)
+        updateDocument(doc.copy(slides = slides))
+    }
+
     // --- CSV export ---
 
     fun exportCsv(): String {

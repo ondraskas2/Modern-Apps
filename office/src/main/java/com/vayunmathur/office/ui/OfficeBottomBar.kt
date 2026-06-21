@@ -61,6 +61,8 @@ data class BottomBarActions(
     val onCellTextColor: () -> Unit = {},
     val onCellBgColor: () -> Unit = {},
     val onSlideTextColor: () -> Unit = {},
+    val onSlideFill: () -> Unit = {},
+    val onSlideStroke: () -> Unit = {},
     val onFontSize: () -> Unit = {},
     val onInsertImage: () -> Unit = {},
     val onInsertShape: (ShapeKind) -> Unit = {},
@@ -277,6 +279,8 @@ private fun ElementFormatControls(target: FormatTarget.Element?, viewModel: Offi
     FmtIcon(R.drawable.format_italic_24px, false, enabled, "Italic") { if (enabled) viewModel.toggleSlideElementItalic(s, e) }
     FmtIcon(R.drawable.format_underlined_24px, false, enabled, "Underline") { if (enabled) viewModel.toggleSlideElementUnderline(s, e) }
     FmtIcon(R.drawable.format_color_text_24px, false, enabled, "Text color") { actions.onSlideTextColor() }
+    TextButton(onClick = { actions.onSlideFill() }, enabled = enabled) { Text("Fill") }
+    TextButton(onClick = { actions.onSlideStroke() }, enabled = enabled) { Text("Border") }
     Box {
         FmtIcon(R.drawable.format_align_left_24px, false, enabled, "Alignment") { alignMenu = true }
         DropdownMenu(expanded = alignMenu, onDismissRequest = { alignMenu = false }) {

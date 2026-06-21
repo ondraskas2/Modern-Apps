@@ -221,9 +221,13 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     var showCellTextColor by remember { mutableStateOf(false) }
     var showCellBgColor by remember { mutableStateOf(false) }
     var showSlideTextColor by remember { mutableStateOf(false) }
+    var showSlideFillColor by remember { mutableStateOf(false) }
+    var showSlideStrokeColor by remember { mutableStateOf(false) }
     var chartForSlide by remember { mutableStateOf(false) }
     var chartForSheet by remember { mutableStateOf(false) }
     var cropImageBlock by remember { mutableIntStateOf(-1) }
+    var cropSlideTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var cropSheetTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     val isEditMode by viewModel.isEditMode.collectAsState()
     val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsState()
@@ -463,6 +467,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onCellTextColor = { showCellTextColor = true },
                         onCellBgColor = { showCellBgColor = true },
                         onSlideTextColor = { showSlideTextColor = true },
+                        onSlideFill = { showSlideFillColor = true },
+                        onSlideStroke = { showSlideStrokeColor = true },
                         onFontSize = { showFontSizePicker = true },
                         onInsertImage = { imagePickerLauncher.launch("image/*") },
                         onInsertShape = { kind ->
@@ -500,7 +506,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onCellSelected = { s, r, c -> activeCell = Triple(s, r, c) },
                         onFloatingBoundsChange = { s, e, x, y, w, h -> viewModel.setSheetElementBounds(s, e, x, y, w, h) },
                         onFloatingTextChange = { s, e, t -> viewModel.updateSheetElementText(s, e, t) },
-                        onFloatingDelete = { s, e -> viewModel.deleteSheetElement(s, e) })
+                        onFloatingDelete = { s, e -> viewModel.deleteSheetElement(s, e) },
+                        onFloatingCrop = { s, e -> cropSheetTarget = s to e })
                     is OdfDocument.Presentation -> PresentationView(doc = document, isEditMode = isEditMode,
                         onAddSlide = { viewModel.addSlide(it) }, onDeleteSlide = { viewModel.deleteSlide(it) },
                         onDuplicateSlide = { viewModel.duplicateSlide(it) }, onMoveSlideUp = { viewModel.moveSlideUp(it) }, onMoveSlideDown = { viewModel.moveSlideDown(it) },
@@ -509,7 +516,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onDeleteElement = { s, e -> viewModel.deleteSlideElement(s, e) },
                         selectedElement = activeSlideEl,
                         onSlideChange = { activeSlide = it },
-                        onElementSelected = { s, e -> activeSlide = s; activeSlideEl = e })
+                        onElementSelected = { s, e -> activeSlide = s; activeSlideEl = e },
+                        onCropImage = { s, e -> cropSlideTarget = s to e })
                     is OdfDocument.Drawing -> DrawingView(document)
                 }
             }
@@ -553,10 +561,26 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     if (showSlideTextColor && activeSlideEl >= 0) {
         ColorPickerDialog("Text Color", onColorSelected = { viewModel.setSlideElementColor(activeSlide, activeSlideEl, it) }, onDismiss = { showSlideTextColor = false })
     }
+    if (showSlideFillColor && activeSlideEl >= 0) {
+        ColorPickerDialog("Fill Color", onColorSelected = { viewModel.setSlideElementFill(activeSlide, activeSlideEl, it) }, onDismiss = { showSlideFillColor = false })
+    }
+    if (showSlideStrokeColor && activeSlideEl >= 0) {
+        ColorPickerDialog("Border Color", onColorSelected = { viewModel.setSlideElementStroke(activeSlide, activeSlideEl, it) }, onDismiss = { showSlideStrokeColor = false })
+    }
     if (cropImageBlock >= 0) {
         val img = ((document as? OdfDocument.TextDocument)?.content?.getOrNull(cropImageBlock) as? OdfContentBlock.Image)?.image
         if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setImageCrop(cropImageBlock, l, t, r, b) }, onDismiss = { cropImageBlock = -1 })
         else cropImageBlock = -1
+    }
+    cropSlideTarget?.let { (s, e) ->
+        val img = ((document as? OdfDocument.Presentation)?.slides?.getOrNull(s)?.elements?.getOrNull(e) as? OdfSlideElement.Frame)?.frame?.image
+        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSlideImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSlideTarget = null })
+        else cropSlideTarget = null
+    }
+    cropSheetTarget?.let { (s, e) ->
+        val img = ((document as? OdfDocument.Spreadsheet)?.sheets?.getOrNull(s)?.floating?.getOrNull(e) as? OdfSlideElement.Frame)?.frame?.image
+        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSheetImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSheetTarget = null })
+        else cropSheetTarget = null
     }
     if (showChartEditor) {
         val existing = if (!chartForSlide && editingChartBlock >= 0) ((document as? OdfDocument.TextDocument)?.content?.getOrNull(editingChartBlock) as? OdfContentBlock.Chart)?.chart else null

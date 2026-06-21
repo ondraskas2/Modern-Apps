@@ -99,7 +99,7 @@ object OdfSerializer {
         }
         if (listOpen) body.append("</text:list>")
 
-        return buildDocument("office:text", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), body.toString())
+        return buildDocument("office:text", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), LinkedHashMap(), body.toString())
     }
 
     private fun serializeSpreadsheet(doc: OdfDocument.Spreadsheet): String {
@@ -107,6 +107,7 @@ object OdfSerializer {
         val colStyles = LinkedHashMap<String, Float>()
         val spanStyles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
+        val graphicStyles = LinkedHashMap<String, GraphicStyleDef>()
         val body = StringBuilder()
         for (sheet in doc.sheets) {
             body.append("""<table:table table:name="${esc(sheet.name)}">""")
@@ -148,30 +149,31 @@ object OdfSerializer {
             // Floating objects anchored to the sheet (Phase 4).
             for (element in sheet.floating) {
                 when (element) {
-                    is OdfSlideElement.Frame -> serializeFrame(body, element.frame, spanStyles, paraStyles)
-                    is OdfSlideElement.Shape -> serializeShape(body, element.shape, spanStyles, paraStyles)
+                    is OdfSlideElement.Frame -> serializeFrame(body, element.frame, spanStyles, paraStyles, graphicStyles)
+                    is OdfSlideElement.Shape -> serializeShape(body, element.shape, spanStyles, paraStyles, graphicStyles)
                 }
             }
             body.append("</table:table>")
         }
-        return buildDocument("office:spreadsheet", spanStyles, paraStyles, cellStyles, colStyles, body.toString())
+        return buildDocument("office:spreadsheet", spanStyles, paraStyles, cellStyles, colStyles, graphicStyles, body.toString())
     }
 
     private fun serializePresentation(doc: OdfDocument.Presentation): String {
         val styles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
+        val graphicStyles = LinkedHashMap<String, GraphicStyleDef>()
         val body = StringBuilder()
         for (slide in doc.slides) {
             body.append("""<draw:page draw:name="${esc(slide.name)}">""")
             for (element in slide.elements) {
                 when (element) {
-                    is OdfSlideElement.Frame -> serializeFrame(body, element.frame, styles, paraStyles)
-                    is OdfSlideElement.Shape -> serializeShape(body, element.shape, styles, paraStyles)
+                    is OdfSlideElement.Frame -> serializeFrame(body, element.frame, styles, paraStyles, graphicStyles)
+                    is OdfSlideElement.Shape -> serializeShape(body, element.shape, styles, paraStyles, graphicStyles)
                 }
             }
             body.append("</draw:page>")
         }
-        return buildDocument("office:presentation", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), body.toString())
+        return buildDocument("office:presentation", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), graphicStyles, body.toString())
     }
 
     private fun serializeParagraph(
@@ -266,10 +268,12 @@ object OdfSerializer {
     private fun serializeFrame(
         sb: StringBuilder, frame: OdfFrame,
         styles: MutableMap<String, SpanStyleDef>,
-        paraStyles: MutableMap<String, ParaStyleDef>
+        paraStyles: MutableMap<String, ParaStyleDef>,
+        graphicStyles: MutableMap<String, GraphicStyleDef>
     ) {
         sb.append("<draw:frame")
-        sb.append(""" svg:x="${frame.x / 37.8f}cm" svg:y="${frame.y / 37.8f}cm"""")
+        getOrCreateGraphicStyle(frame.fillColor, frame.strokeColor, frame.strokeWidth, graphicStyles)?.let { sb.append(""" draw:style-name="$it"""") }
+        sb.append(""" svg:x="${frame.x / 37.8f}cm" svg:y="${frame.y / 37.8f}cm""")
         sb.append(""" svg:width="${frame.width / 37.8f}cm" svg:height="${frame.height / 37.8f}cm"""")
         if (frame.image != null) appendClip(sb, frame.image)
         sb.append(">")
@@ -293,7 +297,8 @@ object OdfSerializer {
     private fun serializeShape(
         sb: StringBuilder, shape: OdfShape,
         styles: MutableMap<String, SpanStyleDef>,
-        paraStyles: MutableMap<String, ParaStyleDef>
+        paraStyles: MutableMap<String, ParaStyleDef>,
+        graphicStyles: MutableMap<String, GraphicStyleDef>
     ) {
         val tag = when (shape) {
             is OdfShape.Rect -> "draw:rect"
@@ -302,7 +307,8 @@ object OdfSerializer {
             is OdfShape.CustomShape -> "draw:custom-shape"
         }
         sb.append("<$tag")
-        sb.append(""" svg:x="${shape.x / 37.8f}cm" svg:y="${shape.y / 37.8f}cm"""")
+        getOrCreateGraphicStyle(shape.fillColor, shape.strokeColor, shape.strokeWidth, graphicStyles)?.let { sb.append(""" draw:style-name="$it"""") }
+        sb.append(""" svg:x="${shape.x / 37.8f}cm" svg:y="${shape.y / 37.8f}cm""")
         sb.append(""" svg:width="${shape.width / 37.8f}cm" svg:height="${shape.height / 37.8f}cm"""")
         sb.append(">")
         for (para in shape.text) serializeParagraph(sb, para, styles, paraStyles, "text:p")
@@ -332,6 +338,19 @@ object OdfSerializer {
         val bold: Boolean = false, val italic: Boolean = false,
         val alignment: TextAlign? = null, val borderColor: Long? = null
     )
+
+    private data class GraphicStyleDef(
+        val fillColor: Long? = null, val strokeColor: Long? = null, val strokeWidth: Float? = null
+    )
+
+    private fun getOrCreateGraphicStyle(fillColor: Long?, strokeColor: Long?, strokeWidth: Float?, styles: MutableMap<String, GraphicStyleDef>): String? {
+        if (fillColor == null && strokeColor == null && strokeWidth == null) return null
+        val def = GraphicStyleDef(fillColor, strokeColor, strokeWidth)
+        for ((name, existing) in styles) if (existing == def) return name
+        val name = "gr${styles.size + 1}"
+        styles[name] = def
+        return name
+    }
 
     private fun getOrCreateCellStyle(cell: OdfCell, styles: MutableMap<String, CellStyleDef>): String? {
         if (cell.backgroundColor == null && cell.textColor == null && !cell.bold && !cell.italic &&
@@ -378,6 +397,7 @@ object OdfSerializer {
         paraStyles: Map<String, ParaStyleDef>,
         cellStyles: Map<String, CellStyleDef>,
         colStyles: Map<String, Float>,
+        graphicStyles: Map<String, GraphicStyleDef>,
         bodyContent: String
     ): String {
         val sb = StringBuilder()
@@ -442,6 +462,14 @@ object OdfSerializer {
             if (def.bold) sb.append(""" fo:font-weight="bold"""")
             if (def.italic) sb.append(""" fo:font-style="italic"""")
             if (def.textColor != null) sb.append(""" fo:color="${formatColor(def.textColor)}"""")
+            sb.append("/></style:style>")
+        }
+        for ((name, def) in graphicStyles) {
+            sb.append("""<style:style style:name="$name" style:family="graphic"><style:graphic-properties""")
+            if (def.fillColor != null) sb.append(""" draw:fill="solid" draw:fill-color="${formatColor(def.fillColor)}"""")
+            else sb.append(""" draw:fill="none"""")
+            if (def.strokeColor != null) sb.append(""" draw:stroke="solid" svg:stroke-color="${formatColor(def.strokeColor)}"""")
+            if (def.strokeWidth != null) sb.append(""" svg:stroke-width="${def.strokeWidth / 37.8f}cm"""")
             sb.append("/></style:style>")
         }
         sb.append("</office:automatic-styles>")

@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -1260,7 +1259,8 @@ fun SpreadsheetView(
     onCellSelected: (Int, Int, Int) -> Unit = { _, _, _ -> },
     onFloatingBoundsChange: (Int, Int, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _ -> },
     onFloatingTextChange: (Int, Int, String) -> Unit = { _, _, _ -> },
-    onFloatingDelete: (Int, Int) -> Unit = { _, _ -> }
+    onFloatingDelete: (Int, Int) -> Unit = { _, _ -> },
+    onFloatingCrop: (Int, Int) -> Unit = { _, _ -> }
 ) {
     if (doc.sheets.isEmpty()) { Text("Empty spreadsheet", modifier = Modifier.padding(16.dp)); return }
 
@@ -1272,7 +1272,7 @@ fun SpreadsheetView(
     var renameText by remember { mutableStateOf("") }
     var showSortDialog by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().imePadding()) {
+    Column(modifier = Modifier.fillMaxSize()) {
         if (doc.sheets.size > 1 || isEditMode) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PrimaryScrollableTabRow(selectedTabIndex = selectedSheet, modifier = Modifier.weight(1f)) {
@@ -1391,7 +1391,8 @@ fun SpreadsheetView(
                 onSelect = { selectedFloating = it },
                 onElementTextChange = { ei, t -> onFloatingTextChange(selectedSheet, ei, t) },
                 onBoundsChange = { ei, x, y, w, h -> onFloatingBoundsChange(selectedSheet, ei, x, y, w, h) },
-                onDelete = { ei -> onFloatingDelete(selectedSheet, ei); selectedFloating = -1 }
+                onDelete = { ei -> onFloatingDelete(selectedSheet, ei); selectedFloating = -1 },
+                onCropImage = { ei -> onFloatingCrop(selectedSheet, ei) }
             )
         }
         }
@@ -1432,7 +1433,8 @@ fun PresentationView(
     onDeleteElement: (Int, Int) -> Unit = { _, _ -> },
     selectedElement: Int = -1,
     onSlideChange: (Int) -> Unit = {},
-    onElementSelected: (Int, Int) -> Unit = { _, _ -> }
+    onElementSelected: (Int, Int) -> Unit = { _, _ -> },
+    onCropImage: (Int, Int) -> Unit = { _, _ -> }
 ) {
     if (doc.slides.isEmpty()) { Text("Empty presentation", modifier = Modifier.padding(16.dp)); return }
 
@@ -1443,7 +1445,7 @@ fun PresentationView(
     currentSlide = currentSlide.coerceIn(0, doc.slides.size - 1)
     LaunchedEffect(currentSlide) { onSlideChange(currentSlide); onElementSelected(currentSlide, -1) }
 
-    Column(modifier = Modifier.fillMaxSize().imePadding()) {
+    Column(modifier = Modifier.fillMaxSize()) {
         // Main slide with swipe gesture
         Box(
             modifier = Modifier.weight(1f).pointerInput(doc.slides.size) {
@@ -1466,7 +1468,8 @@ fun PresentationView(
                         onSelect = { onElementSelected(currentSlide, it) },
                         onElementTextChange = { ei, t -> onElementTextChange(currentSlide, ei, t) },
                         onBoundsChange = { ei, x, y, w, h -> onElementBoundsChange(currentSlide, ei, x, y, w, h) },
-                        onDelete = { ei -> onDeleteElement(currentSlide, ei); onElementSelected(currentSlide, -1) }
+                        onDelete = { ei -> onDeleteElement(currentSlide, ei); onElementSelected(currentSlide, -1) },
+                        onCropImage = { ei -> onCropImage(currentSlide, ei) }
                     )
                 }
             }
@@ -1594,13 +1597,14 @@ private fun SlideCard(
     onSelect: (Int) -> Unit = {},
     onElementTextChange: (Int, String) -> Unit = { _, _ -> },
     onBoundsChange: (Int, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
-    onDelete: (Int) -> Unit = {}
+    onDelete: (Int) -> Unit = {},
+    onCropImage: (Int) -> Unit = {}
 ) {
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Text(slide.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         val (refW, refH) = slideBounds(slide)
         Card(modifier = Modifier.fillMaxWidth().aspectRatio((refW / refH).coerceIn(0.5f, 3f)).padding(horizontal = 8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
-            SlideCanvas(slide, refW, refH, editMode, selectedIndex, onSelect, onElementTextChange, onBoundsChange, onDelete)
+            SlideCanvas(slide, refW, refH, editMode, selectedIndex, onSelect, onElementTextChange, onBoundsChange, onDelete, onCropImage)
         }
         if (slide.notes.isNotEmpty()) {
             var expanded by remember { mutableStateOf(false) }
@@ -1635,14 +1639,15 @@ private fun SlideCanvas(
     onSelect: (Int) -> Unit = {},
     onElementTextChange: (Int, String) -> Unit = { _, _ -> },
     onBoundsChange: (Int, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
-    onDelete: (Int) -> Unit = {}
+    onDelete: (Int) -> Unit = {},
+    onCropImage: (Int) -> Unit = {}
 ) {
     FloatingElementLayer(
         elements = slide.elements, refW = refW, refH = refH,
         editMode = editMode, selectedIndex = selectedIndex, keyPrefix = slide.name,
         backgroundColor = slide.backgroundColor,
         onSelect = onSelect, onElementTextChange = onElementTextChange,
-        onBoundsChange = onBoundsChange, onDelete = onDelete
+        onBoundsChange = onBoundsChange, onDelete = onDelete, onCropImage = onCropImage
     )
 }
 
@@ -1664,7 +1669,8 @@ fun FloatingElementLayer(
     onSelect: (Int) -> Unit = {},
     onElementTextChange: (Int, String) -> Unit = { _, _ -> },
     onBoundsChange: (Int, Float, Float, Float, Float) -> Unit = { _, _, _, _, _ -> },
-    onDelete: (Int) -> Unit = {}
+    onDelete: (Int) -> Unit = {},
+    onCropImage: (Int) -> Unit = {}
 ) {
     BoxWithConstraints(
         Modifier.fillMaxSize()
@@ -1738,6 +1744,15 @@ fun FloatingElementLayer(
                         .border(1.dp, MaterialTheme.colorScheme.error, CircleShape)
                         .clickable { onDelete(ei) }, contentAlignment = Alignment.Center) {
                         Icon(painterResource(com.vayunmathur.library.R.drawable.delete_24px), contentDescription = "Delete element", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                    }
+                    // Crop (top start, above the box) — only for image frames.
+                    if (element is OdfSlideElement.Frame && element.frame.image != null) {
+                        Box(Modifier.align(Alignment.TopStart).offset(x = (-12).dp, y = (-24).dp).size(22.dp)
+                            .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.secondary, CircleShape)
+                            .clickable { onCropImage(ei) }, contentAlignment = Alignment.Center) {
+                            Icon(painterResource(com.vayunmathur.library.R.drawable.crop_24px), contentDescription = "Crop image", tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(14.dp))
+                        }
                     }
                 }
             }
