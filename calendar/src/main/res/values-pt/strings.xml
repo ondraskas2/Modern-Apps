@@ -56,4 +56,13 @@
     <string name="delete_calendar_confirm">Tem certeza que deseja apagar este calendário? Irá remover todos os eventos no calendário.</string>
     <string name="delete_calendar_name_confirm">Tem certeza que deseja apagar \"%1$s\"? Irá remover todos os eventos no calendário.</string>
     <string name="open_location_in_navigation">Abrir a localização</string>
+    <string name="delete_this_event">Apagar este evento</string>
+    <string name="delete_all_events">Apagar todos os eventos</string>
+    <string name="week_start_label">Começo semana</string>
+    <string name="new_local_calendar_title">Novo Calendário Local</string>
+    <string name="calendar_name_label">Nome Do Calendário</string>
+    <string name="loading_events">Carregando eventos…</string>
+    <string name="import_events_title">Importar Eventos</string>
+    <string name="create_new_calendar">+ Criar novo calendário</string>
+    <string name="import_button">Importar</string>
 </resources>
