@@ -5,5 +5,4 @@ plugins {
 dependencies {
     implementation(project(":library"))
     implementation(project(":library:network"))
-    api(libs.androidx.work.runtime.ktx)
 }

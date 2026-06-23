@@ -11,4 +11,5 @@ android {
 dependencies {
     implementation(project(":library:ui"))
     implementation(project(":library:downloadservice"))
+    implementation(libs.androidx.work.runtime.ktx)
 }
