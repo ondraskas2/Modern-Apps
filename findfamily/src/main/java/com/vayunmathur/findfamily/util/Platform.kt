@@ -8,6 +8,7 @@ import android.os.Build
 import android.provider.ContactsContract
 import android.provider.ContactsPickerSessionContract
 import android.provider.ContactsPickerSessionContract.EXTRA_PICK_CONTACTS_REQUESTED_DATA_FIELDS
+import android.provider.ContactsPickerSessionContract.EXTRA_PICK_CONTACTS_SELECTION_LIMIT
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,7 +38,7 @@ class Platform(private val context: Context) {
                         val name: String,
                         val photos: List<String>
                     )
-                    // Process the result URI in a background thread to fetch all selected contacts
+                    // Process the result URI in a background thread to fetch the single selected contact
                     coroutine.launch {
                         val projection = arrayOf(
                             ContactsContract.Contacts.LOOKUP_KEY,
@@ -99,12 +100,13 @@ class Platform(private val context: Context) {
                     ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE,
                 )
 
-                // Set up the intent for the Contact Picker
+                // Set up the intent for the Contact Picker, limited to a single contact
                 val pickContactIntent = Intent(ContactsPickerSessionContract.ACTION_PICK_CONTACTS).apply {
                     putStringArrayListExtra(
                         EXTRA_PICK_CONTACTS_REQUESTED_DATA_FIELDS,
                         requestedFields
                     )
+                    putExtra(EXTRA_PICK_CONTACTS_SELECTION_LIMIT, 1)
                 }
 
                 // Launch the picker
