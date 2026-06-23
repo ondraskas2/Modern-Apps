@@ -60,6 +60,7 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
             _allItems.value = Alchemist.items
             _recipes.value = Alchemist.recipes
             seedInitialItemsIfEmpty()
+            backfillLegacyRecipes()
         }
     }
 
@@ -68,6 +69,38 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
         if (initial.isEmpty()) {
             (1L..4L).forEach { ds.addStringToSet("available_items", it.toString()) }
         }
+    }
+
+    /**
+     * One-time migration for users who unlocked items before recipe logging existed.
+     * For every unlocked element that has no logged recipe creating it, add every recipe
+     * that creates it whose inputs are themselves only such pre-existing elements
+     * (unlocked with no logged recipe creating them).
+     */
+    private suspend fun backfillLegacyRecipes() {
+        if (ds.getBoolean("recipes_backfilled", false)) return
+
+        val unlocked = ds.stringSetFlow("available_items").first()
+            .mapNotNull { it.toLongOrNull() }.toSet()
+        val usedKeys = ds.stringSetFlow("used_recipes").first()
+        val allRecipes = _recipes.value
+
+        // Elements that already have a logged recipe creating them.
+        val createdByLog = allRecipes
+            .filter { recipeKey(it) in usedKeys }
+            .flatMap { it.outputs }
+            .toSet()
+
+        // "Pre-existing" elements: unlocked but not created by any logged recipe.
+        val legacy = unlocked - createdByLog
+
+        allRecipes.forEach { recipe ->
+            if (recipe.outputs.any { it in legacy } && recipe.inputs.all { it in legacy }) {
+                ds.addStringToSet("used_recipes", recipeKey(recipe))
+            }
+        }
+
+        ds.setBoolean("recipes_backfilled", true)
     }
 
     fun unlockItem(id: Long) {
@@ -162,8 +195,25 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
                 if (items.any { it.id == 44L }) {
                     achievementsManager.onAchievementUnlocked("created_life")
                 }
+
+                // Auto-unlock Time once enough items have been discovered. This reacts to
+                // both app open (initial emission) and newly created elements.
+                if (items.size >= TIME_UNLOCK_THRESHOLD && TIME_ID !in itemIds.value) {
+                    _allItems.value.find { it.id == TIME_ID }?.let { timeItem ->
+                        unlockItem(TIME_ID)
+                        _newUnlocksEvent.tryEmit(listOf(timeItem))
+                    }
+                }
+                if (items.any { it.id == TIME_ID }) {
+                    achievementsManager.onAchievementUnlocked("unlocked_time")
+                }
             }
         }
+    }
+
+    companion object {
+        private const val TIME_ID = 41L
+        private const val TIME_UNLOCK_THRESHOLD = 100
     }
 }
 

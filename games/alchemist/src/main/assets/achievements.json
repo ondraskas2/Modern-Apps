@@ -31,5 +31,11 @@
     "id": "created_life",
     "name": "It's Alive!",
     "description": "Create Life."
+  },
+  {
+    "id": "unlocked_time",
+    "name": "The Fourth Dimension",
+    "description": "Unlock Time.",
+    "isSecret": true
   }
 ]
