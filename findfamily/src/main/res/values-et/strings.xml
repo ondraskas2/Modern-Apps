@@ -97,4 +97,11 @@
     <string name="uwb_status_unsupported">Otsi lähedalt (UWB) pole selles seadmes toetatud.</string>
     <string name="uwb_status_failed">Lähikonnast otsimine (UWB) ei toiminud.</string>
     <string name="uwb_direction_unavailable_hint">Suunasignaali tuvastamiseks liiguta oma telefoni ringi</string>
+    <string name="share_your_location">Jaga oma asukohta selle isikuga</string>
+    <string name="permission_upgrade_dialog_dismiss">Mitte praegu</string>
+    <string name="permission_upgrade_dialog_confirm">Luba täpse asukoha kasutamist</string>
+    <string name="permission_upgrade_dialog_message">FindFamily vajab sinu asukoha näitamiseks täpse asukoha tuvastamist. Palun luba seadistustes vastavad õigused.</string>
+    <string name="permission_upgrade_dialog_title">Täpse asukoha tuvastamine on vajalik</string>
+    <string name="permission_reopen_upgrade_prompt">Muud asukohatuvastuse tüüpi</string>
+    <string name="permission_approximate_only_explanation">FindFamily toimib vaid siis, kui kasutusel on täpse asukoha tuvastamine. Jätkamiseks palun luba seadistustes vastavad õigused.</string>
 </resources>
