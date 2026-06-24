@@ -9,10 +9,11 @@ import java.util.zip.ZipOutputStream
 
 object OdfWriter {
 
-    fun save(context: Context, sourceUri: Uri, document: OdfDocument, targetUri: Uri) {
+    fun save(context: Context, sourceUri: Uri?, document: OdfDocument, targetUri: Uri) {
         val result = OdfSerializer.serializePackaged(document)
         val contentXml = result.contentXml
         val metaXml = OdfSerializer.serializeMeta(document.metadata)
+        val settingsXml = OdfSerializer.serializeSettings(document)
         val docImages = imagesOf(document)
         val written = mutableSetOf<String>()
         // Media types for generated package parts (embedded chart objects, inline images).
@@ -20,33 +21,62 @@ object OdfWriter {
 
         val buffer = ByteArrayOutputStream()
         ZipOutputStream(buffer).use { zipOut ->
-            context.contentResolver.openInputStream(sourceUri)?.use { input ->
-                ZipInputStream(input).use { zipIn ->
-                    var entry = zipIn.nextEntry
-                    while (entry != null) {
-                        val name = entry.name
-                        when {
-                            name == "content.xml" -> {
-                                writeEntry(zipOut, "content.xml", contentXml.toByteArray(Charsets.UTF_8)); written.add(name)
+            val source = if (sourceUri != null) context.contentResolver.openInputStream(sourceUri) else null
+            if (source != null) {
+                source.use { input ->
+                    ZipInputStream(input).use { zipIn ->
+                        var entry = zipIn.nextEntry
+                        while (entry != null) {
+                            val name = entry.name
+                            when {
+                                name == "content.xml" -> {
+                                    writeEntry(zipOut, "content.xml", contentXml.toByteArray(Charsets.UTF_8)); written.add(name)
+                                }
+                                name == "meta.xml" -> {
+                                    writeEntry(zipOut, "meta.xml", metaXml.toByteArray(Charsets.UTF_8)); written.add(name)
+                                }
+                                // When we have generated freeze-pane settings, replace; otherwise copy source as-is. (C2)
+                                name == "settings.xml" -> if (settingsXml != null) {
+                                    writeEntry(zipOut, "settings.xml", settingsXml.toByteArray(Charsets.UTF_8)); written.add(name)
+                                } else {
+                                    zipOut.putNextEntry(ZipEntry(name)); zipIn.copyTo(zipOut); zipOut.closeEntry(); written.add(name)
+                                }
+                                // Regenerated below; never copy the old manifest.
+                                name == "META-INF/manifest.xml" -> {}
+                                // Patch page geometry into the copied styles.xml so Page Setup edits persist. (Priority 7)
+                                name == "styles.xml" -> {
+                                    val ps = (document as? OdfDocument.TextDocument)?.pageSetup
+                                    val original = zipIn.readBytes().toString(Charsets.UTF_8)
+                                    val out = if (ps != null) patchStylesXml(original, ps) else original
+                                    writeEntry(zipOut, "styles.xml", out.toByteArray(Charsets.UTF_8)); written.add(name)
+                                }
+                                !entry.isDirectory -> {
+                                    zipOut.putNextEntry(ZipEntry(name)); zipIn.copyTo(zipOut); zipOut.closeEntry(); written.add(name)
+                                }
                             }
-                            name == "meta.xml" -> {
-                                writeEntry(zipOut, "meta.xml", metaXml.toByteArray(Charsets.UTF_8)); written.add(name)
-                            }
-                            // Regenerated below; never copy the old manifest.
-                            name == "META-INF/manifest.xml" -> {}
-                            !entry.isDirectory -> {
-                                zipOut.putNextEntry(ZipEntry(name)); zipIn.copyTo(zipOut); zipOut.closeEntry(); written.add(name)
-                            }
+                            entry = zipIn.nextEntry
                         }
-                        entry = zipIn.nextEntry
                     }
                 }
+            } else {
+                // Brand-new document with no source package: write the special mimetype entry first,
+                // uncompressed, as required by ODF. (Priority 1: enable saving new documents)
+                writeStored(zipOut, "mimetype", documentMime(document).toByteArray(Charsets.US_ASCII))
+                written.add("mimetype")
             }
             if ("content.xml" !in written) {
                 writeEntry(zipOut, "content.xml", contentXml.toByteArray(Charsets.UTF_8)); written.add("content.xml")
             }
             if ("meta.xml" !in written) {
                 writeEntry(zipOut, "meta.xml", metaXml.toByteArray(Charsets.UTF_8)); written.add("meta.xml")
+            }
+            // Minimal styles.xml when the package didn't already carry one. (Priority 1)
+            if ("styles.xml" !in written) {
+                writeEntry(zipOut, "styles.xml", OdfSerializer.serializeStyles(document).toByteArray(Charsets.UTF_8)); written.add("styles.xml")
+            }
+            // Freeze-pane settings for a source that had no settings.xml. (C2)
+            if (settingsXml != null && "settings.xml" !in written) {
+                writeEntry(zipOut, "settings.xml", settingsXml.toByteArray(Charsets.UTF_8)); written.add("settings.xml")
             }
             // Document images (inserted via the editor) not already in the package. (A6)
             for ((path, bytes) in docImages) {
@@ -78,6 +108,40 @@ object OdfWriter {
         zipOut.putNextEntry(ZipEntry(name))
         zipOut.write(bytes)
         zipOut.closeEntry()
+    }
+
+    /** Writes an uncompressed (STORED) zip entry — required for the ODF `mimetype` member. */
+    private fun writeStored(zipOut: ZipOutputStream, name: String, bytes: ByteArray) {
+        val entry = ZipEntry(name)
+        entry.method = ZipEntry.STORED
+        entry.size = bytes.size.toLong()
+        entry.compressedSize = bytes.size.toLong()
+        val crc = java.util.zip.CRC32(); crc.update(bytes); entry.crc = crc.value
+        zipOut.putNextEntry(entry)
+        zipOut.write(bytes)
+        zipOut.closeEntry()
+    }
+
+    /** Patches page geometry attributes into the first style:page-layout-properties of styles.xml. (Priority 7) */
+    private fun patchStylesXml(xml: String, ps: OdfPageSetup): String {
+        val m = Regex("<style:page-layout-properties\\b[^>]*?(/?)>").find(xml) ?: return xml
+        var tag = m.value
+        fun cm(px: Float): String = String.format(java.util.Locale.US, "%.4fcm", px / 37.795f)
+        fun setAttr(name: String, value: String) {
+            val attr = "$name=\"$value\""
+            val r = Regex(Regex.escape(name) + "=\"[^\"]*\"")
+            tag = if (r.containsMatchIn(tag)) r.replace(tag) { attr }
+            else if (tag.endsWith("/>")) tag.dropLast(2) + " $attr/>"
+            else tag.dropLast(1) + " $attr>"
+        }
+        setAttr("fo:page-width", cm(ps.widthPx))
+        setAttr("fo:page-height", cm(ps.heightPx))
+        setAttr("fo:margin-left", cm(ps.marginLeftPx))
+        setAttr("fo:margin-right", cm(ps.marginRightPx))
+        setAttr("fo:margin-top", cm(ps.marginTopPx))
+        setAttr("fo:margin-bottom", cm(ps.marginBottomPx))
+        setAttr("style:print-orientation", if (ps.isLandscape) "landscape" else "portrait")
+        return xml.replaceRange(m.range, tag)
     }
 
     /** Rebuilds META-INF/manifest.xml from the final package contents so new images/objects are declared. (A6/A8) */
@@ -134,7 +198,7 @@ object OdfWriter {
         is OdfDocument.Drawing -> document.images
     }
 
-    fun saveAs(context: Context, sourceUri: Uri, document: OdfDocument, targetUri: Uri) {
+    fun saveAs(context: Context, sourceUri: Uri?, document: OdfDocument, targetUri: Uri) {
         save(context, sourceUri, document, targetUri)
     }
 }

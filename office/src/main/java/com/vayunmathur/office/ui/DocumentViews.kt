@@ -51,6 +51,8 @@ import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -66,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -73,6 +76,8 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
@@ -565,7 +570,20 @@ fun TextDocumentView(
                     is OdfContentBlock.PageBreak -> PageBreakView()
                     is OdfContentBlock.Chart -> OdfChartView(block.chart, onClick = { onChartClick(seg.index) })
                     is OdfContentBlock.Formula -> MathView(block.mathml)
+                    is OdfContentBlock.TableOfContents -> {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Text(block.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            for (entry in block.entries) {
+                                Text(
+                                    entry.spans.joinToString("") { it.text },
+                                    modifier = Modifier.padding(start = entry.marginLeft.dp),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
                     is OdfContentBlock.Paragraph -> {}
+                    is OdfContentBlock.SectionStart, OdfContentBlock.SectionEnd -> {}
                 }
             }
         }
@@ -601,14 +619,57 @@ private fun headingSizeSp(style: ParagraphStyle): Float? = when (style) {
 
 /** Visible list prefix (indent + bullet/number) for a paragraph. (A1/F42) */
 fun listPrefixFor(para: OdfParagraph): String {
+    // Headings: show automatic outline numbering if present, else no generic prefix. (bugfix + Round 3)
+    if (para.style == ParagraphStyle.HEADING1 || para.style == ParagraphStyle.HEADING2 ||
+        para.style == ParagraphStyle.HEADING3 || para.style == ParagraphStyle.HEADING4) {
+        return para.outlineNumber?.let { "$it " } ?: ""
+    }
     if (para.listLevel <= 0 && para.style != ParagraphStyle.LIST_ITEM) return ""
     val level = maxOf(para.listLevel, 1)
     val indent = "    ".repeat(level - 1)
     return if (para.listType == ListType.NUMBERED) {
         indent + para.listNumberPrefix + formatListNumber(para.listItemIndex, para.listNumberFormat) + para.listNumberSuffix + "  "
     } else {
-        indent + para.listBulletChar + "  "
+        indent + sanitizeBulletChar(para.listBulletChar) + "  "
     }
+}
+
+/**
+ * Maps a list bullet glyph to something the app font can actually render. ODF list styles often
+ * specify bullets from a symbol font's Private Use Area (StarSymbol/OpenSymbol/Wingdings), which
+ * show as a "notdef" tofu box; fall back to a standard bullet for those. (bugfix)
+ */
+private fun sanitizeBulletChar(ch: String): String {
+    if (ch.isBlank()) return "\u2022"
+    val c = ch[0]
+    return when {
+        c.code in 0xE000..0xF8FF -> "\u2022"   // Private Use Area (symbol fonts)
+        c == '\uFFFD' -> "\u2022"              // replacement char
+        c.isISOControl() -> "\u2022"
+        else -> ch
+    }
+}
+
+/** Evaluates a cell's conditional-format rules against its value, returning the first match. (Round 3) */
+private fun evalCondFormat(rules: List<com.vayunmathur.office.odf.OdfCondFormat>, numeric: Double?, text: String): com.vayunmathur.office.odf.OdfCondFormat? {
+    val re = Regex("(value\\(\\)|cell-content\\(\\))\\s*(<=|>=|<>|=|<|>)\\s*(.+)")
+    for (rule in rules) {
+        val m = re.find(rule.condition.trim()) ?: continue
+        val op = m.groupValues[2]
+        val rhs = m.groupValues[3].trim()
+        val matched = if (rhs.startsWith("\"")) {
+            val rstr = rhs.trim('"')
+            when (op) { "=" -> text == rstr; "<>" -> text != rstr; else -> false }
+        } else {
+            val rhsNum = rhs.toDoubleOrNull()
+            if (numeric != null && rhsNum != null) when (op) {
+                "<" -> numeric < rhsNum; "<=" -> numeric <= rhsNum; ">" -> numeric > rhsNum
+                ">=" -> numeric >= rhsNum; "=" -> numeric == rhsNum; "<>" -> numeric != rhsNum; else -> false
+            } else false
+        }
+        if (matched) return rule
+    }
+    return null
 }
 
 /** OffsetMapping for list prefixes injected at the start of each paragraph in a run. (A1) */
@@ -726,14 +787,18 @@ private fun buildDocTransformed(
                     val decorations = mutableListOf<TextDecoration>()
                     if (span.underline) decorations.add(TextDecoration.Underline)
                     if (span.strikethrough) decorations.add(TextDecoration.LineThrough)
+                    if (span.changeKind == "insertion") decorations.add(TextDecoration.Underline)
+                    if (span.changeKind == "deletion") decorations.add(TextDecoration.LineThrough)
+                    val changeColor = when (span.changeKind) { "insertion" -> Color(0xFF1B7F3B); "deletion" -> Color(0xFFC62828); else -> null }
                     addStyle(
                         SpanStyle(
                             fontWeight = if (span.bold) FontWeight.Bold else null,
                             fontStyle = if (span.italic) FontStyle.Italic else null,
                             fontSize = span.fontSize?.let { (it * mult).sp } ?: TextUnit.Unspecified,
                             textDecoration = if (decorations.isNotEmpty()) TextDecoration.combine(decorations) else null,
-                            color = span.color?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                            color = changeColor ?: span.color?.let { Color(it.toInt()) } ?: Color.Unspecified,
                             background = span.backgroundColor?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                            letterSpacing = span.letterSpacing?.sp ?: TextUnit.Unspecified,
                             baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null }
                         ), off, segEnd
                     )
@@ -797,8 +862,15 @@ fun ParagraphView(paragraph: OdfParagraph, searchQuery: String = "", fontSizeMul
                 textDecoration = if (decorations.isNotEmpty()) TextDecoration.combine(decorations) else null,
                 color = spanTextColor,
                 background = span.backgroundColor?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                letterSpacing = span.letterSpacing?.sp ?: TextUnit.Unspecified,
                 baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null }
             )
+            val shownText = when (span.textTransform) {
+                "uppercase" -> span.text.uppercase()
+                "lowercase" -> span.text.lowercase()
+                "capitalize" -> span.text.split(" ").joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
+                else -> span.text
+            }
             if (searchQuery.isNotEmpty() && span.text.contains(searchQuery, ignoreCase = true)) {
                 var remaining = span.text
                 while (remaining.isNotEmpty()) {
@@ -808,7 +880,7 @@ fun ParagraphView(paragraph: OdfParagraph, searchQuery: String = "", fontSizeMul
                     withStyle(spanStyle.copy(background = highlightColor)) { append(remaining.substring(idx, idx + searchQuery.length)) }
                     remaining = remaining.substring(idx + searchQuery.length)
                 }
-            } else linkOrPlain(span, spanStyle, span.text)
+            } else linkOrPlain(span, spanStyle, shownText)
         }
     }
 
@@ -885,7 +957,13 @@ private fun FullScreenImage(image: OdfImage, onCrop: (() -> Unit)? = null, onDis
 
 /** Non-destructive crop editor: adjust four insets with a live preview. (Phase 5) */
 @Composable
-fun ImageCropDialog(image: OdfImage, onApply: (Float, Float, Float, Float) -> Unit, onDismiss: () -> Unit) {
+fun ImageCropDialog(
+    image: OdfImage,
+    onApply: (Float, Float, Float, Float) -> Unit,
+    onDismiss: () -> Unit,
+    onRotate: () -> Unit = {},
+    onReplace: () -> Unit = {}
+) {
     var left by remember { mutableFloatStateOf(image.cropLeftPct) }
     var top by remember { mutableFloatStateOf(image.cropTopPct) }
     var right by remember { mutableFloatStateOf(image.cropRightPct) }
@@ -893,11 +971,15 @@ fun ImageCropDialog(image: OdfImage, onApply: (Float, Float, Float, Float) -> Un
     val preview = image.copy(cropLeftPct = left, cropTopPct = top, cropRightPct = right, cropBottomPct = bottom, width = 0f, height = 0f)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Crop Image") },
+        title = { Text("Edit Image") },
         text = {
             Column {
                 Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) { OdfImageView(preview) }
                 Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { onRotate() }) { Text("Rotate 90°") }
+                    TextButton(onClick = { onReplace(); onDismiss() }) { Text("Replace…") }
+                }
                 CropSlider("Left", left) { left = it }
                 CropSlider("Top", top) { top = it }
                 CropSlider("Right", right) { right = it }
@@ -1260,13 +1342,16 @@ fun SpreadsheetView(
     onFloatingBoundsChange: (Int, Int, Float, Float, Float, Float) -> Unit = { _, _, _, _, _, _ -> },
     onFloatingTextChange: (Int, Int, String) -> Unit = { _, _, _ -> },
     onFloatingDelete: (Int, Int) -> Unit = { _, _ -> },
-    onFloatingCrop: (Int, Int) -> Unit = { _, _ -> }
+    onFloatingCrop: (Int, Int) -> Unit = { _, _ -> },
+    onSetFreeze: (Int, Int, Int) -> Unit = { _, _, _ -> }
 ) {
     if (doc.sheets.isEmpty()) { Text("Empty spreadsheet", modifier = Modifier.padding(16.dp)); return }
 
     var selectedSheet by remember { mutableIntStateOf(0) }
     var selectedFloating by remember { mutableIntStateOf(-1) }
     var editingCell by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+    var dropdownCell by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+    val validationsByName = remember(doc) { doc.validations.associateBy { it.name } }
     var editText by remember { mutableStateOf(TextFieldValue("")) }
     var showRenameSheet by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
@@ -1326,12 +1411,27 @@ fun SpreadsheetView(
                     TextButton(onClick = { onDeleteColumn(selectedSheet, editingCell!!.third); editingCell = null }) { Text("- Col") }
                 }
                 TextButton(onClick = { showSortDialog = true }) { Text("Sort") }
+                run {
+                    val sheet0 = doc.sheets[selectedSheet]
+                    val frozen = sheet0.freezeRows > 0 || sheet0.freezeCols > 0
+                    if (frozen) {
+                        TextButton(onClick = { onSetFreeze(selectedSheet, 0, 0) }) { Text("Unfreeze") }
+                    } else {
+                        TextButton(onClick = {
+                            // Freeze rows above and columns left of the active/editing cell (default: header row).
+                            val r = editingCell?.second ?: 1
+                            val c = editingCell?.third ?: 0
+                            onSetFreeze(selectedSheet, r, c)
+                        }) { Text("Freeze") }
+                    }
+                }
                 Spacer(Modifier.weight(1f))
                 if (doc.sheets.size > 1) TextButton(onClick = { onDeleteSheet(selectedSheet); if (selectedSheet >= doc.sheets.size - 1) selectedSheet = maxOf(0, doc.sheets.size - 2) }) { Text("- Sheet", color = MaterialTheme.colorScheme.error) }
             }
         }
 
         val sheet = doc.sheets[selectedSheet]
+        val workbook = remember(doc) { doc.sheets.associateBy { it.name } }
         val maxCols = sheet.rows.maxOfOrNull { it.cells.count { c -> !c.isCovered } } ?: 0
         fun colWidthDp(start: Int, span: Int): androidx.compose.ui.unit.Dp {
             var w = 0f
@@ -1366,26 +1466,63 @@ fun SpreadsheetView(
                                     Box(Modifier.defaultMinSize(minWidth = 40.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant).border(0.5.dp, MaterialTheme.colorScheme.outline).padding(4.dp), contentAlignment = Alignment.Center) {
                                         Text("${rowIdx + 1}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                                     }
+                                    var colspanSkip = 0
                                     for ((cellIdx, cell) in row.cells.withIndex()) {
-                                        if (cell.isCovered) continue
+                                        if (cell.isCovered) {
+                                            // Covered by a horizontal merge to its left: consume silently.
+                                            if (colspanSkip > 0) { colspanSkip--; continue }
+                                            // Covered by a vertical (row) merge from above: render an empty
+                                            // aligned placeholder so columns don't shift. (Tier 0 bugfix)
+                                            Box(Modifier.width(colWidthDp(cellIdx, 1)).fillMaxHeight()
+                                                .border(0.5.dp, MaterialTheme.colorScheme.outline)) {}
+                                            continue
+                                        }
+                                        colspanSkip = if (cell.spannedColumns > 1) cell.spannedColumns - 1 else 0
                                         val isEditing = editingCell?.let { it.first == selectedSheet && it.second == rowIdx && it.third == cellIdx } == true
                                         val isMatch = searchQuery.isNotEmpty() && cell.text.contains(searchQuery, ignoreCase = true)
+                                        val displayText = OdfFormulaEngine.displayValue(sheet, rowIdx, cellIdx, workbook, sheet.name)
+                                        val cf = if (cell.condFormats.isEmpty()) null else evalCondFormat(cell.condFormats, cell.numberValue ?: displayText.toDoubleOrNull(), displayText)
+                                        val effBg = cf?.backgroundColor ?: cell.backgroundColor
                                         Box(
                                             Modifier.width(colWidthDp(cellIdx, cell.spannedColumns))
                                                 .fillMaxHeight()
                                                 .border(if (isEditing) 2.dp else 0.5.dp, if (isEditing) MaterialTheme.colorScheme.primary else (cell.borderColor?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.outline))
-                                                .then(if (isMatch) Modifier.background(Color(0xFFFFEB3B).copy(alpha = 0.3f)) else cell.backgroundColor?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
+                                                .then(if (!isEditing && cell.borders?.isEmpty() == false) Modifier.drawBehind {
+                                                    val sw = 1.5.dp.toPx()
+                                                    OdfBorders.renderColor(cell.borders!!.top)?.let { drawLine(Color(it.toInt()), Offset(0f, 0f), Offset(size.width, 0f), sw) }
+                                                    OdfBorders.renderColor(cell.borders!!.bottom)?.let { drawLine(Color(it.toInt()), Offset(0f, size.height), Offset(size.width, size.height), sw) }
+                                                    OdfBorders.renderColor(cell.borders!!.left)?.let { drawLine(Color(it.toInt()), Offset(0f, 0f), Offset(0f, size.height), sw) }
+                                                    OdfBorders.renderColor(cell.borders!!.right)?.let { drawLine(Color(it.toInt()), Offset(size.width, 0f), Offset(size.width, size.height), sw) }
+                                                } else Modifier)
+                                                .then(if (isMatch) Modifier.background(Color(0xFFFFEB3B).copy(alpha = 0.3f)) else effBg?.let { Modifier.background(Color(it.toInt())) } ?: Modifier)
                                                 .then(if (isEditMode) Modifier.clickable { editingCell = Triple(selectedSheet, rowIdx, cellIdx); selectedFloating = -1; onCellSelected(selectedSheet, rowIdx, cellIdx); val t = cell.formula ?: cell.text; editText = TextFieldValue(t, TextRange(0, t.length)) } else Modifier)
+                                                .then(if (cell.annotation != null) Modifier.drawBehind {
+                                                    // Red corner triangle marks a cell comment. (Round 3)
+                                                    val s = 7.dp.toPx()
+                                                    drawPath(androidx.compose.ui.graphics.Path().apply {
+                                                        moveTo(size.width - s, 0f); lineTo(size.width, 0f); lineTo(size.width, s); close()
+                                                    }, Color(0xFFD32F2F))
+                                                } else Modifier)
                                                 .padding(8.dp, 4.dp)
                                         ) {
-                                            val displayText = OdfFormulaEngine.displayValue(sheet, rowIdx, cellIdx)
-                                            val cellAlign = cell.alignment ?: if (OdfFormulaEngine.isNumeric(sheet, rowIdx, cellIdx)) TextAlign.End else null
+                                            val cellAlign = cell.alignment ?: if (OdfFormulaEngine.isNumeric(sheet, rowIdx, cellIdx, workbook, sheet.name)) TextAlign.End else null
                                             Text(displayText,
                                                 style = MaterialTheme.typography.bodyMedium.let { if (fontSizeMultiplier != 1f && it.fontSize != TextUnit.Unspecified) it.copy(fontSize = it.fontSize * fontSizeMultiplier) else it },
                                                 fontWeight = if (cell.bold) FontWeight.Bold else null,
                                                 fontStyle = if (cell.italic) FontStyle.Italic else null,
-                                                color = cell.textColor?.let { Color(it.toInt()) } ?: Color.Unspecified,
+                                                color = (cf?.textColor ?: cell.textColor)?.let { Color(it.toInt()) } ?: Color.Unspecified,
                                                 textAlign = cellAlign, maxLines = if (cell.wrap) Int.MAX_VALUE else 3)
+                                            // Data-validation list dropdown (Round 3).
+                                            val listVals = cell.validationName?.let { validationsByName[it]?.listValues() }
+                                            if (listVals != null && isEditMode) {
+                                                val here = Triple(selectedSheet, rowIdx, cellIdx)
+                                                Box(Modifier.align(Alignment.CenterEnd)) {
+                                                    Text("▾", Modifier.clickable { dropdownCell = here }, fontWeight = FontWeight.Bold)
+                                                    DropdownMenu(expanded = dropdownCell == here, onDismissRequest = { if (dropdownCell == here) dropdownCell = null }) {
+                                                        for (opt in listVals) DropdownMenuItem(text = { Text(opt) }, onClick = { onCellTextChange(selectedSheet, rowIdx, cellIdx, opt); dropdownCell = null })
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1615,8 +1752,18 @@ private fun SlideCard(
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Text(slide.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         val (refW, refH) = slideBounds(slide)
-        Card(modifier = Modifier.fillMaxWidth().aspectRatio((refW / refH).coerceIn(0.5f, 3f)).padding(horizontal = 8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
-            SlideCanvas(slide, refW, refH, editMode, selectedIndex, onSelect, onElementTextChange, onBoundsChange, onDelete, onCropImage)
+        val ratio = (refW / refH).coerceIn(0.5f, 3f)
+        if (editMode) {
+            // Edit mode: render the canvas in a non-clipping Box so selection handles that sit at
+            // negative offsets near the slide edges aren't cut off by the Card's clip. (C1)
+            Box(Modifier.fillMaxWidth().aspectRatio(ratio).padding(horizontal = 8.dp)) {
+                Surface(Modifier.matchParentSize(), shape = RoundedCornerShape(4.dp), shadowElevation = 2.dp, color = MaterialTheme.colorScheme.surface) {}
+                SlideCanvas(slide, refW, refH, true, selectedIndex, onSelect, onElementTextChange, onBoundsChange, onDelete, onCropImage)
+            }
+        } else {
+            Card(modifier = Modifier.fillMaxWidth().aspectRatio(ratio).padding(horizontal = 8.dp), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
+                SlideCanvas(slide, refW, refH, false, selectedIndex, onSelect, onElementTextChange, onBoundsChange, onDelete, onCropImage)
+            }
         }
         if (slide.notes.isNotEmpty()) {
             var expanded by remember { mutableStateOf(false) }
@@ -1711,10 +1858,25 @@ fun FloatingElementLayer(
             var base = Modifier.offset(x = scaleW * b[0], y = scaleH * b[1]).width(boxW)
             base = if (fixedHeight) base.height(boxH) else base
             Box(base) {
+                fun startBounds0() = live ?: element.bounds()
+                // Body drag-to-move for selected non-text elements (shapes, image/chart frames). (C1)
+                val canBodyDrag = isSel && (element is OdfSlideElement.Shape ||
+                    (element is OdfSlideElement.Frame && (element.frame.image != null || element.frame.chart != null)))
                 Box(
                     Modifier.fillMaxSize()
                         .then(if (editMode && !isSel) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant) else Modifier)
                         .then(if (editMode && !isSel) Modifier.pointerInput(ei) { detectTapGestures { onSelect(ei) } } else Modifier)
+                        .then(if (canBodyDrag) Modifier.pointerInput(ei, selectedIndex) {
+                            detectDragGestures(
+                                onDragStart = { live = element.bounds() },
+                                onDragEnd = { live?.let { onBoundsChange(ei, it[0], it[1], it[2], it[3]) }; live = null },
+                                onDragCancel = { live = null }
+                            ) { change, drag ->
+                                change.consume()
+                                val c = startBounds0()
+                                live = floatArrayOf(c[0] + drag.x / pxPerModelW, c[1] + drag.y / pxPerModelH, c[2], c[3])
+                            }
+                        } else Modifier)
                 ) {
                     when (element) {
                         is OdfSlideElement.Frame -> PositionedFrame(element.frame, fontScale, isSel, "$keyPrefix#$ei") { onElementTextChange(ei, it) }
@@ -1832,13 +1994,35 @@ private fun PositionedShape(shape: OdfShape, fontScale: Float, editing: Boolean 
     val fillColor = shape.fillColor?.let { Color(it.toInt()) } ?: Color.Transparent
     val strokeColor = shape.strokeColor?.let { Color(it.toInt()) } ?: MaterialTheme.colorScheme.outline
     val strokeW = shape.strokeWidth ?: 1f
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().then(if (shape.rotationDegrees != 0f) Modifier.rotate(shape.rotationDegrees) else Modifier)) {
         Canvas(Modifier.fillMaxSize()) {
+            val grad = shape.fillGradient
+            val fillBrush: Brush? = grad?.let { g ->
+                val rad = Math.toRadians(g.angle.toDouble())
+                val ex = Math.cos(rad).toFloat(); val ey = Math.sin(rad).toFloat()
+                Brush.linearGradient(
+                    listOf(Color(g.startColor.toInt()), Color(g.endColor.toInt())),
+                    start = Offset(0f, 0f),
+                    end = Offset(if (ex == 0f && ey == 0f) size.width else size.width * ex, size.height * ey)
+                )
+            }
             when (shape) {
-                is OdfShape.Rect -> { drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
-                is OdfShape.Ellipse -> { drawOval(fillColor); drawOval(strokeColor, style = Stroke(strokeW)) }
+                is OdfShape.Rect -> { if (fillBrush != null) drawRect(fillBrush) else drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
+                is OdfShape.Ellipse -> { if (fillBrush != null) drawOval(fillBrush) else drawOval(fillColor); drawOval(strokeColor, style = Stroke(strokeW)) }
                 is OdfShape.Line -> drawLine(strokeColor, Offset.Zero, Offset(size.width, size.height), strokeW)
-                is OdfShape.CustomShape -> { drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
+                is OdfShape.CustomShape -> { if (fillBrush != null) drawRect(fillBrush) else drawRect(fillColor); drawRect(strokeColor, style = Stroke(strokeW)) }
+                is OdfShape.Polyline -> {
+                    if (shape.points.size >= 2) {
+                        val path = androidx.compose.ui.graphics.Path()
+                        shape.points.forEachIndexed { i, (px, py) ->
+                            val fx = if (shape.width != 0f) (px - shape.x) / shape.width * size.width else 0f
+                            val fy = if (shape.height != 0f) (py - shape.y) / shape.height * size.height else 0f
+                            if (i == 0) path.moveTo(fx, fy) else path.lineTo(fx, fy)
+                        }
+                        if (shape.closed) { path.close(); drawPath(path, fillColor) }
+                        drawPath(path, strokeColor, style = Stroke(strokeW))
+                    }
+                }
             }
         }
         if (editing && shape !is OdfShape.Line) {

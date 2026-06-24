@@ -64,11 +64,91 @@ object OdfSerializer {
         return s
     }
 
+    /** Minimal valid styles.xml for packages that don't already carry one (new documents). (Priority 1) */
+    fun serializeStyles(document: OdfDocument): String {
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
+        sb.append("""<office:document-styles""")
+        sb.append(""" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"""")
+        sb.append(""" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"""")
+        sb.append(""" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"""")
+        sb.append(""" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"""")
+        sb.append(""" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"""")
+        sb.append(""" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"""")
+        sb.append(""" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"""")
+        sb.append(""" office:version="1.3">""")
+        // Font declarations referenced by the default + named styles. (Round 2 R10)
+        sb.append("<office:font-face-decls>")
+        sb.append("""<style:font-face style:name="Liberation Serif" svg:font-family="&apos;Liberation Serif&apos;" style:font-family-generic="roman" style:font-pitch="variable"/>""")
+        sb.append("""<style:font-face style:name="Liberation Sans" svg:font-family="&apos;Liberation Sans&apos;" style:font-family-generic="swiss" style:font-pitch="variable"/>""")
+        sb.append("</office:font-face-decls>")
+        // Common named/default styles so a brand-new document opens with proper paragraph/heading
+        // styles in LibreOffice rather than only ad-hoc automatic styles. (Round 2 R10)
+        sb.append("<office:styles>")
+        sb.append("""<style:default-style style:family="paragraph"><style:paragraph-properties fo:hyphenation-ladder-count="no-limit"/><style:text-properties style:font-name="Liberation Serif" fo:font-size="12pt" fo:language="en" fo:country="US"/></style:default-style>""")
+        sb.append("""<style:style style:name="Standard" style:family="paragraph" style:class="text"/>""")
+        sb.append("""<style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard" style:class="text"><style:paragraph-properties fo:margin-top="0cm" fo:margin-bottom="0.247cm"/></style:style>""")
+        sb.append("""<style:style style:name="Heading" style:family="paragraph" style:parent-style-name="Standard" style:next-style-name="Text_20_body" style:class="text"><style:paragraph-properties fo:margin-top="0.423cm" fo:margin-bottom="0.212cm" fo:keep-with-next="always"/><style:text-properties style:font-name="Liberation Sans" fo:font-size="14pt"/></style:style>""")
+        for (lvl in 1..4) {
+            val size = when (lvl) { 1 -> 28; 2 -> 21; 3 -> 16; else -> 14 }
+            sb.append("""<style:style style:name="Heading_20_$lvl" style:display-name="Heading $lvl" style:family="paragraph" style:parent-style-name="Heading" style:next-style-name="Text_20_body" style:default-outline-level="$lvl" style:class="text"><style:text-properties fo:font-size="${size}pt" fo:font-weight="bold"/></style:style>""")
+        }
+        sb.append("""<style:style style:name="List" style:family="paragraph" style:parent-style-name="Standard" style:class="list"/>""")
+        sb.append("</office:styles>")
+        sb.append("<office:automatic-styles>")
+        // A default A4 portrait page layout + master page so text/presentation docs paginate sanely.
+        val ps = (document as? OdfDocument.TextDocument)?.pageSetup
+        val plp = if (ps != null) {
+            """fo:page-width="${cm(ps.widthPx)}" fo:page-height="${cm(ps.heightPx)}" fo:margin-top="${cm(ps.marginTopPx)}" fo:margin-bottom="${cm(ps.marginBottomPx)}" fo:margin-left="${cm(ps.marginLeftPx)}" fo:margin-right="${cm(ps.marginRightPx)}" style:print-orientation="${if (ps.isLandscape) "landscape" else "portrait"}""""
+        } else {
+            """fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm""""
+        }
+        sb.append("""<style:page-layout style:name="pm1"><style:page-layout-properties $plp/></style:page-layout>""")
+        sb.append("</office:automatic-styles>")
+        sb.append("""<office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles>""")
+        sb.append("</office:document-styles>")
+        return sb.toString()
+    }
+
+    /** Generates settings.xml carrying freeze-pane (split) config when any sheet is frozen. Returns null if none. (C2) */
+    fun serializeSettings(document: OdfDocument): String? {
+        if (document !is OdfDocument.Spreadsheet) return null
+        val frozen = document.sheets.filter { it.freezeRows > 0 || it.freezeCols > 0 }
+        if (frozen.isEmpty()) return null
+        val sb = StringBuilder()
+        sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
+        sb.append("""<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0" xmlns:ooo="http://openoffice.org/2004/office" office:version="1.3">""")
+        sb.append("<office:settings>")
+        sb.append("""<config:config-item-set config:name="ooo:view-settings">""")
+        sb.append("""<config:config-item-map-indexed config:name="Views"><config:config-item-map-entry>""")
+        sb.append("""<config:config-item config:name="ViewId" config:type="string">view1</config:config-item>""")
+        sb.append("""<config:config-item-map-named config:name="Tables">""")
+        for (sheet in document.sheets) {
+            val rows = sheet.freezeRows; val cols = sheet.freezeCols
+            if (rows <= 0 && cols <= 0) continue
+            sb.append("""<config:config-item-map-entry config:name="${esc(sheet.name)}">""")
+            sb.append("""<config:config-item config:name="HorizontalSplitMode" config:type="short">${if (cols > 0) 2 else 0}</config:config-item>""")
+            sb.append("""<config:config-item config:name="VerticalSplitMode" config:type="short">${if (rows > 0) 2 else 0}</config:config-item>""")
+            sb.append("""<config:config-item config:name="HorizontalSplitPosition" config:type="int">$cols</config:config-item>""")
+            sb.append("""<config:config-item config:name="VerticalSplitPosition" config:type="int">$rows</config:config-item>""")
+            sb.append("""<config:config-item config:name="PositionRight" config:type="int">$cols</config:config-item>""")
+            sb.append("""<config:config-item config:name="PositionBottom" config:type="int">$rows</config:config-item>""")
+            sb.append("""<config:config-item config:name="ActiveSplitRange" config:type="short">3</config:config-item>""")
+            sb.append("</config:config-item-map-entry>")
+        }
+        sb.append("</config:config-item-map-named>")
+        sb.append("</config:config-item-map-entry></config:config-item-map-indexed>")
+        sb.append("</config:config-item-set>")
+        sb.append("</office:settings></office:document-settings>")
+        return sb.toString()
+    }
+
     /** Generates meta.xml so edited document metadata persists on save (G47). */
     fun serializeMeta(meta: OdfMetadata): String {
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
         sb.append("""<office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta>""")
+        sb.append("<meta:generator>${esc(meta.generator ?: "ModernApps/Office")}</meta:generator>")
         meta.title?.let { sb.append("<dc:title>${esc(it)}</dc:title>") }
         meta.creator?.let { sb.append("<meta:initial-creator>${esc(it)}</meta:initial-creator>") }
         meta.author?.let { sb.append("<dc:creator>${esc(it)}</dc:creator>") }
@@ -77,6 +157,19 @@ object OdfSerializer {
         for (kw in meta.keywords) sb.append("<meta:keyword>${esc(kw)}</meta:keyword>")
         meta.creationDate?.let { sb.append("<meta:creation-date>${esc(it)}</meta:creation-date>") }
         meta.modifiedDate?.let { sb.append("<dc:date>${esc(it)}</dc:date>") }
+        meta.editingCycles?.let { sb.append("<meta:editing-cycles>$it</meta:editing-cycles>") }
+        // Document statistics: emit whatever counts we have. (Round 2 R1)
+        if (meta.pageCount != null || meta.wordCount != null || meta.charCount != null || meta.paragraphCount != null) {
+            sb.append("<meta:document-statistic")
+            meta.pageCount?.let { sb.append(""" meta:page-count="$it"""") }
+            meta.wordCount?.let { sb.append(""" meta:word-count="$it"""") }
+            meta.charCount?.let { sb.append(""" meta:character-count="$it"""") }
+            meta.paragraphCount?.let { sb.append(""" meta:paragraph-count="$it"""") }
+            sb.append("/>")
+        }
+        for ((name, value) in meta.userDefined) {
+            sb.append("""<meta:user-defined meta:name="${esc(name)}">${esc(value)}</meta:user-defined>""")
+        }
         sb.append("</office:meta></office:document-meta>")
         return sb.toString()
     }
@@ -85,83 +178,137 @@ object OdfSerializer {
         val styles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
         val graphicStyles = LinkedHashMap<String, GraphicStyleDef>()
+        val tableColStyles = LinkedHashMap<String, Float>()
+        val tableCellStyles = LinkedHashMap<String, CellStyleDef>()
+        val sectionStyles = LinkedHashMap<String, Int>()
+        fun sectionStyleName(cols: Int, m: MutableMap<String, Int>): String { for ((n, v) in m) if (v == cols) return n; val n = "Sect${m.size + 1}"; m[n] = cols; return n }
         val body = StringBuilder()
 
         // Bookmarks keyed by the content-block index they precede. (B3)
         val bookmarksByIndex = HashMap<Int, MutableList<String>>()
         for (bk in doc.bookmarks) bookmarksByIndex.getOrPut(bk.contentIndex) { mutableListOf() }.add(bk.name)
+        // Footnotes keyed by citation, emitted inline as text:note where the marker appears. (B3)
+        val footnotesByCitation = doc.footnotes.associateBy { it.citation }
+        val emittedFootnotes = mutableSetOf<String>()
 
-        var listOpen = false
+        // Nested-list emitter (Round 2 R8): tracks open <text:list> depth and the currently open item.
+        var listDepth = 0
+        var itemOpen = false
+        fun closeAllLists() {
+            if (itemOpen) { body.append("</text:list-item>"); itemOpen = false }
+            while (listDepth > 0) { body.append("</text:list>"); listDepth--; if (listDepth > 0) body.append("</text:list-item>") }
+        }
         doc.content.forEachIndexed { index, block ->
             val leadingBookmarks = bookmarksByIndex[index] ?: emptyList()
             when (block) {
                 is OdfContentBlock.Paragraph -> {
                     val para = block.paragraph
                     if (para.style == ParagraphStyle.LIST_ITEM) {
-                        if (!listOpen) { body.append("<text:list>"); listOpen = true }
-                        body.append("<text:list-item>")
-                        serializeParagraph(body, para, styles, paraStyles, "text:p", leadingBookmarks)
-                        body.append("</text:list-item>")
+                        val target = para.listLevel.coerceAtLeast(1)
+                        when {
+                            target > listDepth -> {
+                                while (listDepth < target) {
+                                    body.append("<text:list>"); listDepth++
+                                    if (listDepth < target) body.append("<text:list-item>")
+                                }
+                            }
+                            target < listDepth -> {
+                                if (itemOpen) { body.append("</text:list-item>"); itemOpen = false }
+                                while (listDepth > target) { body.append("</text:list>"); listDepth--; body.append("</text:list-item>") }
+                            }
+                            else -> if (itemOpen) { body.append("</text:list-item>"); itemOpen = false }
+                        }
+                        body.append("<text:list-item>"); itemOpen = true
+                        serializeParagraph(body, para, styles, paraStyles, "text:p", leadingBookmarks, footnotesByCitation, emittedFootnotes)
                     } else {
-                        if (listOpen) { body.append("</text:list>"); listOpen = false }
+                        closeAllLists()
                         val tag = when (para.style) {
                             ParagraphStyle.HEADING1, ParagraphStyle.HEADING2,
                             ParagraphStyle.HEADING3, ParagraphStyle.HEADING4 -> "text:h"
                             else -> "text:p"
                         }
-                        serializeParagraph(body, para, styles, paraStyles, tag, leadingBookmarks)
+                        serializeParagraph(body, para, styles, paraStyles, tag, leadingBookmarks, footnotesByCitation, emittedFootnotes)
                     }
                 }
                 is OdfContentBlock.Table -> {
-                    if (listOpen) { body.append("</text:list>"); listOpen = false }
-                    serializeTable(body, block.table, styles, paraStyles)
+                    closeAllLists()
+                    serializeTable(body, block.table, styles, paraStyles, tableColStyles, tableCellStyles)
                 }
                 is OdfContentBlock.Image -> {
-                    if (listOpen) { body.append("</text:list>"); listOpen = false }
+                    closeAllLists()
                     serializeImageRef(body, block.image, graphicStyles, ctx)
                 }
                 is OdfContentBlock.Chart -> {
-                    if (listOpen) { body.append("</text:list>"); listOpen = false }
+                    closeAllLists()
                     serializeChartFrame(body, block.chart, 0f, 0f, 480f, 320f, "paragraph", styles, paraStyles, ctx)
                 }
                 is OdfContentBlock.Formula -> {
-                    if (listOpen) { body.append("</text:list>"); listOpen = false }
+                    closeAllLists()
                     // Formulas are embedded math objects; preserved via original package, not re-serialized inline.
                 }
+                is OdfContentBlock.TableOfContents -> {
+                    closeAllLists()
+                    serializeTableOfContents(body, block, styles, paraStyles)
+                }
                 is OdfContentBlock.PageBreak -> {
-                    if (listOpen) { body.append("</text:list>"); listOpen = false }
+                    closeAllLists()
                     // Emit an empty paragraph carrying a page-break-before style. (B4)
                     val name = getOrCreateParaStyle(OdfParagraph(emptyList(), breakBeforePage = true), paraStyles)
                     body.append("""<text:p text:style-name="$name"/>""")
                 }
+                is OdfContentBlock.SectionStart -> {
+                    closeAllLists()
+                    val sn = if (block.columnCount > 1) sectionStyleName(block.columnCount, sectionStyles) else null
+                    body.append("""<text:section text:name="${esc(block.name)}"""")
+                    if (sn != null) body.append(""" text:style-name="$sn"""")
+                    body.append(">")
+                }
+                is OdfContentBlock.SectionEnd -> {
+                    closeAllLists()
+                    body.append("</text:section>")
+                }
             }
         }
-        if (listOpen) body.append("</text:list>")
+        closeAllLists()
 
-        return buildDocument("office:text", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), graphicStyles, body.toString())
+        val tracked = serializeTrackedChanges(doc)
+        return buildDocument("office:text", styles, paraStyles, tableCellStyles, tableColStyles, graphicStyles, tracked + body.toString(), sectionStyles = sectionStyles)
     }
 
     private fun serializeSpreadsheet(doc: OdfDocument.Spreadsheet, ctx: SerCtx): String {
         val cellStyles = LinkedHashMap<String, CellStyleDef>()
         val colStyles = LinkedHashMap<String, Float>()
+        val rowStyles = LinkedHashMap<String, Float>()
         val spanStyles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
         val graphicStyles = LinkedHashMap<String, GraphicStyleDef>()
+        fun rowStyleName(h: Float): String { for ((n, v) in rowStyles) if (v == h) return n; val n = "ro${rowStyles.size + 1}"; rowStyles[n] = h; return n }
         val body = StringBuilder()
+        // Content validations must precede the tables. (Round 3)
+        if (doc.validations.isNotEmpty()) {
+            body.append("<table:content-validations>")
+            for (vd in doc.validations) {
+                body.append("""<table:content-validation table:name="${esc(vd.name)}" table:condition="${esc(vd.condition)}" table:allow-empty-cell="${vd.allowEmpty}"/>""")
+            }
+            body.append("</table:content-validations>")
+        }
         for (sheet in doc.sheets) {
-            body.append("""<table:table table:name="${esc(sheet.name)}">""")
+            body.append("""<table:table table:name="${esc(sheet.name)}"""")
+            sheet.printRanges?.let { body.append(""" table:print-ranges="${esc(it)}"""") }
+            body.append(">")
             val maxCols = sheet.rows.maxOfOrNull { it.cells.size } ?: 0
             for (c in 0 until maxCols) {
                 val w = sheet.columnWidths.getOrNull(c)
-                if (w != null && w > 0f) {
-                    val name = getOrCreateColStyle(w, colStyles)
-                    body.append("""<table:table-column table:style-name="$name"/>""")
-                } else {
-                    body.append("<table:table-column/>")
-                }
+                body.append("<table:table-column")
+                if (w != null && w > 0f) body.append(""" table:style-name="${getOrCreateColStyle(w, colStyles)}"""")
+                if (c in sheet.hiddenCols) body.append(""" table:visibility="collapse"""")
+                body.append("/>")
             }
-            for (row in sheet.rows) {
-                body.append("<table:table-row>")
+            sheet.rows.forEachIndexed { ri, row ->
+                body.append("<table:table-row")
+                sheet.rowHeights.getOrNull(ri)?.let { if (it > 0f) body.append(""" table:style-name="${rowStyleName(it)}"""") }
+                if (ri in sheet.hiddenRows) body.append(""" table:visibility="collapse"""")
+                body.append(">")
                 for (cell in row.cells) {
                     if (cell.isCovered) {
                         body.append("<table:covered-table-cell/>")
@@ -172,6 +319,7 @@ object OdfSerializer {
                         if (cell.spannedColumns > 1) body.append(""" table:number-columns-spanned="${cell.spannedColumns}"""")
                         if (cell.rowSpan > 1) body.append(""" table:number-rows-spanned="${cell.rowSpan}"""")
                         if (cell.formula != null) body.append(""" table:formula="${esc(cell.formula)}"""")
+                        if (cell.validationName != null) body.append(""" table:content-validation-name="${esc(cell.validationName)}"""")
                         val numeric = cell.numberValue ?: cell.text.toDoubleOrNull()
                         if (numeric != null && cell.valueType != "string") {
                             body.append(""" office:value-type="float" office:value="$numeric"""")
@@ -179,7 +327,14 @@ object OdfSerializer {
                             body.append(""" office:value-type="string"""")
                         }
                         body.append(">")
-                        if (cell.text.isNotEmpty()) body.append("<text:p>${esc(cell.text)}</text:p>")
+                        cell.annotation?.let { ann ->
+                            body.append("<office:annotation>")
+                            ann.author?.let { body.append("<dc:creator>${esc(it)}</dc:creator>") }
+                            ann.date?.let { body.append("<dc:date>${esc(it)}</dc:date>") }
+                            for (p in ann.paragraphs) serializeParagraph(body, p, spanStyles, paraStyles, "text:p")
+                            body.append("</office:annotation>")
+                        }
+                        if (cell.text.isNotEmpty()) body.append("<text:p>${encodeText(cell.text)}</text:p>")
                         body.append("</table:table-cell>")
                     }
                 }
@@ -194,20 +349,31 @@ object OdfSerializer {
             }
             body.append("</table:table>")
         }
-        return buildDocument("office:spreadsheet", spanStyles, paraStyles, cellStyles, colStyles, graphicStyles, body.toString())
+        // Workbook-level named ranges. (Round 2 R6)
+        if (doc.namedRanges.isNotEmpty()) {
+            body.append("<table:named-expressions>")
+            for (nr in doc.namedRanges) {
+                body.append("""<table:named-range table:name="${esc(nr.name)}"""")
+                nr.baseCellAddress?.let { body.append(""" table:base-cell-address="${esc(it)}"""") }
+                body.append(""" table:cell-range-address="${esc(nr.cellRangeAddress)}"/>""")
+            }
+            body.append("</table:named-expressions>")
+        }
+        return buildDocument("office:spreadsheet", spanStyles, paraStyles, cellStyles, colStyles, graphicStyles, body.toString(), rowStyles = rowStyles)
     }
 
     private fun serializePresentation(doc: OdfDocument.Presentation, ctx: SerCtx): String {
         val styles = mutableMapOf<String, SpanStyleDef>()
         val paraStyles = mutableMapOf<String, ParaStyleDef>()
         val graphicStyles = LinkedHashMap<String, GraphicStyleDef>()
-        val drawPageStyles = LinkedHashMap<String, Long>()
+        val drawPageStyles = LinkedHashMap<String, DrawPageStyleDef>()
         val body = StringBuilder()
         for (slide in doc.slides) {
             body.append("<draw:page")
-            // Slide background fill via a drawing-page style. (B2)
-            slide.backgroundColor?.let { body.append(""" draw:style-name="${getOrCreateDrawPageStyle(it, drawPageStyles)}"""") }
-            body.append(""" draw:name="${esc(slide.name)}">""")
+            // Slide background fill + transition via a drawing-page style. (B2 / R9)
+            getOrCreateDrawPageStyle(slide.backgroundColor, slide.transitionType, slide.transitionSpeed, drawPageStyles)
+                ?.let { body.append(""" draw:style-name="$it"""") }
+            body.append(""" draw:name="${esc(slide.name)}" draw:master-page-name="${esc(slide.masterName ?: "Standard")}">""")
             for (element in slide.elements) {
                 when (element) {
                     is OdfSlideElement.Frame -> serializeFrame(body, element.frame, styles, paraStyles, graphicStyles, ctx)
@@ -225,12 +391,16 @@ object OdfSerializer {
         return buildDocument("office:presentation", styles, paraStyles, LinkedHashMap(), LinkedHashMap(), graphicStyles, body.toString(), drawPageStyles)
     }
 
+    private data class DrawPageStyleDef(val fillColor: Long?, val transitionType: String?, val transitionSpeed: String?)
+
     private fun serializeParagraph(
         sb: StringBuilder, para: OdfParagraph,
         styles: MutableMap<String, SpanStyleDef>,
         paraStyles: MutableMap<String, ParaStyleDef>,
         tag: String,
-        leadingBookmarks: List<String> = emptyList()
+        leadingBookmarks: List<String> = emptyList(),
+        footnotes: Map<String, OdfFootnote> = emptyMap(),
+        emittedFootnotes: MutableSet<String>? = null
     ) {
         sb.append("<$tag")
         val pStyleName = getOrCreateParaStyle(para, paraStyles)
@@ -245,6 +415,21 @@ object OdfSerializer {
         sb.append(">")
         for (name in leadingBookmarks) sb.append("""<text:bookmark text:name="${esc(name)}"/>""")
         for (span in para.spans) {
+            // Footnote citation marker -> real text:note (B3). Recognizes both parser-produced
+            // superscript citations and editor-inserted "[n]" markers.
+            val fn = footnoteForSpan(span, footnotes)
+            if (fn != null && emittedFootnotes?.contains(fn.citation) != true) {
+                emittedFootnotes?.add(fn.citation)
+                val noteClass = if (fn.isEndnote) "endnote" else "footnote"
+                val idPrefix = if (fn.isEndnote) "edn" else "ftn"
+                sb.append("""<text:note text:note-class="$noteClass" text:id="$idPrefix${esc(fn.citation)}">""")
+                sb.append("""<text:note-citation>${esc(fn.citation)}</text:note-citation>""")
+                sb.append("<text:note-body>")
+                if (fn.body.isEmpty()) sb.append("<text:p/>")
+                else for (p in fn.body) serializeParagraph(sb, p, styles, paraStyles, "text:p")
+                sb.append("</text:note-body></text:note>")
+                continue
+            }
             if (span.annotation != null) {
                 // Serialize comments as office:annotation so they round-trip. (B3)
                 sb.append("<office:annotation>")
@@ -254,43 +439,164 @@ object OdfSerializer {
                 sb.append("</office:annotation>")
                 continue
             }
+            if (span.field != null) {
+                // Real ODF text field element with the cached display value. (Priority 2)
+                val tag = "text:${span.field}"
+                val attrs = if (span.field == "date" || span.field == "time") " text:fixed=\"true\"" else ""
+                if (span.text.isEmpty()) sb.append("<$tag$attrs/>")
+                else sb.append("<$tag$attrs>${esc(span.text)}</$tag>")
+                continue
+            }
+            if (span.refKind != null) {
+                // Cross-reference element. (Priority 5)
+                val rtag = "text:${span.refKind}"
+                when (span.refKind) {
+                    "reference-ref", "bookmark-ref" -> {
+                        sb.append("<$rtag")
+                        span.refFormat?.let { sb.append(""" text:reference-format="${esc(it)}"""") }
+                        span.refName?.let { sb.append(""" text:ref-name="${esc(it)}"""") }
+                        sb.append(">${esc(span.text)}</$rtag>")
+                    }
+                    else -> {
+                        sb.append("<$rtag")
+                        span.refName?.let { sb.append(""" text:name="${esc(it)}"""") }
+                        sb.append("/>")
+                    }
+                }
+                continue
+            }
+            if (span.changeKind == "deletion") {
+                // Deleted content lives in the tracked-changes region; body carries only a point marker. (Priority 6)
+                span.changeId?.let { sb.append("""<text:change text:change-id="${esc(it)}"/>""") }
+                continue
+            }
+            val insWrap = span.changeKind == "insertion" && span.changeId != null
+            if (insWrap) sb.append("""<text:change-start text:change-id="${esc(span.changeId!!)}"/>""")
             val needsStyle = span.bold || span.italic || span.underline || span.strikethrough ||
-                span.color != null || span.fontSize != null || span.superscript || span.subscript || span.fontFamily != null
+                span.color != null || span.fontSize != null || span.superscript || span.subscript || span.fontFamily != null ||
+                span.letterSpacing != null || span.textTransform != null || span.language != null
             if (span.href != null) {
                 sb.append("""<text:a xlink:href="${esc(span.href)}" xlink:type="simple">""")
                 if (needsStyle) {
                     val styleName = getOrCreateSpanStyle(span, styles)
-                    sb.append("""<text:span text:style-name="$styleName">${esc(span.text)}</text:span>""")
+                    sb.append("""<text:span text:style-name="$styleName">${encodeText(span.text)}</text:span>""")
                 } else {
-                    sb.append(esc(span.text))
+                    sb.append(encodeText(span.text))
                 }
                 sb.append("</text:a>")
             } else if (needsStyle) {
                 val styleName = getOrCreateSpanStyle(span, styles)
-                sb.append("""<text:span text:style-name="$styleName">${esc(span.text)}</text:span>""")
+                sb.append("""<text:span text:style-name="$styleName">${encodeText(span.text)}</text:span>""")
             } else {
-                sb.append(esc(span.text))
+                sb.append(encodeText(span.text))
             }
+            if (insWrap) sb.append("""<text:change-end text:change-id="${esc(span.changeId!!)}"/>""")
         }
         sb.append("</$tag>")
+    }
+
+    private fun serializeTrackedChanges(doc: OdfDocument.TextDocument): String {
+        class Info(var kind: String, var deletedText: String)
+        val used = LinkedHashMap<String, Info>()
+        fun scan(spans: List<OdfSpan>) {
+            for (s in spans) {
+                val id = s.changeId ?: continue
+                val kind = s.changeKind ?: continue
+                val info = used.getOrPut(id) { Info(kind, "") }
+                if (kind == "deletion" && s.text.isNotEmpty()) info.deletedText = s.text
+            }
+        }
+        fun scanParas(paras: List<OdfParagraph>) { for (p in paras) scan(p.spans) }
+        for (block in doc.content) when (block) {
+            is OdfContentBlock.Paragraph -> scan(block.paragraph.spans)
+            is OdfContentBlock.Table -> for (row in block.table.rows) for (cell in row.cells) scanParas(cell.paragraphs)
+            is OdfContentBlock.TableOfContents -> scanParas(block.entries)
+            else -> {}
+        }
+        if (used.isEmpty()) return ""
+        val meta = doc.changes.associateBy { it.id }
+        val sb = StringBuilder("<text:tracked-changes>")
+        for ((id, info) in used) {
+            val author = meta[id]?.author ?: "Unknown"
+            val date = meta[id]?.date ?: ""
+            val elem = if (info.kind == "deletion") "deletion" else "insertion"
+            sb.append("""<text:changed-region xml:id="${esc(id)}" text:id="${esc(id)}">""")
+            sb.append("<text:$elem><office:change-info>")
+            sb.append("<dc:creator>${esc(author)}</dc:creator>")
+            if (date.isNotEmpty()) sb.append("<dc:date>${esc(date)}</dc:date>")
+            sb.append("</office:change-info>")
+            if (info.kind == "deletion") for (line in info.deletedText.split("\n")) sb.append("<text:p>${esc(line)}</text:p>")
+            sb.append("</text:$elem></text:changed-region>")
+        }
+        sb.append("</text:tracked-changes>")
+        return sb.toString()
+    }
+
+    private fun serializeTableOfContents(
+        sb: StringBuilder, toc: OdfContentBlock.TableOfContents,
+        styles: MutableMap<String, SpanStyleDef>,
+        paraStyles: MutableMap<String, ParaStyleDef>
+    ) {
+        sb.append("""<text:table-of-content text:name="${esc(toc.title)}1" text:protected="true">""")
+        sb.append("""<text:table-of-content-source text:outline-level="4" text:use-outline-level="true">""")
+        sb.append("""<text:index-title-template text:style-name="Contents_20_Heading">${esc(toc.title)}</text:index-title-template>""")
+        for (lvl in 1..4) {
+            sb.append("""<text:table-of-content-entry-template text:outline-level="$lvl" text:style-name="Contents_20_$lvl">""")
+            sb.append("""<text:index-entry-chapter/><text:index-entry-text/>""")
+            sb.append("""<text:index-entry-tab-stop style:type="right" style:leader-char="."/>""")
+            sb.append("""<text:index-entry-page-number/>""")
+            sb.append("</text:table-of-content-entry-template>")
+        }
+        sb.append("</text:table-of-content-source>")
+        sb.append("<text:index-body>")
+        sb.append("""<text:index-title text:name="${esc(toc.title)}1_Head">""")
+        sb.append("""<text:p text:style-name="Contents_20_Heading">${esc(toc.title)}</text:p>""")
+        sb.append("</text:index-title>")
+        for (entry in toc.entries) serializeParagraph(sb, entry, styles, paraStyles, "text:p")
+        sb.append("</text:index-body>")
+        sb.append("</text:table-of-content>")
+    }
+
+    private fun footnoteForSpan(span: OdfSpan, footnotes: Map<String, OdfFootnote>): OdfFootnote? {
+        if (footnotes.isEmpty() || span.annotation != null || span.text.isBlank()) return null
+        val t = span.text.trim()
+        val bracketed = t.startsWith("[") && t.endsWith("]") && t.length >= 3
+        if (!span.superscript && !bracketed) return null
+        val key = if (bracketed) t.substring(1, t.length - 1) else t
+        return footnotes[key]
     }
 
     private fun serializeTable(
         sb: StringBuilder, table: OdfTable,
         styles: MutableMap<String, SpanStyleDef>,
-        paraStyles: MutableMap<String, ParaStyleDef>
+        paraStyles: MutableMap<String, ParaStyleDef>,
+        colStyles: MutableMap<String, Float>,
+        cellStyles: MutableMap<String, CellStyleDef>
     ) {
         sb.append("""<table:table table:name="${esc(table.name)}">""")
-        for (col in table.columns) sb.append("<table:table-column/>")
-        for (row in table.rows) {
+        for (col in table.columns) {
+            val w = col.width
+            if (w != null && w > 0f) sb.append("""<table:table-column table:style-name="${getOrCreateColStyle(w, colStyles)}"/>""")
+            else sb.append("<table:table-column/>")
+        }
+        val headerN = table.headerRowCount.coerceIn(0, table.rows.size)
+        if (headerN > 0) sb.append("<table:table-header-rows>")
+        table.rows.forEachIndexed { ri, row ->
+            if (ri == headerN && headerN > 0) sb.append("</table:table-header-rows>")
             sb.append("<table:table-row>")
             for (cell in row.cells) {
                 if (cell.isCovered) {
                     sb.append("<table:covered-table-cell/>")
                 } else {
                     sb.append("<table:table-cell")
+                    val cs = if (cell.backgroundColor != null || cell.borderColor != null || cell.verticalAlign != null) {
+                        val def = CellStyleDef(backgroundColor = cell.backgroundColor, borderColor = cell.borderColor, verticalAlign = cell.verticalAlign)
+                        cellStyles.entries.firstOrNull { it.value == def }?.key ?: "ce${cellStyles.size + 1}".also { cellStyles[it] = def }
+                    } else null
+                    if (cs != null) sb.append(""" table:style-name="$cs"""")
                     if (cell.colSpan > 1) sb.append(""" table:number-columns-spanned="${cell.colSpan}"""")
                     if (cell.rowSpan > 1) sb.append(""" table:number-rows-spanned="${cell.rowSpan}"""")
+                    if (cell.formula != null) sb.append(""" table:formula="${esc(cell.formula)}"""")
                     sb.append(">")
                     for (para in cell.paragraphs) serializeParagraph(sb, para, styles, paraStyles, "text:p")
                     sb.append("</table:table-cell>")
@@ -298,6 +604,7 @@ object OdfSerializer {
             }
             sb.append("</table:table-row>")
         }
+        if (headerN > 0 && headerN >= table.rows.size) sb.append("</table:table-header-rows>")
         sb.append("</table:table>")
     }
 
@@ -313,7 +620,9 @@ object OdfSerializer {
             return
         }
         sb.append("""<draw:frame""")
-        getOrCreateGraphicStyle(null, null, null, clipString(image), graphicStyles)?.let { sb.append(""" draw:style-name="$it"""") }
+        val op = if (image.opacityPercent in 0f..99.9f) image.opacityPercent else null
+        getOrCreateGraphicStyle(null, null, null, clipString(image), graphicStyles, op, image.colorMode)?.let { sb.append(""" draw:style-name="$it"""") }
+        if (image.anchorType.isNotEmpty()) sb.append(""" text:anchor-type="${esc(image.anchorType)}"""")
         if (image.width > 0) sb.append(""" svg:width="${cm(image.width)}"""")
         if (image.height > 0) sb.append(""" svg:height="${cm(image.height)}"""")
         appendRotation(sb, image)
@@ -397,7 +706,7 @@ object OdfSerializer {
         }
         sb.append("<draw:frame")
         val clip = frame.image?.let { clipString(it) }
-        getOrCreateGraphicStyle(frame.fillColor, frame.strokeColor, frame.strokeWidth, clip, graphicStyles)?.let { sb.append(""" draw:style-name="$it"""") }
+        getOrCreateGraphicStyle(frame.fillColor, frame.strokeColor, frame.strokeWidth, clip, graphicStyles, gradient = frame.fillGradient)?.let { sb.append(""" draw:style-name="$it"""") }
         sb.append(""" svg:x="${cm(frame.x)}" svg:y="${cm(frame.y)}"""")
         sb.append(""" svg:width="${cm(frame.width)}" svg:height="${cm(frame.height)}"""")
         frame.image?.let { appendRotation(sb, it) }
@@ -418,20 +727,46 @@ object OdfSerializer {
         sb.append("</draw:frame>")
     }
 
+    private fun appendShapeRotation(sb: StringBuilder, rot: Float) {
+        if (rot != 0f) {
+            val rad = (-rot.toDouble() * Math.PI / 180.0)
+            sb.append(""" draw:transform="rotate(${String.format(Locale.US, "%.5f", rad)})"""")
+        }
+    }
+
     private fun serializeShape(
         sb: StringBuilder, shape: OdfShape,
         styles: MutableMap<String, SpanStyleDef>,
         paraStyles: MutableMap<String, ParaStyleDef>,
         graphicStyles: MutableMap<String, GraphicStyleDef>
     ) {
+        if (shape is OdfShape.Polyline) {
+            // Polyline/polygon: emit a viewBox + draw:points mapping of the absolute px vertices. (Priority 8)
+            val ptag = if (shape.closed) "draw:polygon" else "draw:polyline"
+            sb.append("<$ptag")
+            getOrCreateGraphicStyle(shape.fillColor, shape.strokeColor, shape.strokeWidth, null, graphicStyles, gradient = shape.fillGradient)?.let { sb.append(""" draw:style-name="$it"""") }
+            sb.append(""" svg:x="${cm(shape.x)}" svg:y="${cm(shape.y)}" svg:width="${cm(shape.width)}" svg:height="${cm(shape.height)}"""")
+            appendShapeRotation(sb, shape.rotationDegrees)
+            sb.append(""" svg:viewBox="0 0 10000 10000"""")
+            val pts = shape.points.joinToString(" ") { (px, py) ->
+                val vx = if (shape.width != 0f) Math.round((px - shape.x) / shape.width * 10000f) else 0
+                val vy = if (shape.height != 0f) Math.round((py - shape.y) / shape.height * 10000f) else 0
+                "$vx,$vy"
+            }
+            sb.append(""" draw:points="$pts">""")
+            for (para in shape.text) serializeParagraph(sb, para, styles, paraStyles, "text:p")
+            sb.append("</$ptag>")
+            return
+        }
         val tag = when (shape) {
             is OdfShape.Rect -> "draw:rect"
             is OdfShape.Ellipse -> "draw:ellipse"
             is OdfShape.Line -> "draw:line"
             is OdfShape.CustomShape -> "draw:custom-shape"
+            is OdfShape.Polyline -> "draw:polyline"
         }
         sb.append("<$tag")
-        getOrCreateGraphicStyle(shape.fillColor, shape.strokeColor, shape.strokeWidth, null, graphicStyles)?.let { sb.append(""" draw:style-name="$it"""") }
+        getOrCreateGraphicStyle(shape.fillColor, shape.strokeColor, shape.strokeWidth, null, graphicStyles, gradient = shape.fillGradient)?.let { sb.append(""" draw:style-name="$it"""") }
         if (shape is OdfShape.Line) {
             // Lines use endpoint coordinates, not a bounding box. (A5)
             val x2 = if (shape.x2 != 0f || shape.y2 != 0f) shape.x2 else shape.x + shape.width
@@ -441,6 +776,7 @@ object OdfSerializer {
         } else {
             sb.append(""" svg:x="${cm(shape.x)}" svg:y="${cm(shape.y)}"""")
             sb.append(""" svg:width="${cm(shape.width)}" svg:height="${cm(shape.height)}"""")
+            appendShapeRotation(sb, shape.rotationDegrees)
         }
         sb.append(">")
         for (para in shape.text) serializeParagraph(sb, para, styles, paraStyles, "text:p")
@@ -473,9 +809,15 @@ object OdfSerializer {
         sb.append("<office:body><office:chart>")
         sb.append("""<chart:chart chart:class="$chartClass" svg:width="${cm(wPx)}" svg:height="${cm(hPx)}">""")
         chart.title?.let { sb.append("""<chart:title><text:p>${esc(it)}</text:p></chart:title>""") }
+        chart.subtitle?.let { sb.append("""<chart:subtitle><text:p>${esc(it)}</text:p></chart:subtitle>""") }
+        if (chart.legend) sb.append("""<chart:legend chart:legend-position="end"/>""")
         sb.append("<chart:plot-area>")
-        sb.append("""<chart:axis chart:dimension="x" chart:name="primary-x"/>""")
-        sb.append("""<chart:axis chart:dimension="y" chart:name="primary-y"/>""")
+        sb.append("""<chart:axis chart:dimension="x" chart:name="primary-x">""")
+        chart.xAxisTitle?.let { sb.append("""<chart:title><text:p>${esc(it)}</text:p></chart:title>""") }
+        sb.append("</chart:axis>")
+        sb.append("""<chart:axis chart:dimension="y" chart:name="primary-y">""")
+        chart.yAxisTitle?.let { sb.append("""<chart:title><text:p>${esc(it)}</text:p></chart:title>""") }
+        sb.append("</chart:axis>")
         chart.series.forEachIndexed { i, s ->
             val col = columnLetter(i + 1) // series start at column B
             sb.append("""<chart:series chart:values-cell-range-address="local-table.${'$'}$col${'$'}2:.${'$'}$col${'$'}$lastRow" chart:label-cell-address="local-table.${'$'}$col${'$'}1" chart:class="$chartClass">""")
@@ -516,7 +858,10 @@ object OdfSerializer {
         val underline: Boolean = false, val strikethrough: Boolean = false,
         val color: Long? = null, val fontSize: Float? = null,
         val superscript: Boolean = false, val subscript: Boolean = false,
-        val fontFamily: String? = null
+        val fontFamily: String? = null,
+        val underlineStyle: String? = null, val underlineColor: Long? = null,
+        val letterSpacing: Float? = null, val textTransform: String? = null,
+        val language: String? = null, val country: String? = null
     )
 
     private data class ParaStyleDef(
@@ -529,41 +874,56 @@ object OdfSerializer {
         val borderColor: Long? = null,
         val backgroundColor: Long? = null,
         val breakBefore: Boolean = false,
-        val tabStops: List<Float> = emptyList()
+        val tabStops: List<Float> = emptyList(),
+        val borders: OdfBorders? = null,
+        val marginRight: Float = 0f,
+        val keepWithNext: Boolean = false,
+        val keepTogether: Boolean = false,
+        val widows: Int? = null,
+        val orphans: Int? = null
     )
 
     private data class CellStyleDef(
         val backgroundColor: Long? = null, val textColor: Long? = null,
         val bold: Boolean = false, val italic: Boolean = false,
         val alignment: TextAlign? = null, val borderColor: Long? = null,
-        val wrap: Boolean = false, val numberFormat: OdfNumberFormat? = null
+        val wrap: Boolean = false, val numberFormat: OdfNumberFormat? = null,
+        val borders: OdfBorders? = null,
+        // Conditional-format maps (condition, bg, text) re-emitted as style:map. (Round 3)
+        val condMaps: List<Triple<String, Long?, Long?>> = emptyList(),
+        val verticalAlign: String? = null
     )
 
     private data class GraphicStyleDef(
         val fillColor: Long? = null, val strokeColor: Long? = null, val strokeWidth: Float? = null,
-        val clip: String? = null
+        val clip: String? = null, val opacity: Float? = null, val colorMode: String? = null,
+        val gradient: OdfGradient? = null
     )
 
-    private fun getOrCreateGraphicStyle(fillColor: Long?, strokeColor: Long?, strokeWidth: Float?, clip: String?, styles: MutableMap<String, GraphicStyleDef>): String? {
-        if (fillColor == null && strokeColor == null && strokeWidth == null && clip == null) return null
-        val def = GraphicStyleDef(fillColor, strokeColor, strokeWidth, clip)
+    private fun getOrCreateGraphicStyle(fillColor: Long?, strokeColor: Long?, strokeWidth: Float?, clip: String?, styles: MutableMap<String, GraphicStyleDef>, opacity: Float? = null, colorMode: String? = null, gradient: OdfGradient? = null): String? {
+        if (fillColor == null && strokeColor == null && strokeWidth == null && clip == null && opacity == null && colorMode == null && gradient == null) return null
+        val def = GraphicStyleDef(fillColor, strokeColor, strokeWidth, clip, opacity, colorMode, gradient)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "gr${styles.size + 1}"
         styles[name] = def
         return name
     }
 
-    private fun getOrCreateDrawPageStyle(fillColor: Long, styles: MutableMap<String, Long>): String {
-        for ((name, existing) in styles) if (existing == fillColor) return name
+    private fun getOrCreateDrawPageStyle(fillColor: Long?, transitionType: String?, transitionSpeed: String?, styles: MutableMap<String, DrawPageStyleDef>): String? {
+        if (fillColor == null && transitionType == null && transitionSpeed == null) return null
+        val def = DrawPageStyleDef(fillColor, transitionType, transitionSpeed)
+        for ((name, existing) in styles) if (existing == def) return name
         val name = "dp${styles.size + 1}"
-        styles[name] = fillColor
+        styles[name] = def
         return name
     }
 
     private fun getOrCreateCellStyle(cell: OdfCell, styles: MutableMap<String, CellStyleDef>): String? {
         if (cell.backgroundColor == null && cell.textColor == null && !cell.bold && !cell.italic &&
-            cell.alignment == null && cell.borderColor == null && !cell.wrap && cell.numberFormat == null) return null
-        val def = CellStyleDef(cell.backgroundColor, cell.textColor, cell.bold, cell.italic, cell.alignment, cell.borderColor, cell.wrap, cell.numberFormat)
+            cell.alignment == null && cell.borderColor == null && cell.borders == null && !cell.wrap &&
+            cell.numberFormat == null && cell.condFormats.isEmpty()) return null
+        val condMaps = cell.condFormats.map { Triple(it.condition, it.backgroundColor, it.textColor) }
+        val def = CellStyleDef(cell.backgroundColor, cell.textColor, cell.bold, cell.italic, cell.alignment, cell.borderColor, cell.wrap, cell.numberFormat, cell.borders, condMaps)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "ce${styles.size + 1}"
         styles[name] = def
@@ -579,7 +939,8 @@ object OdfSerializer {
 
     private fun getOrCreateSpanStyle(span: OdfSpan, styles: MutableMap<String, SpanStyleDef>): String {
         val def = SpanStyleDef(span.bold, span.italic, span.underline, span.strikethrough,
-            span.color, span.fontSize, span.superscript, span.subscript, span.fontFamily)
+            span.color, span.fontSize, span.superscript, span.subscript, span.fontFamily,
+            span.underlineStyle, span.underlineColor, span.letterSpacing, span.textTransform, span.language, span.country)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "T${styles.size + 1}"
         styles[name] = def
@@ -588,11 +949,13 @@ object OdfSerializer {
 
     private fun getOrCreateParaStyle(para: OdfParagraph, styles: MutableMap<String, ParaStyleDef>): String? {
         val hasProps = para.alignment != null || para.marginLeft != 0f || para.textIndent != 0f ||
-            para.lineHeightPercent != null || para.borderColor != null || para.backgroundColor != null ||
-            para.marginTop != 0f || para.marginBottom != 0f || para.tabStops.isNotEmpty()
+            para.lineHeightPercent != null || para.borderColor != null || para.borders != null || para.backgroundColor != null ||
+            para.marginTop != 0f || para.marginBottom != 0f || para.tabStops.isNotEmpty() ||
+            para.marginRight != 0f || para.keepWithNext || para.keepTogether || para.widows != null || para.orphans != null
         if (!hasProps && !para.breakBeforePage) return null
         val def = ParaStyleDef(para.alignment, para.marginLeft, para.marginTop, para.marginBottom, para.textIndent,
-            para.lineHeightPercent, para.borderColor, para.backgroundColor, para.breakBeforePage, para.tabStops)
+            para.lineHeightPercent, para.borderColor, para.backgroundColor, para.breakBeforePage, para.tabStops, para.borders,
+            para.marginRight, para.keepWithNext, para.keepTogether, para.widows, para.orphans)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "P${styles.size + 1}"
         styles[name] = def
@@ -609,7 +972,9 @@ object OdfSerializer {
         colStyles: Map<String, Float>,
         graphicStyles: Map<String, GraphicStyleDef>,
         bodyContent: String,
-        drawPageStyles: Map<String, Long> = emptyMap()
+        drawPageStyles: Map<String, DrawPageStyleDef> = emptyMap(),
+        rowStyles: Map<String, Float> = emptyMap(),
+        sectionStyles: Map<String, Int> = emptyMap()
     ): String {
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
@@ -627,18 +992,35 @@ object OdfSerializer {
         sb.append(""" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"""")
         sb.append(""" office:version="1.3">""")
 
+        // Declare fonts referenced by span styles (content.xml font-face-decls). (Round 3 / Tier 4)
+        val fontNames = spanStyles.values.mapNotNull { it.fontFamily }.distinct()
+        if (fontNames.isNotEmpty()) {
+            sb.append("<office:font-face-decls>")
+            for (fn in fontNames) sb.append("""<style:font-face style:name="${esc(fn)}" svg:font-family="${esc(fn)}"/>""")
+            sb.append("</office:font-face-decls>")
+        }
+
         sb.append("<office:automatic-styles>")
         for ((name, def) in spanStyles) {
             sb.append("""<style:style style:name="$name" style:family="text"><style:text-properties""")
             if (def.bold) sb.append(""" fo:font-weight="bold"""")
             if (def.italic) sb.append(""" fo:font-style="italic"""")
-            if (def.underline) sb.append(""" style:text-underline-style="solid" style:text-underline-width="auto"""")
+            if (def.underline) {
+                val ulStyle = def.underlineStyle ?: "solid"
+                sb.append(""" style:text-underline-style="$ulStyle" style:text-underline-width="auto"""")
+                if (def.underlineColor != null) sb.append(""" style:text-underline-color="${formatColor(def.underlineColor)}"""")
+                else sb.append(""" style:text-underline-color="font-color"""")
+            }
             if (def.strikethrough) sb.append(""" style:text-line-through-style="solid"""")
             if (def.color != null) sb.append(""" fo:color="${formatColor(def.color)}"""")
             if (def.fontSize != null) sb.append(""" fo:font-size="${def.fontSize}pt"""")
             if (def.fontFamily != null) sb.append(""" style:font-name="${esc(def.fontFamily)}"""")
             if (def.superscript) sb.append(""" style:text-position="super 58%"""")
             if (def.subscript) sb.append(""" style:text-position="sub 58%"""")
+            if (def.letterSpacing != null) sb.append(""" fo:letter-spacing="${def.letterSpacing}pt"""")
+            if (def.textTransform != null) sb.append(""" fo:text-transform="${def.textTransform}"""")
+            if (def.language != null) sb.append(""" fo:language="${esc(def.language)}"""")
+            if (def.country != null) sb.append(""" fo:country="${esc(def.country)}"""")
             sb.append("/></style:style>")
         }
         for ((name, def) in paraStyles) {
@@ -651,11 +1033,17 @@ object OdfSerializer {
                 else -> {}
             }
             if (def.marginLeft != 0f) sb.append(""" fo:margin-left="${cm(def.marginLeft)}"""")
+            if (def.marginRight != 0f) sb.append(""" fo:margin-right="${cm(def.marginRight)}"""")
             if (def.marginTop != 0f) sb.append(""" fo:margin-top="${cm(def.marginTop)}"""")
             if (def.marginBottom != 0f) sb.append(""" fo:margin-bottom="${cm(def.marginBottom)}"""")
             if (def.textIndent != 0f) sb.append(""" fo:text-indent="${cm(def.textIndent)}"""")
             if (def.lineHeightPercent != null) sb.append(""" fo:line-height="${(def.lineHeightPercent * 100).toInt()}%"""")
-            if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
+            if (def.keepWithNext) sb.append(""" fo:keep-with-next="always"""")
+            if (def.keepTogether) sb.append(""" fo:keep-together="always"""")
+            if (def.widows != null) sb.append(""" fo:widows="${def.widows}"""")
+            if (def.orphans != null) sb.append(""" fo:orphans="${def.orphans}"""")
+            if (def.borders != null) sb.append(borderAttrs(def.borders))
+            else if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
             if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
             if (def.breakBefore) sb.append(""" fo:break-before="page"""")
             if (def.tabStops.isNotEmpty()) {
@@ -670,6 +1058,12 @@ object OdfSerializer {
         for ((name, width) in colStyles) {
             sb.append("""<style:style style:name="$name" style:family="table-column"><style:table-column-properties style:column-width="${cm(width)}"/></style:style>""")
         }
+        for ((name, height) in rowStyles) {
+            sb.append("""<style:style style:name="$name" style:family="table-row"><style:table-row-properties style:row-height="${cm(height)}" style:use-optimal-row-height="false"/></style:style>""")
+        }
+        for ((name, cols) in sectionStyles) {
+            sb.append("""<style:style style:name="$name" style:family="section"><style:section-properties><style:columns fo:column-count="$cols" fo:column-gap="0.5cm"/></style:section-properties></style:style>""")
+        }
         // Number/date/currency data styles for cells, emitted before the cell styles that reference them. (B6)
         val dataStyleNames = HashMap<String, String>()
         run {
@@ -682,14 +1076,29 @@ object OdfSerializer {
                 sb.append(numberStyleXml(dsName, fmt))
             }
         }
+        // Conditional-format target cell styles, emitted before the styles that reference them. (Round 3)
+        val condTargets = LinkedHashMap<Pair<Long?, Long?>, String>()
+        for ((_, def) in cellStyles) for ((_, bg, tc) in def.condMaps) {
+            if (condTargets[bg to tc] == null) {
+                val nm = "cf${condTargets.size + 1}"
+                condTargets[bg to tc] = nm
+                sb.append("""<style:style style:name="$nm" style:family="table-cell"><style:table-cell-properties""")
+                if (bg != null) sb.append(""" fo:background-color="${formatColor(bg)}"""")
+                sb.append("/>")
+                if (tc != null) sb.append("""<style:text-properties fo:color="${formatColor(tc)}"/>""")
+                sb.append("</style:style>")
+            }
+        }
         for ((name, def) in cellStyles) {
             sb.append("""<style:style style:name="$name" style:family="table-cell"""")
             dataStyleNames[name]?.let { sb.append(""" style:data-style-name="$it"""") }
             sb.append(">")
             sb.append("<style:table-cell-properties")
             if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
-            if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
+            if (def.borders != null) sb.append(borderAttrs(def.borders))
+            else if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
             if (def.wrap) sb.append(""" fo:wrap-option="wrap"""")
+            if (def.verticalAlign != null) sb.append(""" style:vertical-align="${def.verticalAlign}"""")
             sb.append("/>")
             when (def.alignment) {
                 TextAlign.Start, TextAlign.Left -> sb.append("""<style:paragraph-properties fo:text-align="start"/>""")
@@ -702,19 +1111,41 @@ object OdfSerializer {
             if (def.bold) sb.append(""" fo:font-weight="bold"""")
             if (def.italic) sb.append(""" fo:font-style="italic"""")
             if (def.textColor != null) sb.append(""" fo:color="${formatColor(def.textColor)}"""")
-            sb.append("/></style:style>")
+            sb.append("/>")
+            for ((cond, bg, tc) in def.condMaps) {
+                val target = condTargets[bg to tc] ?: continue
+                sb.append("""<style:map style:condition="${esc(cond)}" style:apply-style-name="$target"/>""")
+            }
+            sb.append("</style:style>")
+        }
+        // draw:gradient definitions referenced by graphic styles. (Round 3)
+        val gradNames = LinkedHashMap<OdfGradient, String>()
+        for ((_, def) in graphicStyles) def.gradient?.let { g ->
+            if (gradNames[g] == null) {
+                val gn = "grad${gradNames.size + 1}"
+                gradNames[g] = gn
+                val ang = Math.round(g.angle * 10).toInt()  // ODF angle in 1/10 degree
+                sb.append("""<draw:gradient draw:name="$gn" draw:style="${esc(g.style)}" draw:start-color="${formatColor(g.startColor)}" draw:end-color="${formatColor(g.endColor)}" draw:angle="$ang"/>""")
+            }
         }
         for ((name, def) in graphicStyles) {
             sb.append("""<style:style style:name="$name" style:family="graphic"><style:graphic-properties""")
-            if (def.fillColor != null) sb.append(""" draw:fill="solid" draw:fill-color="${formatColor(def.fillColor)}"""")
+            if (def.gradient != null) sb.append(""" draw:fill="gradient" draw:fill-gradient-name="${gradNames[def.gradient]}"""")
+            else if (def.fillColor != null) sb.append(""" draw:fill="solid" draw:fill-color="${formatColor(def.fillColor)}"""")
             else sb.append(""" draw:fill="none"""")
             if (def.strokeColor != null) sb.append(""" draw:stroke="solid" svg:stroke-color="${formatColor(def.strokeColor)}"""")
             if (def.strokeWidth != null) sb.append(""" svg:stroke-width="${cm(def.strokeWidth)}"""")
             if (def.clip != null) sb.append(""" fo:clip="${def.clip}"""")
+            if (def.opacity != null) sb.append(""" draw:image-opacity="${def.opacity}%"""")
+            if (def.colorMode != null) sb.append(""" draw:color-mode="${def.colorMode}"""")
             sb.append("/></style:style>")
         }
-        for ((name, color) in drawPageStyles) {
-            sb.append("""<style:style style:name="$name" style:family="drawing-page"><style:drawing-page-properties draw:fill="solid" draw:fill-color="${formatColor(color)}"/></style:style>""")
+        for ((name, def) in drawPageStyles) {
+            sb.append("""<style:style style:name="$name" style:family="drawing-page"><style:drawing-page-properties""")
+            if (def.fillColor != null) sb.append(""" draw:fill="solid" draw:fill-color="${formatColor(def.fillColor)}"""")
+            if (def.transitionType != null) sb.append(""" presentation:transition-style="${esc(def.transitionType)}"""")
+            if (def.transitionSpeed != null) sb.append(""" presentation:transition-speed="${esc(def.transitionSpeed)}"""")
+            sb.append("/></style:style>")
         }
         sb.append("</office:automatic-styles>")
 
@@ -735,6 +1166,24 @@ object OdfSerializer {
                 sb.append("""<number:month number:style="long"/><number:text>-</number:text>""")
                 sb.append("""<number:day number:style="long"/>""")
                 sb.append("</number:date-style>")
+            }
+            fmt.isTime -> {
+                sb.append("""<number:time-style style:name="$name">""")
+                sb.append("""<number:hours number:style="long"/><number:text>:</number:text>""")
+                sb.append("""<number:minutes number:style="long"/><number:text>:</number:text>""")
+                sb.append("""<number:seconds number:style="long"/>""")
+                sb.append("</number:time-style>")
+            }
+            fmt.isScientific -> {
+                sb.append("""<number:number-style style:name="$name">""")
+                sb.append("""<number:scientific-number number:decimal-places="$dec" number:min-integer-digits="1" number:min-exponent-digits="2"/>""")
+                sb.append("</number:number-style>")
+            }
+            fmt.isFraction -> {
+                val denom = fmt.fractionDenominatorDigits.coerceIn(1, 5)
+                sb.append("""<number:number-style style:name="$name">""")
+                sb.append("""<number:fraction number:min-integer-digits="0" number:min-numerator-digits="1" number:min-denominator-digits="$denom"/>""")
+                sb.append("</number:number-style>")
             }
             fmt.currencySymbol != null -> {
                 sb.append("""<number:currency-style style:name="$name">""")
@@ -762,6 +1211,18 @@ object OdfSerializer {
         return String.format("#%06X", rgb)
     }
 
+    /** Emits fo:border / fo:border-* attributes from raw per-edge border strings. */
+    private fun borderAttrs(b: OdfBorders): String {
+        val t = b.top; val r = b.right; val bo = b.bottom; val l = b.left
+        if (t != null && t == r && t == bo && t == l) return """ fo:border="${esc(t)}""""
+        val sb = StringBuilder()
+        if (t != null) sb.append(""" fo:border-top="${esc(t)}"""")
+        if (r != null) sb.append(""" fo:border-right="${esc(r)}"""")
+        if (bo != null) sb.append(""" fo:border-bottom="${esc(bo)}"""")
+        if (l != null) sb.append(""" fo:border-left="${esc(l)}"""")
+        return sb.toString()
+    }
+
     /** px@96 -> cm length string. */
     private fun cm(px: Float): String = String.format(Locale.US, "%.4fcm", px / 37.795f)
 
@@ -782,9 +1243,51 @@ object OdfSerializer {
         else -> "image/png"
     }
 
-    private fun esc(text: String): String = text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun esc(text: String): String {
+        val sb = StringBuilder(text.length)
+        for (c in text) {
+            when (c) {
+                '&' -> sb.append("&amp;")
+                '<' -> sb.append("&lt;")
+                '>' -> sb.append("&gt;")
+                '"' -> sb.append("&quot;")
+                // Drop characters not permitted in XML 1.0 (keep tab/newline/carriage-return). (Tier 0 bugfix)
+                '\t', '\n', '\r' -> sb.append(c)
+                else -> if (c.code >= 0x20) sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Encodes inline text content preserving ODF whitespace semantics: runs of spaces become
+     * text:s, tabs become text:tab, and newlines become text:line-break. Without this, ODF readers
+     * collapse literal whitespace and lose multiple spaces / tabs / in-paragraph breaks. (Tier 0 bugfix)
+     */
+    private fun encodeText(text: String): String {
+        if (text.isEmpty()) return ""
+        val sb = StringBuilder()
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            when (c) {
+                '\t' -> { sb.append("<text:tab/>"); i++ }
+                '\n', '\u2028' -> { sb.append("<text:line-break/>"); i++ }
+                '\r' -> { i++ }
+                ' ' -> {
+                    var j = i + 1
+                    while (j < text.length && text[j] == ' ') j++
+                    val run = j - i
+                    sb.append(' ')
+                    if (run > 1) sb.append("""<text:s text:c="${run - 1}"/>""")
+                    i = j
+                }
+                '&' -> { sb.append("&amp;"); i++ }
+                '<' -> { sb.append("&lt;"); i++ }
+                '>' -> { sb.append("&gt;"); i++ }
+                else -> { if (c.code >= 0x20 || c == '\u0009') sb.append(c); i++ }
+            }
+        }
+        return sb.toString()
+    }
 }

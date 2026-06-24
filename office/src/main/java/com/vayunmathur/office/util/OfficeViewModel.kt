@@ -509,6 +509,41 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         updateParagraphRun(start, endInclusive, newText)
     }
 
+    /** Inserts a real ODF text field (date/time/page-number/...) at the caret. (Priority 2) */
+    fun insertFieldInRun(start: Int, endInclusive: Int, gPos: Int, kind: String, value: String) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val paras = runParas(start, endInclusive) ?: return
+        val lens = paraLens(paras)
+        val (pi, off) = runLocate(lens, gPos)
+        val para = paras[pi]
+        val chars = spansToChars(para.spans)
+        val template = OdfSpan(text = "", field = kind)
+        val fieldChars = value.map { template.copy(text = it.toString()) }
+        val at = off.coerceIn(0, chars.size)
+        chars.addAll(at, fieldChars)
+        val newContent = doc.content.toMutableList()
+        newContent[start + pi] = OdfContentBlock.Paragraph(para.copy(spans = charsToSpans(chars)))
+        updateDocument(doc.copy(content = newContent))
+    }
+
+    /** Computes the current display value for a newly-inserted field. (Priority 2) */
+    fun fieldDisplayValue(kind: String): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document
+        val meta = doc?.metadata
+        return when (kind) {
+            "date" -> java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+            "time" -> java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            "page-number" -> "1"
+            "page-count" -> "1"
+            "file-name" -> doc?.title ?: "Untitled"
+            "author-name" -> meta?.author ?: meta?.creator ?: ""
+            "title" -> meta?.title ?: doc?.title ?: ""
+            "subject" -> meta?.subject ?: ""
+            "description" -> meta?.description ?: ""
+            else -> ""
+        }
+    }
+
     /** Clears all character formatting across a run selection (B24). */
     fun clearRunFormatting(start: Int, endInclusive: Int, gStart: Int, gEnd: Int) {
         applyRunSpanStyle(start, endInclusive, gStart, gEnd) {
@@ -596,27 +631,91 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     fun insertTableOfContents() {
         val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
         val headingStyles = setOf(ParagraphStyle.HEADING1, ParagraphStyle.HEADING2, ParagraphStyle.HEADING3, ParagraphStyle.HEADING4)
-        val toc = mutableListOf<OdfContentBlock>()
-        toc.add(OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = "Table of Contents", bold = true)), style = ParagraphStyle.HEADING2)))
+        val entries = mutableListOf<OdfParagraph>()
         for (block in doc.content) {
             val para = (block as? OdfContentBlock.Paragraph)?.paragraph ?: continue
             if (para.style !in headingStyles) continue
             val text = para.spans.joinToString("") { it.text }.trim()
             if (text.isEmpty()) continue
             val level = when (para.style) { ParagraphStyle.HEADING1 -> 1; ParagraphStyle.HEADING2 -> 2; ParagraphStyle.HEADING3 -> 3; else -> 4 }
-            toc.add(OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = text)), marginLeft = (level - 1) * 18f)))
+            entries.add(OdfParagraph(listOf(OdfSpan(text = text)), marginLeft = (level - 1) * 18f))
         }
-        if (toc.size <= 1) return
-        toc.add(OdfContentBlock.PageBreak)
-        val content = toc + doc.content
+        if (entries.isEmpty()) return
+        val toc = OdfContentBlock.TableOfContents("Table of Contents", entries)
+        val content = listOf(toc, OdfContentBlock.PageBreak) + doc.content
         updateDocument(doc.copy(content = content))
     }
 
+    // --- Track changes accept/reject (Priority 6) ---
+
+    private fun transformChangeSpans(doc: OdfDocument.TextDocument, id: String, removeSpans: Boolean): OdfDocument.TextDocument {
+        fun mapSpans(spans: List<OdfSpan>): List<OdfSpan> {
+            if (spans.none { it.changeId == id }) return spans
+            val out = ArrayList<OdfSpan>()
+            for (s in spans) {
+                if (s.changeId == id) {
+                    if (removeSpans) continue
+                    out.add(s.copy(changeId = null, changeKind = null))
+                } else out.add(s)
+            }
+            return out.ifEmpty { listOf(OdfSpan(text = "")) }
+        }
+        val newContent = doc.content.map { block ->
+            when (block) {
+                is OdfContentBlock.Paragraph -> OdfContentBlock.Paragraph(block.paragraph.copy(spans = mapSpans(block.paragraph.spans)))
+                is OdfContentBlock.Table -> OdfContentBlock.Table(block.table.copy(rows = block.table.rows.map { r ->
+                    r.copy(cells = r.cells.map { c -> c.copy(paragraphs = c.paragraphs.map { p -> p.copy(spans = mapSpans(p.spans)) }) })
+                }))
+                is OdfContentBlock.TableOfContents -> OdfContentBlock.TableOfContents(block.title, block.entries.map { it.copy(spans = mapSpans(it.spans)) })
+                else -> block
+            }
+        }
+        return doc.copy(content = newContent, changes = doc.changes.filterNot { it.id == id })
+    }
+
+    /** Accept a tracked change: insertions stay, deletions are applied (text removed). */
+    fun acceptChange(id: String) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val type = doc.changes.find { it.id == id }?.type ?: return
+        updateDocument(transformChangeSpans(doc, id, removeSpans = type == "deletion"))
+    }
+
+    /** Reject a tracked change: insertions are removed, deletions are reverted (text kept). */
+    fun rejectChange(id: String) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val type = doc.changes.find { it.id == id }?.type ?: return
+        updateDocument(transformChangeSpans(doc, id, removeSpans = type != "deletion"))
+    }
+
+    fun acceptAllChanges() {
+        var doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        for (id in doc.changes.map { it.id }) {
+            val type = doc.changes.find { it.id == id }?.type ?: continue
+            doc = transformChangeSpans(doc, id, removeSpans = type == "deletion")
+        }
+        updateDocument(doc)
+    }
+
+    fun rejectAllChanges() {
+        var doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        for (id in doc.changes.map { it.id }) {
+            val type = doc.changes.find { it.id == id }?.type ?: continue
+            doc = transformChangeSpans(doc, id, removeSpans = type != "deletion")
+        }
+        updateDocument(doc)
+    }
+
+    /** Updates page geometry (size/margins/orientation), persisted to styles.xml on save. (Priority 7) */
+    fun setPageSetup(setup: OdfPageSetup) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        updateDocument(doc.copy(pageSetup = setup))
+    }
+
     /** Inserts a footnote with a citation marker at the caret (B15). */
-    fun insertFootnote(start: Int, endInclusive: Int, gPos: Int, body: String) {
+    fun insertFootnote(start: Int, endInclusive: Int, gPos: Int, body: String, isEndnote: Boolean = false) {
         val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
         val citation = (doc.footnotes.size + 1).toString()
-        val footnotes = doc.footnotes + OdfFootnote(citation, listOf(OdfParagraph(listOf(OdfSpan(text = body)))))
+        val footnotes = doc.footnotes + OdfFootnote(citation, listOf(OdfParagraph(listOf(OdfSpan(text = body)))), isEndnote)
         // Insert the citation marker text at the caret, then attach the footnote.
         val paras = runParas(start, endInclusive)
         if (paras != null) {
@@ -627,6 +726,20 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
         val current = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
         updateDocument(current.copy(footnotes = footnotes))
+    }
+
+    /** Removes the annotation span at [spanIndex] within paragraph [blockIndex] (resolve comment). (C3) */
+    fun resolveComment(blockIndex: Int, spanIndex: Int) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val block = doc.content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
+        val spans = block.paragraph.spans.toMutableList()
+        val span = spans.getOrNull(spanIndex) ?: return
+        if (span.annotation == null) return
+        spans.removeAt(spanIndex)
+        if (spans.isEmpty()) spans.add(OdfSpan(text = ""))
+        val content = doc.content.toMutableList()
+        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(spans = spans))
+        updateDocument(doc.copy(content = content))
     }
 
     /** Appends a comment/annotation marker to a paragraph (B16). */
@@ -1137,6 +1250,15 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Sets freeze panes on a sheet: freeze the top [rows] rows and left [cols] columns. (C2) */
+    fun setSheetFreeze(sheetIndex: Int, rows: Int, cols: Int) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
+        val sheets = doc.sheets.toMutableList()
+        val sheet = sheets.getOrNull(sheetIndex) ?: return
+        sheets[sheetIndex] = sheet.copy(freezeRows = rows.coerceAtLeast(0), freezeCols = cols.coerceAtLeast(0))
+        updateDocument(doc.copy(sheets = sheets))
+    }
+
     /** Fills the source cell down to the last row of the sheet. (C2) */
     fun fillDownToEnd(sheetIndex: Int, srcRow: Int, col: Int) {
         val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
@@ -1305,6 +1427,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                     is OdfShape.Ellipse -> s.copy(text = t)
                     is OdfShape.Line -> s.copy(text = t)
                     is OdfShape.CustomShape -> s.copy(text = t)
+                    is OdfShape.Polyline -> s.copy(text = t)
                 })
             }
         }
@@ -1429,6 +1552,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 OdfSlideElement.Shape(when (s) {
                     is OdfShape.Rect -> s.copy(text = t); is OdfShape.Ellipse -> s.copy(text = t)
                     is OdfShape.Line -> s.copy(text = t); is OdfShape.CustomShape -> s.copy(text = t)
+                    is OdfShape.Polyline -> s.copy(text = t)
                 })
             }
         }
@@ -1453,6 +1577,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 OdfSlideElement.Shape(when (s) {
                     is OdfShape.Rect -> s.copy(text = t); is OdfShape.Ellipse -> s.copy(text = t)
                     is OdfShape.Line -> s.copy(text = t); is OdfShape.CustomShape -> s.copy(text = t)
+                    is OdfShape.Polyline -> s.copy(text = t)
                 })
             }
         }
@@ -1486,6 +1611,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 OdfSlideElement.Shape(when (sh) {
                     is OdfShape.Rect -> sh.copy(text = t); is OdfShape.Ellipse -> sh.copy(text = t)
                     is OdfShape.Line -> sh.copy(text = t); is OdfShape.CustomShape -> sh.copy(text = t)
+                    is OdfShape.Polyline -> sh.copy(text = t)
                 })
             }
         }
@@ -1557,6 +1683,71 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         updateDocument(doc.copy(slides = slides))
     }
 
+    /** Rotates a text-document image block by delta degrees. (C4) */
+    fun rotateTextImage(blockIndex: Int, deltaDegrees: Float) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val block = doc.content.getOrNull(blockIndex) as? OdfContentBlock.Image ?: return
+        val content = doc.content.toMutableList()
+        content[blockIndex] = OdfContentBlock.Image(block.image.copy(rotationDegrees = (block.image.rotationDegrees + deltaDegrees) % 360f))
+        updateDocument(doc.copy(content = content))
+    }
+
+    /** Rotates an image element on a sheet's floating layer by delta degrees. (C4) */
+    fun rotateSheetImage(sheetIndex: Int, elementIndex: Int, deltaDegrees: Float) {
+        mutateSheetFloating(sheetIndex) { list ->
+            val el = list.getOrNull(elementIndex) as? OdfSlideElement.Frame ?: return@mutateSheetFloating list
+            val img = el.frame.image ?: return@mutateSheetFloating list
+            list.toMutableList().also { it[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = img.copy(rotationDegrees = (img.rotationDegrees + deltaDegrees) % 360f))) }
+        }
+    }
+
+    /** Replaces a text-document image's bytes with a new picture, resetting crop/rotation. (C4) */
+    fun replaceTextImage(blockIndex: Int, fileName: String, bytes: ByteArray) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
+        val block = doc.content.getOrNull(blockIndex) as? OdfContentBlock.Image ?: return
+        val path = uniqueImagePath(doc.images.keys, fileName)
+        val content = doc.content.toMutableList()
+        content[blockIndex] = OdfContentBlock.Image(block.image.copy(
+            path = path, imageData = bytes, naturalWidthPx = 0f, naturalHeightPx = 0f,
+            cropLeftPct = 0f, cropTopPct = 0f, cropRightPct = 0f, cropBottomPct = 0f, rotationDegrees = 0f
+        ))
+        updateDocument(doc.copy(content = content, images = doc.images + (path to bytes)))
+    }
+
+    /** Replaces a slide image element's bytes with a new picture. (C4) */
+    fun replaceSlideImage(slideIndex: Int, elementIndex: Int, fileName: String, bytes: ByteArray) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
+        val slides = doc.slides.toMutableList()
+        val slide = slides.getOrNull(slideIndex) ?: return
+        val el = slide.elements.getOrNull(elementIndex) as? OdfSlideElement.Frame ?: return
+        if (el.frame.image == null) return
+        val path = uniqueImagePath(doc.images.keys, fileName)
+        val elements = slide.elements.toMutableList()
+        elements[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(
+            path = path, imageData = bytes, naturalWidthPx = 0f, naturalHeightPx = 0f,
+            cropLeftPct = 0f, cropTopPct = 0f, cropRightPct = 0f, cropBottomPct = 0f, rotationDegrees = 0f
+        )))
+        slides[slideIndex] = slide.copy(elements = elements)
+        updateDocument(doc.copy(slides = slides, images = doc.images + (path to bytes)))
+    }
+
+    /** Replaces a sheet floating image element's bytes with a new picture. (C4) */
+    fun replaceSheetImage(sheetIndex: Int, elementIndex: Int, fileName: String, bytes: ByteArray) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
+        val path = uniqueImagePath(doc.images.keys, fileName)
+        val sheets = doc.sheets.toMutableList()
+        val sheet = sheets.getOrNull(sheetIndex) ?: return
+        val el = sheet.floating.getOrNull(elementIndex) as? OdfSlideElement.Frame ?: return
+        if (el.frame.image == null) return
+        val floating = sheet.floating.toMutableList()
+        floating[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(
+            path = path, imageData = bytes, naturalWidthPx = 0f, naturalHeightPx = 0f,
+            cropLeftPct = 0f, cropTopPct = 0f, cropRightPct = 0f, cropBottomPct = 0f, rotationDegrees = 0f
+        )))
+        sheets[sheetIndex] = sheet.copy(floating = floating)
+        updateDocument(doc.copy(sheets = sheets, images = doc.images + (path to bytes)))
+    }
+
     /** Sets crop insets on an image frame element of a slide. (Phase 5) */
     fun setSlideImageCrop(slideIndex: Int, elementIndex: Int, left: Float, top: Float, right: Float, bottom: Float) {
         val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
@@ -1609,6 +1800,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                     is OdfShape.Ellipse -> s.copy(fillColor = nf, strokeColor = ns)
                     is OdfShape.Line -> s.copy(fillColor = nf, strokeColor = ns)
                     is OdfShape.CustomShape -> s.copy(fillColor = nf, strokeColor = ns)
+                    is OdfShape.Polyline -> s.copy(fillColor = nf, strokeColor = ns)
                 })
             }
         }
@@ -1657,6 +1849,11 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                         is OdfContentBlock.Image -> sb.appendLine("[Image]")
                         is OdfContentBlock.Chart -> sb.appendLine("[Chart]")
                         is OdfContentBlock.Formula -> sb.appendLine("[Formula] " + OdfMath.parse(block.mathml)?.let { OdfMath.toText(it) }.orEmpty())
+                        is OdfContentBlock.TableOfContents -> {
+                            sb.appendLine(block.title)
+                            for (entry in block.entries) sb.appendLine(entry.spans.joinToString("") { it.text })
+                        }
+                        is OdfContentBlock.SectionStart, OdfContentBlock.SectionEnd -> {}
                     }
                 }
             }
@@ -1695,14 +1892,15 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun save(targetUri: Uri? = null) {
         val doc = (_state.value as? ViewState.Loaded)?.document ?: return
-        val source = documentUri ?: return
-        val target = targetUri ?: source
+        // Source may be null for a brand-new document; the writer then builds the package from scratch.
+        val source = documentUri
+        val target = targetUri ?: source ?: return
         _isSaving.value = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 OdfWriter.save(getApplication(), source, doc, target)
                 _hasUnsavedChanges.value = false
-                if (targetUri != null) documentUri = targetUri
+                documentUri = target
                 launch(Dispatchers.Main) { Toast.makeText(getApplication(), "Saved", Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { Toast.makeText(getApplication(), "Save failed: ${e.message}", Toast.LENGTH_SHORT).show() }
@@ -1711,6 +1909,9 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+
+    /** True when there's no backing file yet, so the UI should route Save to Save As. (Priority 1) */
+    fun needsSaveAs(): Boolean = documentUri == null
 
     sealed class ViewState {
         data object Empty : ViewState()

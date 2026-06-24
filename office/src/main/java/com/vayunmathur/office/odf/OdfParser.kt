@@ -36,6 +36,11 @@ object OdfParser {
         stylesXml?.let { numberStyleMap.putAll(parseNumberStyles(it)) }
         numberStyleMap.putAll(parseNumberStyles(contentXml))
 
+        gradientDefs = buildMap {
+            stylesXml?.let { putAll(parseGradients(it)) }
+            putAll(parseGradients(contentXml))
+        }
+
         var metadata = metaXml?.let { parseMetadata(it) } ?: OdfMetadata()
 
         // File size
@@ -47,17 +52,68 @@ object OdfParser {
 
         val images = entries.binaryEntries
         val objectContents = entries.textEntries.filterKeys { it.startsWith("Object") }
+        // Freeze-pane config from settings.xml, keyed by sheet name. (C2)
+        val freezeMap = entries.textEntries["settings.xml"]?.let { parseSettings(it) } ?: emptyMap()
 
         // Parse headers/footers from styles.xml
         val headerFooter = stylesXml?.let { parseHeaderFooter(it, styleMap) }
+        // Parse page geometry from styles.xml (Priority 7)
+        val pageSetup = stylesXml?.let { parsePageSetup(it) }
 
         val type = detectType(contentXml)
         return when (type) {
-            DocType.TEXT -> parseTextDocument(contentXml, styleMap, listStyleMap, fileName, metadata, images, headerFooter, objectContents)
-            DocType.SPREADSHEET -> parseSpreadsheet(contentXml, styleMap, numberStyleMap, fileName, metadata, images, objectContents)
+            DocType.TEXT -> parseTextDocument(contentXml, styleMap, listStyleMap, fileName, metadata, images, headerFooter, objectContents, pageSetup)
+            DocType.SPREADSHEET -> parseSpreadsheet(contentXml, styleMap, numberStyleMap, fileName, metadata, images, objectContents, freezeMap)
             DocType.PRESENTATION -> parsePresentation(contentXml, styleMap, fileName, metadata, images, objectContents)
             DocType.DRAWING -> parseDrawing(contentXml, styleMap, fileName, metadata, images, objectContents)
         }
+    }
+
+    /** Parses settings.xml for per-sheet freeze-pane info: sheet name -> (freezeRows, freezeCols). (C2) */
+    private fun parseSettings(xml: String): Map<String, Pair<Int, Int>> {
+        val out = mutableMapOf<String, Pair<Int, Int>>()
+        val parser = newParser(xml)
+        var e = parser.eventType
+        var inTables = false
+        var tablesDepth = -1
+        var curSheet: String? = null
+        var entryDepth = -1
+        var hMode = 0; var vMode = 0; var hPos = 0; var vPos = 0
+        var curItem: String? = null
+        val itemText = StringBuilder()
+        while (e != XmlPullParser.END_DOCUMENT) {
+            when (e) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "config-item-map-named" -> if (getAttr(parser, "name") == "Tables") { inTables = true; tablesDepth = parser.depth }
+                    "config-item-map-entry" -> if (inTables && curSheet == null) { curSheet = getAttr(parser, "name"); entryDepth = parser.depth; hMode = 0; vMode = 0; hPos = 0; vPos = 0 }
+                    "config-item" -> if (curSheet != null) { curItem = getAttr(parser, "name"); itemText.setLength(0) }
+                }
+                XmlPullParser.TEXT -> if (curItem != null) itemText.append(parser.text)
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "config-item" -> {
+                        val v = itemText.toString().trim().toIntOrNull() ?: 0
+                        when (curItem) {
+                            "HorizontalSplitMode" -> hMode = v
+                            "VerticalSplitMode" -> vMode = v
+                            "HorizontalSplitPosition" -> hPos = v
+                            "VerticalSplitPosition" -> vPos = v
+                            "PositionRight" -> if (hPos == 0) hPos = v
+                            "PositionBottom" -> if (vPos == 0) vPos = v
+                        }
+                        curItem = null
+                    }
+                    "config-item-map-entry" -> if (curSheet != null && parser.depth == entryDepth) {
+                        val cols = if (hMode == 2) hPos else 0
+                        val rows = if (vMode == 2) vPos else 0
+                        if (rows > 0 || cols > 0) out[curSheet!!] = rows to cols
+                        curSheet = null
+                    }
+                    "config-item-map-named" -> if (inTables && parser.depth == tablesDepth) inTables = false
+                }
+            }
+            e = parser.next()
+        }
+        return out
     }
 
     // --- ZIP extraction ---
@@ -70,7 +126,7 @@ object OdfParser {
     private fun extractAllEntries(context: Context, uri: Uri): ZipEntries {
         val textEntries = mutableMapOf<String, String>()
         val binaryEntries = mutableMapOf<String, ByteArray>()
-        val textFiles = setOf("content.xml", "styles.xml", "meta.xml", "META-INF/manifest.xml")
+        val textFiles = setOf("content.xml", "styles.xml", "meta.xml", "settings.xml", "META-INF/manifest.xml")
 
         val raw = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
         // Flat ODF (.fodt/.fods/.fodp) is a single XML file, not a zip. (J70)
@@ -246,7 +302,29 @@ object OdfParser {
         val tabStops: List<Float> = emptyList(),
         val dataStyleName: String? = null,
         val cellWrap: Boolean = false,
-        val clip: String? = null
+        val clip: String? = null,
+        val cellBorders: OdfBorders? = null,
+        val paraBorders: OdfBorders? = null,
+        val underlineStyle: String? = null,
+        val underlineColor: Long? = null,
+        val letterSpacing: Float? = null,
+        val textTransform: String? = null,
+        val language: String? = null,
+        val country: String? = null,
+        val marginRight: Float = 0f,
+        val keepWithNext: Boolean = false,
+        val keepTogether: Boolean = false,
+        val widows: Int? = null,
+        val orphans: Int? = null,
+        val rowHeight: Float? = null,
+        val imageOpacity: Float? = null,
+        val imageColorMode: String? = null,
+        val transitionType: String? = null,
+        val transitionSpeed: String? = null,
+        val conditionalMaps: List<Pair<String, String>> = emptyList(),
+        val cellVerticalAlign: String? = null,
+        val fillGradientName: String? = null,
+        val columnCount: Int = 1
     )
 
     private fun parseStyles(xml: String): Map<String, StyleInfo> {
@@ -274,17 +352,33 @@ object OdfParser {
         var superscript = false; var subscript = false
         var textAlign: TextAlign? = null
         var marginLeft = 0f; var marginTop = 0f; var marginBottom = 0f; var textIndent = 0f
+        var marginRight = 0f; var keepWithNext = false; var keepTogether = false
+        var widows: Int? = null; var orphans: Int? = null
         var paraBgColor: Long? = null
         var breakBefore: String? = null; var breakAfter: String? = null
         var drawFillColor: Long? = null; var drawStrokeColor: Long? = null; var drawStrokeWidth: Float? = null
         var cellBgColor: Long? = null; var cellBorderColor: Long? = null
         var cellWrap = false
+        var cellVerticalAlign: String? = null
         var writingMode: String? = null
         var columnWidth: Float? = null
+        var rowHeight: Float? = null
         var lineHeightPercent: Float? = null
         var paraBorderColor: Long? = null
         val tabStops = mutableListOf<Float>()
         var clipVal: String? = null
+        var imageOpacity: Float? = null; var imageColorMode: String? = null
+        var fillGradientName: String? = null
+        var columnCount = 1
+        var transitionType: String? = null; var transitionSpeed: String? = null
+        val conditionalMaps = mutableListOf<Pair<String, String>>()
+        // Raw per-edge border strings (Priority 4): uniform "border" plus optional edge overrides.
+        var paraBorderAll: String? = null; var paraBorderT: String? = null; var paraBorderR: String? = null; var paraBorderB: String? = null; var paraBorderL: String? = null
+        var cellBorderAll: String? = null; var cellBorderT: String? = null; var cellBorderR: String? = null; var cellBorderB: String? = null; var cellBorderL: String? = null
+        // Extended character properties (Round 2 R2).
+        var underlineStyle: String? = null; var underlineColor: Long? = null
+        var letterSpacing: Float? = null; var textTransform: String? = null
+        var language: String? = null; var country: String? = null
 
         val depth = parser.depth
         var eventType = parser.next()
@@ -297,8 +391,14 @@ object OdfParser {
                         getAttr(parser, "font-size")?.let { s -> fontSize = s.replace("pt", "").replace("px", "").toFloatOrNull() }
                         getAttr(parser, "font-name")?.let { fontFamily = it }
                         if (fontFamily == null) getAttr(parser, "font-family")?.let { fontFamily = it }
-                        getAttr(parser, "text-underline-style")?.let { if (it != "none") underline = true }
+                        getAttr(parser, "text-underline-style")?.let { if (it != "none") { underline = true; underlineStyle = it } }
+                        getAttr(parser, "text-underline-color")?.let { if (it != "font-color") underlineColor = parseColor(it) }
                         getAttr(parser, "text-line-through-style")?.let { if (it != "none") strikethrough = true }
+                        getAttr(parser, "letter-spacing")?.let { ls -> if (ls != "normal") letterSpacing = ls.replace("pt", "").replace("cm", "").toFloatOrNull() }
+                        getAttr(parser, "text-transform")?.let { if (it != "none") textTransform = it }
+                        if (textTransform == null && getAttr(parser, "font-variant") == "small-caps") textTransform = "uppercase"
+                        getAttr(parser, "language")?.let { language = it }
+                        getAttr(parser, "country")?.let { country = it }
                         getAttr(parser, "color")?.let { color = parseColor(it) }
                         getAttr(parser, "background-color")?.let { if (it != "transparent") bgColor = parseColor(it) }
                         getAttr(parser, "text-position")?.let { tp ->
@@ -317,8 +417,13 @@ object OdfParser {
                             else -> null
                         }
                         getAttr(parser, "margin-left")?.let { marginLeft = parseDimension(it) }
+                        getAttr(parser, "margin-right")?.let { marginRight = parseDimension(it) }
                         getAttr(parser, "margin-top")?.let { marginTop = parseDimension(it) }
                         getAttr(parser, "margin-bottom")?.let { marginBottom = parseDimension(it) }
+                        if (getAttr(parser, "keep-with-next").let { it != null && it != "auto" }) keepWithNext = true
+                        if (getAttr(parser, "keep-together").let { it != null && it != "auto" }) keepTogether = true
+                        getAttr(parser, "widows")?.toIntOrNull()?.let { widows = it }
+                        getAttr(parser, "orphans")?.toIntOrNull()?.let { orphans = it }
                         getAttr(parser, "text-indent")?.let { textIndent = parseDimension(it) }
                         getAttr(parser, "background-color")?.let { if (it != "transparent") paraBgColor = parseColor(it) }
                         breakBefore = getAttr(parser, "break-before")
@@ -328,8 +433,13 @@ object OdfParser {
                             if (lh.endsWith("%")) lh.dropLast(1).toFloatOrNull()?.let { lineHeightPercent = it / 100f }
                         }
                         getAttr(parser, "border")?.let { b ->
+                            paraBorderAll = b
                             b.split(" ").lastOrNull { it.startsWith("#") }?.let { paraBorderColor = parseColor(it) }
                         }
+                        getAttr(parser, "border-top")?.let { paraBorderT = it }
+                        getAttr(parser, "border-right")?.let { paraBorderR = it }
+                        getAttr(parser, "border-bottom")?.let { paraBorderB = it }
+                        getAttr(parser, "border-left")?.let { paraBorderL = it }
                     }
                     "tab-stop" -> {
                         getAttr(parser, "position")?.let { tabStops.add(parseDimension(it)) }
@@ -338,24 +448,48 @@ object OdfParser {
                         if (getAttr(parser, "fill") == "solid") {
                             getAttr(parser, "fill-color")?.let { drawFillColor = parseColor(it) }
                         }
+                        getAttr(parser, "fill-color")?.let { if (drawFillColor == null) drawFillColor = parseColor(it) }
+                        getAttr(parser, "transition-style")?.let { transitionType = it }
+                        getAttr(parser, "transition-speed")?.let { transitionSpeed = it }
                     }
                     "graphic-properties" -> {
                         if (getAttr(parser, "fill") == "solid" || getAttr(parser, "fill") == null) {
                             getAttr(parser, "fill-color")?.let { drawFillColor = parseColor(it) }
                         }
+                        if (getAttr(parser, "fill") == "gradient") getAttr(parser, "fill-gradient-name")?.let { fillGradientName = it }
                         getAttr(parser, "stroke-color")?.let { drawStrokeColor = parseColor(it) }
                         getAttr(parser, "stroke-width")?.let { drawStrokeWidth = parseDimension(it) }
                         getAttr(parser, "clip")?.let { clipVal = it }
+                        getAttr(parser, "image-opacity")?.let { imageOpacity = it.removeSuffix("%").toFloatOrNull() }
+                        getAttr(parser, "color-mode")?.let { imageColorMode = it }
                     }
+                    "map" -> {
+                        val cond = getAttr(parser, "condition"); val applyStyle = getAttr(parser, "apply-style-name")
+                        if (cond != null && applyStyle != null) conditionalMaps.add(cond to applyStyle)
+                    }
+                    "columns" -> getAttr(parser, "column-count")?.toIntOrNull()?.let { columnCount = it }
                     "table-cell-properties" -> {
                         getAttr(parser, "background-color")?.let { if (it != "transparent") cellBgColor = parseColor(it) }
                         getAttr(parser, "border")?.let { border ->
+                            cellBorderAll = border
                             border.split(" ").lastOrNull { it.startsWith("#") }?.let { cellBorderColor = parseColor(it) }
                         }
+                        getAttr(parser, "border-top")?.let { cellBorderT = it }
+                        getAttr(parser, "border-right")?.let { cellBorderR = it }
+                        getAttr(parser, "border-bottom")?.let { cellBorderB = it }
+                        getAttr(parser, "border-left")?.let { cellBorderL = it }
+                        if (cellBorderColor == null) {
+                            (cellBorderT ?: cellBorderR ?: cellBorderB ?: cellBorderL)
+                                ?.split(" ")?.lastOrNull { it.startsWith("#") }?.let { cellBorderColor = parseColor(it) }
+                        }
                         if (getAttr(parser, "wrap-option") == "wrap") cellWrap = true
+                        getAttr(parser, "vertical-align")?.let { cellVerticalAlign = it }
                     }
                     "table-column-properties" -> {
                         getAttr(parser, "column-width")?.let { columnWidth = parseDimension(it) }
+                    }
+                    "table-row-properties" -> {
+                        getAttr(parser, "row-height")?.let { rowHeight = parseDimension(it) }
                     }
                 }
             }
@@ -367,8 +501,18 @@ object OdfParser {
             textAlign, marginLeft, marginTop, marginBottom, textIndent, paraBgColor,
             breakBefore, breakAfter, drawFillColor, drawStrokeColor, drawStrokeWidth,
             cellBgColor, cellBorderColor, writingMode, columnWidth,
-            lineHeightPercent, paraBorderColor, tabStops, null, cellWrap, clipVal
+            lineHeightPercent, paraBorderColor, tabStops, null, cellWrap, clipVal,
+            buildBorders(cellBorderAll, cellBorderT, cellBorderR, cellBorderB, cellBorderL),
+            buildBorders(paraBorderAll, paraBorderT, paraBorderR, paraBorderB, paraBorderL),
+            underlineStyle, underlineColor, letterSpacing, textTransform, language, country,
+            marginRight, keepWithNext, keepTogether, widows, orphans, rowHeight, imageOpacity, imageColorMode, transitionType, transitionSpeed, conditionalMaps, cellVerticalAlign, fillGradientName, columnCount
         )
+    }
+
+    /** Combines a uniform fo:border with per-edge overrides into [OdfBorders], or null if none. */
+    private fun buildBorders(all: String?, top: String?, right: String?, bottom: String?, left: String?): OdfBorders? {
+        if (all == null && top == null && right == null && bottom == null && left == null) return null
+        return OdfBorders(top ?: all, right ?: all, bottom ?: all, left ?: all)
     }
 
     private fun resolveStyle(name: String?, styles: Map<String, StyleInfo>): StyleInfo {
@@ -408,7 +552,29 @@ object OdfParser {
                 tabStops = if (info.tabStops.isNotEmpty()) info.tabStops else parent.tabStops,
                 dataStyleName = info.dataStyleName ?: parent.dataStyleName,
                 cellWrap = info.cellWrap || parent.cellWrap,
-                clip = info.clip ?: parent.clip
+                clip = info.clip ?: parent.clip,
+                cellBorders = info.cellBorders ?: parent.cellBorders,
+                paraBorders = info.paraBorders ?: parent.paraBorders,
+                underlineStyle = info.underlineStyle ?: parent.underlineStyle,
+                underlineColor = info.underlineColor ?: parent.underlineColor,
+                letterSpacing = info.letterSpacing ?: parent.letterSpacing,
+                textTransform = info.textTransform ?: parent.textTransform,
+                language = info.language ?: parent.language,
+                country = info.country ?: parent.country,
+                marginRight = if (info.marginRight != 0f) info.marginRight else parent.marginRight,
+                keepWithNext = info.keepWithNext || parent.keepWithNext,
+                keepTogether = info.keepTogether || parent.keepTogether,
+                widows = info.widows ?: parent.widows,
+                orphans = info.orphans ?: parent.orphans,
+                rowHeight = info.rowHeight ?: parent.rowHeight,
+                imageOpacity = info.imageOpacity ?: parent.imageOpacity,
+                imageColorMode = info.imageColorMode ?: parent.imageColorMode,
+                transitionType = info.transitionType ?: parent.transitionType,
+                transitionSpeed = info.transitionSpeed ?: parent.transitionSpeed,
+                conditionalMaps = info.conditionalMaps.ifEmpty { parent.conditionalMaps },
+                cellVerticalAlign = info.cellVerticalAlign ?: parent.cellVerticalAlign,
+                fillGradientName = info.fillGradientName ?: parent.fillGradientName,
+                columnCount = if (info.columnCount != 1) info.columnCount else parent.columnCount
             )
         }
         return info
@@ -422,7 +588,8 @@ object OdfParser {
         val bulletChar: String = "\u2022",
         val prefix: String = "",
         val suffix: String = ".",
-        val startValue: Int = 1
+        val startValue: Int = 1,
+        val displayLevels: Int = 1
     )
 
     data class ListStyleInfo(val levels: Map<Int, ListLevelStyle>) {
@@ -444,6 +611,19 @@ object OdfParser {
             when (eventType) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "list-style" -> { currentName = getAttr(parser, "name"); levels = mutableMapOf() }
+                    "outline-style" -> { currentName = "%outline%"; levels = mutableMapOf() }
+                    "outline-level-style" -> {
+                        val lvl = getAttr(parser, "level")?.toIntOrNull() ?: 1
+                        val fmt = getAttr(parser, "num-format")
+                        levels[lvl] = ListLevelStyle(
+                            numbered = !fmt.isNullOrEmpty(),
+                            numberFormat = fmt?.ifEmpty { "1" } ?: "1",
+                            prefix = getAttr(parser, "num-prefix") ?: "",
+                            suffix = getAttr(parser, "num-suffix") ?: "",
+                            startValue = getAttr(parser, "start-value")?.toIntOrNull() ?: 1,
+                            displayLevels = getAttr(parser, "display-levels")?.toIntOrNull() ?: 1
+                        )
+                    }
                     "list-level-style-number" -> {
                         val lvl = getAttr(parser, "level")?.toIntOrNull() ?: 1
                         levels[lvl] = ListLevelStyle(
@@ -466,7 +646,7 @@ object OdfParser {
                         levels[lvl] = ListLevelStyle(numbered = false, bulletChar = "\u25AA")
                     }
                 }
-                XmlPullParser.END_TAG -> if (parser.name == "list-style" && currentName != null) {
+                XmlPullParser.END_TAG -> if ((parser.name == "list-style" || parser.name == "outline-style") && currentName != null) {
                     map[currentName] = ListStyleInfo(levels.toMap())
                     currentName = null
                 }
@@ -487,20 +667,43 @@ object OdfParser {
         var decimals: Int? = null
         var currency: String? = null
         var grouping = false
+        var isTime = false
+        var isScientific = false
+        var isFraction = false
+        var fracDenomDigits = 1
         fun flush() {
             val n = curName ?: return
-            map[n] = OdfNumberFormat(decimals, type == "percentage", currency, grouping, type == "date")
+            map[n] = OdfNumberFormat(
+                decimals = decimals,
+                percent = type == "percentage",
+                currencySymbol = currency,
+                grouping = grouping,
+                isDate = type == "date",
+                isTime = isTime || type == "time",
+                isScientific = isScientific,
+                isFraction = isFraction,
+                fractionDenominatorDigits = fracDenomDigits
+            )
         }
         while (e != XmlPullParser.END_DOCUMENT) {
             when (e) {
                 XmlPullParser.START_TAG -> when (parser.name) {
-                    "number-style", "percentage-style", "currency-style", "date-style" -> {
+                    "number-style", "percentage-style", "currency-style", "date-style", "time-style" -> {
                         curName = getAttr(parser, "name"); type = parser.name.removeSuffix("-style")
                         decimals = null; currency = null; grouping = false
+                        isTime = false; isScientific = false; isFraction = false; fracDenomDigits = 1
                     }
                     "number" -> {
                         getAttr(parser, "decimal-places")?.toIntOrNull()?.let { decimals = it }
                         if (getAttr(parser, "grouping") == "true") grouping = true
+                    }
+                    "scientific-number" -> {
+                        isScientific = true
+                        getAttr(parser, "decimal-places")?.toIntOrNull()?.let { decimals = it }
+                    }
+                    "fraction" -> {
+                        isFraction = true
+                        getAttr(parser, "min-denominator-digits")?.toIntOrNull()?.let { fracDenomDigits = it }
                     }
                     "currency-symbol" -> {
                         val d = parser.depth; var ev = parser.next(); val sb = StringBuilder()
@@ -513,7 +716,7 @@ object OdfParser {
                     }
                 }
                 XmlPullParser.END_TAG -> when (parser.name) {
-                    "number-style", "percentage-style", "currency-style", "date-style" -> { flush(); curName = null }
+                    "number-style", "percentage-style", "currency-style", "date-style", "time-style" -> { flush(); curName = null }
                 }
             }
             e = parser.next()
@@ -531,6 +734,10 @@ object OdfParser {
         var description: String? = null; var subject: String? = null
         val keywords = mutableListOf<String>()
         var pageCount: Int? = null; var wordCount: Int? = null
+        var charCount: Int? = null; var paragraphCount: Int? = null
+        var generator: String? = null; var editingCycles: Int? = null
+        val userDefined = LinkedHashMap<String, String>()
+        var udName: String? = null
         var currentTag = ""
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -540,7 +747,10 @@ object OdfParser {
                     if (parser.name == "document-statistic") {
                         pageCount = getAttr(parser, "page-count")?.toIntOrNull()
                         wordCount = getAttr(parser, "word-count")?.toIntOrNull()
+                        charCount = getAttr(parser, "character-count")?.toIntOrNull()
+                        paragraphCount = getAttr(parser, "paragraph-count")?.toIntOrNull()
                     }
+                    if (parser.name == "user-defined") udName = getAttr(parser, "name")
                 }
                 XmlPullParser.TEXT -> {
                     val text = parser.text.trim()
@@ -553,13 +763,17 @@ object OdfParser {
                         "description" -> description = text
                         "subject" -> subject = text
                         "keyword" -> keywords.add(text)
+                        "generator" -> generator = text
+                        "editing-cycles" -> editingCycles = text.toIntOrNull()
+                        "user-defined" -> udName?.let { userDefined[it] = text }
                     }
                 }
                 XmlPullParser.END_TAG -> currentTag = ""
             }
             eventType = parser.next()
         }
-        return OdfMetadata(title, creator ?: initialCreator, initialCreator, creationDate, modifiedDate, description, subject, keywords, pageCount, wordCount)
+        return OdfMetadata(title, creator ?: initialCreator, initialCreator, creationDate, modifiedDate, description, subject, keywords, pageCount, wordCount,
+            generator = generator, editingCycles = editingCycles, charCount = charCount, paragraphCount = paragraphCount, userDefined = userDefined)
     }
 
     // --- Header/Footer parsing from styles.xml ---
@@ -568,6 +782,28 @@ object OdfParser {
         val headerParagraphs: List<OdfParagraph>,
         val footerParagraphs: List<OdfParagraph>
     )
+
+    /** Parses page geometry from the first style:page-layout-properties in styles.xml. (Priority 7) */
+    private fun parsePageSetup(stylesXml: String): OdfPageSetup? {
+        val parser = newParser(stylesXml)
+        var e = parser.eventType
+        while (e != XmlPullParser.END_DOCUMENT) {
+            if (e == XmlPullParser.START_TAG && parser.name == "page-layout-properties") {
+                val def = OdfPageSetup()
+                val mAll = getAttr(parser, "margin")?.let { parseDimension(it) }
+                return OdfPageSetup(
+                    widthPx = getAttr(parser, "page-width")?.let { parseDimension(it) } ?: def.widthPx,
+                    heightPx = getAttr(parser, "page-height")?.let { parseDimension(it) } ?: def.heightPx,
+                    marginLeftPx = getAttr(parser, "margin-left")?.let { parseDimension(it) } ?: mAll ?: def.marginLeftPx,
+                    marginRightPx = getAttr(parser, "margin-right")?.let { parseDimension(it) } ?: mAll ?: def.marginRightPx,
+                    marginTopPx = getAttr(parser, "margin-top")?.let { parseDimension(it) } ?: mAll ?: def.marginTopPx,
+                    marginBottomPx = getAttr(parser, "margin-bottom")?.let { parseDimension(it) } ?: mAll ?: def.marginBottomPx
+                )
+            }
+            e = parser.next()
+        }
+        return null
+    }
 
     private fun parseHeaderFooter(stylesXml: String, styles: Map<String, StyleInfo>): HeaderFooterResult {
         val headerParas = mutableListOf<OdfParagraph>()
@@ -616,7 +852,13 @@ object OdfParser {
             backgroundColor = resolved.backgroundColor,
             superscript = resolved.superscript,
             subscript = resolved.subscript,
-            href = href
+            href = href,
+            underlineStyle = resolved.underlineStyle,
+            underlineColor = resolved.underlineColor,
+            letterSpacing = resolved.letterSpacing,
+            textTransform = resolved.textTransform,
+            language = resolved.language,
+            country = resolved.country
         )
     }
 
@@ -640,6 +882,14 @@ object OdfParser {
         var pendingFrameH = 0f
         var pendingFrameClip: String? = null
         var pendingFrameStyleClip: String? = null
+        // Track-change insertion ranges (changeId -> span start index) and a buffer flush helper. (Priority 6)
+        val changeStack = ArrayDeque<Pair<String, Int>>()
+        fun flushBuf() {
+            if (textBuffer.isNotEmpty()) {
+                spans.add(makeSpan(textBuffer.toString(), currentStyleName, styles, currentHref))
+                textBuffer.clear()
+            }
+        }
 
         while (!(eventType == XmlPullParser.END_TAG && parser.depth == depth && parser.name == endTag)) {
             when (eventType) {
@@ -740,6 +990,77 @@ object OdfParser {
                             spans.add(OdfSpan(text = " \uD83D\uDCDD ", annotation = annotation))
                         }
                     }
+                    "change-start" -> {
+                        flushBuf()
+                        getAttr(parser, "change-id")?.let { changeStack.addLast(it to spans.size) }
+                    }
+                    "change-end" -> {
+                        flushBuf()
+                        val id = getAttr(parser, "change-id")
+                        val idx = changeStack.indexOfLast { it.first == id }
+                        if (idx >= 0) {
+                            val (cid, start) = changeStack.removeAt(idx)
+                            for (i in start until spans.size) spans[i] = spans[i].copy(changeKind = "insertion", changeId = cid)
+                        }
+                    }
+                    "change" -> {
+                        // Deletion point: pull the deleted text from the tracked-changes region. (Priority 6)
+                        flushBuf()
+                        getAttr(parser, "change-id")?.let { id ->
+                            spans.add(OdfSpan(text = trackedDeletionText[id] ?: "", changeKind = "deletion", changeId = id))
+                        }
+                    }
+                    "reference-ref", "bookmark-ref" -> {
+                        // Cross-reference to a reference-mark/bookmark, carrying its cached display text. (Priority 5)
+                        if (textBuffer.isNotEmpty()) {
+                            spans.add(makeSpan(textBuffer.toString(), currentStyleName, styles, currentHref))
+                            textBuffer.clear()
+                        }
+                        val kind = parser.name
+                        val refName = getAttr(parser, "ref-name")
+                        val refFormat = getAttr(parser, "reference-format")
+                        val d = parser.depth; val fb = StringBuilder(); var ev = parser.next()
+                        while (!(ev == XmlPullParser.END_TAG && parser.depth == d)) {
+                            if (ev == XmlPullParser.TEXT) fb.append(parser.text)
+                            if (ev == XmlPullParser.END_DOCUMENT) break
+                            ev = parser.next()
+                        }
+                        spans.add(makeSpan(fb.toString(), currentStyleName, styles, currentHref)
+                            .copy(refKind = kind, refName = refName, refFormat = refFormat, color = LINK_COLOR))
+                    }
+                    "reference-mark", "reference-mark-start", "reference-mark-end" -> {
+                        // Cross-reference target marker (zero-width). (Priority 5)
+                        if (textBuffer.isNotEmpty()) {
+                            spans.add(makeSpan(textBuffer.toString(), currentStyleName, styles, currentHref))
+                            textBuffer.clear()
+                        }
+                        spans.add(OdfSpan(text = "", refKind = parser.name, refName = getAttr(parser, "name")))
+                    }
+                    "bookmark", "bookmark-start", "bookmark-end" -> {
+                        // Inline bookmark / bookmark range marker (zero-width). (Priority 9)
+                        if (textBuffer.isNotEmpty()) {
+                            spans.add(makeSpan(textBuffer.toString(), currentStyleName, styles, currentHref))
+                            textBuffer.clear()
+                        }
+                        spans.add(OdfSpan(text = "", refKind = parser.name, refName = getAttr(parser, "name")))
+                    }
+                    in FIELD_TAGS -> {
+                        // ODF text field elements -> a span carrying the field kind + cached value. (Priority 2)
+                        if (textBuffer.isNotEmpty()) {
+                            spans.add(makeSpan(textBuffer.toString(), currentStyleName, styles, currentHref))
+                            textBuffer.clear()
+                        }
+                        val kind = parser.name
+                        val d = parser.depth
+                        val fb = StringBuilder()
+                        var ev = parser.next()
+                        while (!(ev == XmlPullParser.END_TAG && parser.depth == d)) {
+                            if (ev == XmlPullParser.TEXT) fb.append(parser.text)
+                            if (ev == XmlPullParser.END_DOCUMENT) break
+                            ev = parser.next()
+                        }
+                        spans.add(makeSpan(fb.toString(), currentStyleName, styles, currentHref).copy(field = kind))
+                    }
                 }
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "span" -> {
@@ -770,6 +1091,7 @@ object OdfParser {
     // --- Footnotes ---
 
     private fun parseFootnote(parser: XmlPullParser, styles: Map<String, StyleInfo>): OdfFootnote? {
+        val isEndnote = getAttr(parser, "note-class") == "endnote"
         var citation = ""
         val body = mutableListOf<OdfParagraph>()
         val depth = parser.depth
@@ -801,7 +1123,7 @@ object OdfParser {
             }
             eventType = parser.next()
         }
-        return if (citation.isNotEmpty()) OdfFootnote(citation, body) else null
+        return if (citation.isNotEmpty()) OdfFootnote(citation, body, isEndnote) else null
     }
 
     // --- Annotations ---
@@ -843,23 +1165,33 @@ object OdfParser {
     private fun parseTextDocument(
         xml: String, styles: Map<String, StyleInfo>, listStyles: Map<String, ListStyleInfo>,
         title: String, metadata: OdfMetadata, images: Map<String, ByteArray>,
-        headerFooter: HeaderFooterResult?, objectContents: Map<String, String> = emptyMap()
+        headerFooter: HeaderFooterResult?, objectContents: Map<String, String> = emptyMap(),
+        pageSetup: OdfPageSetup? = null
     ): OdfDocument.TextDocument {
         val content = mutableListOf<OdfContentBlock>()
         val footnotes = mutableListOf<OdfFootnote>()
         val bookmarks = mutableListOf<OdfBookmark>()
+        val changes = mutableListOf<OdfChange>()
+        trackedDeletionText = emptyMap()
         val parser = newParser(xml)
         var inBody = false
         var listDepth = 0
         val listTypeStack = mutableListOf<ListType>()
         val listItemCounter = mutableListOf<Int>()
         val listStyleStack = mutableListOf<ListStyleInfo?>()
+        val outlineStyle = listStyles["%outline%"]
+        val outlineCounters = IntArray(11)
         var eventType = parser.eventType
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
             when (eventType) {
                 XmlPullParser.START_TAG -> when {
                     parser.name == "text" && parser.namespace?.contains("office") == true -> inBody = true
+                    inBody && parser.name == "tracked-changes" -> {
+                        val (parsed, delText) = parseTrackedChanges(parser)
+                        changes.addAll(parsed)
+                        trackedDeletionText = delText
+                    }
                     inBody && (parser.name == "bookmark" || parser.name == "bookmark-start") -> {
                         val bkName = getAttr(parser, "name")
                         if (bkName != null) bookmarks.add(OdfBookmark(bkName, content.size))
@@ -876,6 +1208,19 @@ object OdfParser {
                         if (resolved.breakBefore == "page") content.add(OdfContentBlock.PageBreak)
                         val direction = parseDirection(resolved.writingMode)
                         val hLevelStyle = if (listDepth > 0) listStyleStack.lastOrNull()?.levelStyle(listDepth) else null
+                        // Automatic outline heading numbering (text:outline-style). (Round 3)
+                        val outlineNum: String? = outlineStyle?.let { os ->
+                            val lvlStyle = os.levels[level]
+                            if (lvlStyle?.numbered != true) null else {
+                                outlineCounters[level]++
+                                if (outlineCounters[level] < lvlStyle.startValue) outlineCounters[level] = lvlStyle.startValue
+                                for (i in level + 1..10) outlineCounters[i] = 0
+                                val d = lvlStyle.displayLevels.coerceIn(1, level)
+                                ((level - d + 1)..level).joinToString(".") { lv ->
+                                    formatListNumber(outlineCounters[lv].coerceAtLeast(1), os.levels[lv]?.numberFormat ?: "1")
+                                } + lvlStyle.suffix
+                            }
+                        }
                         content.add(OdfContentBlock.Paragraph(OdfParagraph(
                             spans = spans, style = paraStyle,
                             alignment = resolved.textAlign, marginLeft = resolved.marginLeft,
@@ -884,6 +1229,12 @@ object OdfParser {
                             direction = direction,
                             lineHeightPercent = resolved.lineHeightPercent,
                             borderColor = resolved.paragraphBorderColor,
+                            borders = resolved.paraBorders,
+                            marginRight = resolved.marginRight,
+                            keepWithNext = resolved.keepWithNext,
+                            keepTogether = resolved.keepTogether,
+                            widows = resolved.widows,
+                            orphans = resolved.orphans,
                             tabStops = resolved.tabStops,
                             listLevel = if (listDepth > 0) listDepth else 0,
                             listType = if (hLevelStyle?.numbered == true) ListType.NUMBERED else ListType.BULLET,
@@ -891,7 +1242,8 @@ object OdfParser {
                             listNumberFormat = hLevelStyle?.numberFormat ?: "1",
                             listBulletChar = hLevelStyle?.bulletChar ?: "\u2022",
                             listNumberPrefix = hLevelStyle?.prefix ?: "",
-                            listNumberSuffix = hLevelStyle?.suffix ?: "."
+                            listNumberSuffix = hLevelStyle?.suffix ?: ".",
+                            outlineNumber = outlineNum
                         )))
                         for (img in inlineImages) content.add(OdfContentBlock.Image(img))
                         for (ch in inlineCharts) content.add(OdfContentBlock.Chart(ch))
@@ -927,6 +1279,12 @@ object OdfParser {
                                 direction = direction,
                                 lineHeightPercent = resolved.lineHeightPercent,
                                 borderColor = resolved.paragraphBorderColor,
+                                borders = resolved.paraBorders,
+                                marginRight = resolved.marginRight,
+                                keepWithNext = resolved.keepWithNext,
+                                keepTogether = resolved.keepTogether,
+                                widows = resolved.widows,
+                                orphans = resolved.orphans,
                                 tabStops = resolved.tabStops,
                                 listNumberFormat = levelStyle?.numberFormat ?: "1",
                                 listBulletChar = levelStyle?.bulletChar ?: "\u2022",
@@ -938,6 +1296,11 @@ object OdfParser {
                         for (ch in inlineCharts) content.add(OdfContentBlock.Chart(ch))
                         for (f in inlineFormulas) content.add(if (f.contains("math")) OdfContentBlock.Formula(f) else OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = f, italic = true)), alignment = TextAlign.Center)))
                         if (resolved.breakAfter == "page") content.add(OdfContentBlock.PageBreak)
+                    }
+                    inBody && parser.name == "section" -> {
+                        val nm = getAttr(parser, "name") ?: "Section"
+                        val cols = resolveStyle(getAttr(parser, "style-name"), styles).columnCount
+                        content.add(OdfContentBlock.SectionStart(nm, cols))
                     }
                     inBody && parser.name == "list" -> {
                         listDepth++
@@ -982,6 +1345,7 @@ object OdfParser {
                         if (listItemCounter.isNotEmpty()) listItemCounter.removeAt(listItemCounter.size - 1)
                         if (listStyleStack.isNotEmpty()) listStyleStack.removeAt(listStyleStack.size - 1)
                     }
+                    parser.name == "section" && inBody -> content.add(OdfContentBlock.SectionEnd)
                 }
             }
             eventType = parser.next()
@@ -989,7 +1353,7 @@ object OdfParser {
         return OdfDocument.TextDocument(title, content, metadata, images, footnotes,
             headerParagraphs = headerFooter?.headerParagraphs ?: emptyList(),
             footerParagraphs = headerFooter?.footerParagraphs ?: emptyList(),
-            bookmarks = bookmarks)
+            bookmarks = bookmarks, changes = changes, pageSetup = pageSetup)
     }
 
     private fun parseDirection(writingMode: String?): LayoutDirection? = when {
@@ -1005,6 +1369,8 @@ object OdfParser {
         val tableName = getAttr(parser, "name") ?: ""
         val columns = mutableListOf<OdfTableColumn>()
         val rows = mutableListOf<OdfTableRow>()
+        var headerRowCount = 0
+        var inHeader = false
         val depth = parser.depth
         var eventType = parser.next()
 
@@ -1016,12 +1382,14 @@ object OdfParser {
                     val width = resolveStyle(styleName, styles).columnWidth
                     repeat(repeated.coerceAtMost(100)) { columns.add(OdfTableColumn(width = width)) }
                 }
-                "table-row" -> rows.add(OdfTableRow(parseTableCells(parser, styles)))
-                "table-header-rows" -> { /* continue into children */ }
+                "table-row" -> { rows.add(OdfTableRow(parseTableCells(parser, styles))); if (inHeader) headerRowCount++ }
+                "table-header-rows" -> inHeader = true
+            } else if (eventType == XmlPullParser.END_TAG && parser.name == "table-header-rows") {
+                inHeader = false
             }
             eventType = parser.next()
         }
-        return OdfTable(tableName, columns, rows)
+        return OdfTable(tableName, columns, rows, headerRowCount)
     }
 
     private fun parseTableCells(parser: XmlPullParser, styles: Map<String, StyleInfo>): List<OdfTableCell> {
@@ -1040,7 +1408,9 @@ object OdfParser {
                         paragraphs = parseTableCellContent(parser, styles),
                         colSpan = colSpan, rowSpan = rowSpan,
                         backgroundColor = resolved.cellBackgroundColor,
-                        borderColor = resolved.cellBorderColor
+                        borderColor = resolved.cellBorderColor,
+                        formula = getAttr(parser, "formula"),
+                        verticalAlign = resolved.cellVerticalAlign
                     ))
                 }
                 "covered-table-cell" -> {
@@ -1074,18 +1444,80 @@ object OdfParser {
         val depth = parser.depth
         var eventType = parser.next()
         var inIndexBody = false
+        var inIndexTitle = false
+        var title = "Table of Contents"
+        val entries = mutableListOf<OdfParagraph>()
 
         while (!(eventType == XmlPullParser.END_TAG && parser.depth == depth)) {
             when {
                 eventType == XmlPullParser.START_TAG && parser.name == "index-body" -> inIndexBody = true
                 eventType == XmlPullParser.END_TAG && parser.name == "index-body" -> inIndexBody = false
+                eventType == XmlPullParser.START_TAG && parser.name == "index-title" -> inIndexTitle = true
+                eventType == XmlPullParser.END_TAG && parser.name == "index-title" -> inIndexTitle = false
                 eventType == XmlPullParser.START_TAG && parser.name == "p" && inIndexBody -> {
                     val spans = parseInlineContent(parser, "p", styles)
-                    if (spans.isNotEmpty()) content.add(OdfContentBlock.Paragraph(OdfParagraph(spans)))
+                    val text = spans.joinToString("") { it.text }.trim()
+                    if (inIndexTitle) {
+                        if (text.isNotEmpty()) title = text
+                    } else if (spans.isNotEmpty()) {
+                        entries.add(OdfParagraph(spans))
+                    }
                 }
             }
             eventType = parser.next()
         }
+        content.add(OdfContentBlock.TableOfContents(title, entries))
+    }
+
+    /** Parses text:tracked-changes into change metadata + a map of deletion text by change-id. (Priority 6) */
+    private fun parseTrackedChanges(parser: XmlPullParser): Pair<List<OdfChange>, Map<String, String>> {
+        val list = mutableListOf<OdfChange>()
+        val delText = HashMap<String, String>()
+        val depth = parser.depth
+        fun collectText(): String {
+            val d = parser.depth; val sb = StringBuilder(); var ev = parser.next()
+            while (!(ev == XmlPullParser.END_TAG && parser.depth == d)) {
+                if (ev == XmlPullParser.TEXT) sb.append(parser.text)
+                if (ev == XmlPullParser.END_DOCUMENT) break
+                ev = parser.next()
+            }
+            return sb.toString()
+        }
+        var curId: String? = null
+        var curType: String? = null
+        var author: String? = null
+        var date: String? = null
+        val delBuf = StringBuilder()
+        var inDeletion = false
+        fun flush() {
+            val id = curId ?: return
+            val type = curType ?: "insertion"
+            list.add(OdfChange(id, type, author, date))
+            if (type == "deletion") delText[id] = delBuf.toString()
+        }
+        var ev = parser.next()
+        while (!(ev == XmlPullParser.END_TAG && parser.depth == depth)) {
+            when (ev) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "changed-region" -> {
+                        curId = getAttr(parser, "id"); curType = null; author = null; date = null
+                        delBuf.clear(); inDeletion = false
+                    }
+                    "insertion" -> curType = "insertion"
+                    "deletion" -> { curType = "deletion"; inDeletion = true }
+                    "format-change" -> curType = "format-change"
+                    "creator" -> author = collectText().trim()
+                    "date" -> date = collectText().trim()
+                    "p" -> if (inDeletion) { if (delBuf.isNotEmpty()) delBuf.append("\n"); delBuf.append(collectText()) }
+                }
+                XmlPullParser.END_TAG -> when (parser.name) {
+                    "changed-region" -> { flush(); curId = null }
+                    "deletion" -> inDeletion = false
+                }
+            }
+            ev = parser.next()
+        }
+        return list to delText
     }
 
     // --- Embedded charts ---
@@ -1100,17 +1532,31 @@ object OdfParser {
         var cellText = StringBuilder()
         var cellValue: Float? = null
         val rows = mutableListOf<List<Pair<String, Float?>>>()
+        // Chart styling round-trip: legend, title/subtitle, axis titles. (Priority 8)
+        var legend = false
+        var title: String? = null; var subtitle: String? = null
+        var xAxisTitle: String? = null; var yAxisTitle: String? = null
+        var axisDim: String? = null
+        var captureTarget: String? = null
+        val titleBuf = StringBuilder()
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
             when (eventType) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "chart" -> if (chartClass == null) chartClass = getAttr(parser, "class")
+                    "legend" -> legend = true
+                    "axis" -> axisDim = getAttr(parser, "dimension")
+                    "title" -> { captureTarget = when (axisDim) { "x" -> "x"; "y" -> "y"; else -> "main" }; titleBuf.setLength(0) }
+                    "subtitle" -> { captureTarget = "sub"; titleBuf.setLength(0) }
                     "table" -> if (getAttr(parser, "name") == "local-table") inTable = true
                     "table-row" -> if (inTable) curRow = mutableListOf()
                     "table-cell" -> if (inTable && curRow != null) { inCell = true; cellText = StringBuilder(); cellValue = getAttr(parser, "value")?.toFloatOrNull() }
                 }
-                XmlPullParser.TEXT -> if (inCell) cellText.append(parser.text)
+                XmlPullParser.TEXT -> if (inCell) cellText.append(parser.text) else if (captureTarget != null) titleBuf.append(parser.text)
                 XmlPullParser.END_TAG -> when (parser.name) {
+                    "title" -> { val t = titleBuf.toString().trim().ifEmpty { null }; when (captureTarget) { "x" -> xAxisTitle = t; "y" -> yAxisTitle = t; "main" -> title = t }; captureTarget = null }
+                    "subtitle" -> { subtitle = titleBuf.toString().trim().ifEmpty { null }; captureTarget = null }
+                    "axis" -> axisDim = null
                     "table" -> if (inTable) inTable = false
                     "table-cell" -> if (inCell) { curRow?.add(cellText.toString().trim() to cellValue); inCell = false }
                     "table-row" -> if (curRow != null) { rows.add(curRow!!); curRow = null }
@@ -1142,7 +1588,7 @@ object OdfParser {
             else -> ChartType.BAR
         }
         val series = seriesNames.mapIndexed { idx, n -> OdfChartSeries(n, seriesValues[idx]) }
-        return if (categories.isEmpty()) null else OdfChart(type, categories, series)
+        return if (categories.isEmpty()) null else OdfChart(type, categories, series, title, subtitle, legend, xAxisTitle, yAxisTitle)
     }
 
     private fun parseFormulaText(xml: String): String? {
@@ -1163,27 +1609,50 @@ object OdfParser {
 
     private fun parseSpreadsheet(
         xml: String, styles: Map<String, StyleInfo>, numberStyles: Map<String, OdfNumberFormat>,
-        title: String, metadata: OdfMetadata, images: Map<String, ByteArray>, objectContents: Map<String, String> = emptyMap()
+        title: String, metadata: OdfMetadata, images: Map<String, ByteArray>, objectContents: Map<String, String> = emptyMap(),
+        freezeMap: Map<String, Pair<Int, Int>> = emptyMap()
     ): OdfDocument.Spreadsheet {
         val sheets = mutableListOf<OdfSheet>()
+        val namedRanges = mutableListOf<OdfNamedRange>()
+        val validations = mutableListOf<OdfDataValidation>()
         val parser = newParser(xml)
         var eventType = parser.eventType
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
             if (eventType == XmlPullParser.START_TAG && parser.name == "table" && parser.namespace?.contains("table") == true) {
                 val name = getAttr(parser, "name") ?: "Sheet ${sheets.size + 1}"
-                val result = parseSheetContent(parser, styles, numberStyles, images, objectContents)
-                sheets.add(OdfSheet(name, result.first, result.second, result.third))
+                val printRanges = getAttr(parser, "print-ranges")
+                val r = parseSheetContent(parser, styles, numberStyles, images, objectContents)
+                val freeze = freezeMap[name]
+                sheets.add(OdfSheet(name, r.rows, r.columnWidths, r.floating, freeze?.first ?: 0, freeze?.second ?: 0,
+                    rowHeights = r.rowHeights, hiddenRows = r.hiddenRows, hiddenCols = r.hiddenCols, printRanges = printRanges))
+            } else if (eventType == XmlPullParser.START_TAG && parser.name == "named-range") {
+                val nm = getAttr(parser, "name")
+                val addr = getAttr(parser, "cell-range-address")
+                if (nm != null && addr != null) namedRanges.add(OdfNamedRange(nm, addr, getAttr(parser, "base-cell-address")))
+            } else if (eventType == XmlPullParser.START_TAG && parser.name == "content-validation") {
+                val nm = getAttr(parser, "name")
+                val cond = getAttr(parser, "condition")
+                if (nm != null && cond != null) validations.add(OdfDataValidation(nm, cond, getAttr(parser, "allow-empty-cell") != "false"))
             }
             eventType = parser.next()
         }
-        return OdfDocument.Spreadsheet(title, sheets, metadata, images)
+        return OdfDocument.Spreadsheet(title, sheets, metadata, images, namedRanges, validations)
     }
 
-    private fun parseSheetContent(parser: XmlPullParser, styles: Map<String, StyleInfo>, numberStyles: Map<String, OdfNumberFormat>, images: Map<String, ByteArray>, objectContents: Map<String, String> = emptyMap()): Triple<List<OdfRow>, List<Float?>, List<OdfSlideElement>> {
+    private data class SheetParse(
+        val rows: List<OdfRow>, val columnWidths: List<Float?>, val floating: List<OdfSlideElement>,
+        val rowHeights: List<Float?>, val hiddenRows: Set<Int>, val hiddenCols: Set<Int>
+    )
+
+    private fun parseSheetContent(parser: XmlPullParser, styles: Map<String, StyleInfo>, numberStyles: Map<String, OdfNumberFormat>, images: Map<String, ByteArray>, objectContents: Map<String, String> = emptyMap()): SheetParse {
         val rows = mutableListOf<OdfRow>()
         val columnWidths = mutableListOf<Float?>()
         val floating = mutableListOf<OdfSlideElement>()
+        val rowHeights = mutableListOf<Float?>()
+        val hiddenRows = mutableSetOf<Int>()
+        val hiddenCols = mutableSetOf<Int>()
+        var colIndex = 0
         val depth = parser.depth
         var eventType = parser.next()
 
@@ -1195,18 +1664,30 @@ object OdfParser {
                         val repeated = getAttr(parser, "number-columns-repeated")?.toIntOrNull() ?: 1
                         val styleName = getAttr(parser, "style-name")
                         val width = resolveStyle(styleName, styles).columnWidth
-                        repeat(repeated.coerceAtMost(200)) { columnWidths.add(width) }
+                        val hidden = getAttr(parser, "visibility").let { it == "collapse" || it == "filter" }
+                        repeat(repeated.coerceAtMost(200)) {
+                            if (hidden) hiddenCols.add(colIndex)
+                            columnWidths.add(width); colIndex++
+                        }
                     }
                     "table-row" -> {
                         val repeated = getAttr(parser, "number-rows-repeated")?.toIntOrNull() ?: 1
+                        val styleName = getAttr(parser, "style-name")
+                        val rh = resolveStyle(styleName, styles).rowHeight
+                        val hidden = getAttr(parser, "visibility").let { it == "collapse" || it == "filter" }
                         val cells = parseSpreadsheetCells(parser, styles, numberStyles)
-                        repeat(repeated.coerceAtMost(1000)) { rows.add(OdfRow(cells)) }
+                        repeat(repeated.coerceAtMost(1000)) {
+                            if (hidden) hiddenRows.add(rows.size)
+                            rows.add(OdfRow(cells)); rowHeights.add(rh)
+                        }
                     }
                     "frame" -> if (isDraw) floating.add(OdfSlideElement.Frame(parseSingleFrame(parser, styles, images, objectContents)))
                     "rect" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "rect")))
                     "ellipse" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "ellipse")))
                     "line" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "line")))
                     "custom-shape" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "custom-shape")))
+                    "polyline" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "polyline")))
+                    "polygon" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "polygon")))
                 }
             }
             eventType = parser.next()
@@ -1214,8 +1695,9 @@ object OdfParser {
         // Trim trailing all-empty rows.
         while (rows.isNotEmpty() && rows.last().cells.all { it.text.isEmpty() && it.formula == null }) {
             rows.removeAt(rows.size - 1)
+            if (rowHeights.isNotEmpty()) rowHeights.removeAt(rowHeights.size - 1)
         }
-        return Triple(rows, columnWidths, floating)
+        return SheetParse(rows, columnWidths, floating, rowHeights, hiddenRows.filter { it < rows.size }.toSet(), hiddenCols)
     }
 
     private fun parseSpreadsheetCells(parser: XmlPullParser, styles: Map<String, StyleInfo>, numberStyles: Map<String, OdfNumberFormat>): List<OdfCell> {
@@ -1235,15 +1717,22 @@ object OdfParser {
                     val valueType = getAttr(parser, "value-type")
                     val numberValue = getAttr(parser, "value")?.toDoubleOrNull()
                     val numberFormat = resolved.dataStyleName?.let { numberStyles[it] }
-                    val text = parseCellText(parser)
+                    val validationName = getAttr(parser, "content-validation-name")
+                    val condFormats = resolved.conditionalMaps.map { (cond, sn) ->
+                        val t = resolveStyle(sn, styles); OdfCondFormat(cond, t.cellBackgroundColor, t.color)
+                    }
+                    val cellContent = parseCellContent(parser, styles)
                     repeat(repeated.coerceAtMost(100)) {
                         cells.add(OdfCell(
-                            text = text, spannedColumns = spanned, rowSpan = rowSpan,
+                            text = cellContent.first, spannedColumns = spanned, rowSpan = rowSpan,
                             backgroundColor = resolved.cellBackgroundColor, textColor = resolved.color,
                             bold = resolved.bold, italic = resolved.italic, alignment = resolved.textAlign,
                             borderColor = resolved.cellBorderColor,
+                            borders = resolved.cellBorders,
                             formula = formula, valueType = valueType, numberValue = numberValue,
-                            numberFormat = numberFormat, wrap = resolved.cellWrap
+                            numberFormat = numberFormat, wrap = resolved.cellWrap,
+                            annotation = cellContent.second, validationName = validationName,
+                            condFormats = condFormats
                         ))
                     }
                 }
@@ -1258,15 +1747,21 @@ object OdfParser {
         return cells
     }
 
-    private fun parseCellText(parser: XmlPullParser): String {
+    /** Parses a spreadsheet cell's text plus an optional office:annotation (cell comment). (Round 3) */
+    private fun parseCellContent(parser: XmlPullParser, styles: Map<String, StyleInfo>): Pair<String, OdfAnnotation?> {
         val sb = StringBuilder()
+        var annotation: OdfAnnotation? = null
         val depth = parser.depth
         var eventType = parser.next()
         while (!(eventType == XmlPullParser.END_TAG && parser.depth == depth)) {
-            if (eventType == XmlPullParser.TEXT) sb.append(parser.text)
+            if (eventType == XmlPullParser.START_TAG && parser.name == "annotation") {
+                annotation = parseAnnotation(parser, styles)
+            } else if (eventType == XmlPullParser.TEXT) {
+                sb.append(parser.text)
+            }
             eventType = parser.next()
         }
-        return sb.toString().trim()
+        return sb.toString().trim() to annotation
     }
 
     // --- Presentation / Drawing ---
@@ -1294,11 +1789,14 @@ object OdfParser {
             if (eventType == XmlPullParser.START_TAG && parser.name == "page" && parser.namespace?.contains("draw") == true) {
                 val name = getAttr(parser, "name") ?: "Slide ${slides.size + 1}"
                 val drawStyleName = getAttr(parser, "style-name")
+                val masterName = getAttr(parser, "master-page-name")
                 val resolved = resolveStyle(drawStyleName, styles)
                 val result = parseSlideContent(parser, styles, images, objectContents)
                 slides.add(OdfSlide(
                     name = name, elements = result.elements,
-                    backgroundColor = resolved.drawFillColor, notes = result.notes
+                    backgroundColor = resolved.drawFillColor, notes = result.notes,
+                    transitionType = resolved.transitionType, transitionSpeed = resolved.transitionSpeed,
+                    masterName = masterName
                 ))
             }
             eventType = parser.next()
@@ -1321,6 +1819,8 @@ object OdfParser {
                 "ellipse" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "ellipse")))
                 "line" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "line")))
                 "custom-shape" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "custom-shape")))
+                "polyline" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "polyline")))
+                "polygon" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "polygon")))
                 "notes" -> {
                     val noteDepth = parser.depth
                     var noteEvent = parser.next()
@@ -1347,6 +1847,7 @@ object OdfParser {
         val h = parseDimension(getAttr(parser, "height"))
         val rot = parseRotationDegrees(getAttr(parser, "transform"))
         val clip = parseClip(getAttr(parser, "clip"))
+        val anchor = getAttr(parser, "anchor-type") ?: ""
         val styleName = getAttr(parser, "style-name")
         val resolved = resolveStyle(styleName, styles)
 
@@ -1382,7 +1883,7 @@ object OdfParser {
                     if (href != null && images.containsKey(href)) {
                         val bytes = images[href]!!
                         val (nw, nh) = decodeNaturalSize(bytes)
-                        image = OdfImage(path = href, imageData = bytes, width = w, height = h, rotationDegrees = rot, naturalWidthPx = nw, naturalHeightPx = nh)
+                        image = OdfImage(path = href, imageData = bytes, width = w, height = h, anchorType = anchor, rotationDegrees = rot, naturalWidthPx = nw, naturalHeightPx = nh, opacityPercent = resolved.imageOpacity ?: 100f, colorMode = resolved.imageColorMode)
                     }
                     val imgDepth = parser.depth
                     var imgEvent = parser.next()
@@ -1393,7 +1894,7 @@ object OdfParser {
                                 try {
                                     val bytes = Base64.decode(parser.text.trim(), Base64.DEFAULT)
                                     val (nw, nh) = decodeNaturalSize(bytes)
-                                    image = OdfImage(path = "inline", imageData = bytes, width = w, height = h, rotationDegrees = rot, naturalWidthPx = nw, naturalHeightPx = nh)
+                                    image = OdfImage(path = "inline", imageData = bytes, width = w, height = h, anchorType = anchor, rotationDegrees = rot, naturalWidthPx = nw, naturalHeightPx = nh, opacityPercent = resolved.imageOpacity ?: 100f, colorMode = resolved.imageColorMode)
                                 } catch (_: Exception) { }
                             }
                         }
@@ -1412,7 +1913,7 @@ object OdfParser {
             val frac = clip ?: parseClipLengths(resolved.clip, image.naturalWidthPx, image.naturalHeightPx)
             if (frac != null) image = image.copy(cropLeftPct = frac[0], cropTopPct = frac[1], cropRightPct = frac[2], cropBottomPct = frac[3])
         }
-        return OdfFrame(x, y, w, h, paragraphs, image, chart = chart, fillColor = resolved.drawFillColor, strokeColor = resolved.drawStrokeColor, strokeWidth = resolved.drawStrokeWidth)
+        return OdfFrame(x, y, w, h, paragraphs, image, chart = chart, fillColor = resolved.drawFillColor, strokeColor = resolved.drawStrokeColor, strokeWidth = resolved.drawStrokeWidth, fillGradient = resolved.fillGradientName?.let { gradientDefs[it] })
     }
 
     private fun parseListInFrame(parser: XmlPullParser, styles: Map<String, StyleInfo>, images: Map<String, ByteArray>, paragraphs: MutableList<OdfParagraph>) {
@@ -1438,8 +1939,14 @@ object OdfParser {
         val h = parseDimension(getAttr(parser, "height"))
         val x2 = if (shapeName == "line") parseDimension(getAttr(parser, "x2")) else 0f
         val y2 = if (shapeName == "line") parseDimension(getAttr(parser, "y2")) else 0f
+        val polyPoints = if (shapeName == "polyline" || shapeName == "polygon") {
+            val vb = getAttr(parser, "viewBox")?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toFloatOrNull() }
+            parsePolyPoints(getAttr(parser, "points"), vb, x, y, w, h)
+        } else emptyList()
         val styleName = getAttr(parser, "style-name")
         val resolved = resolveStyle(styleName, styles)
+        val rot = parseRotationDegrees(getAttr(parser, "transform"))
+        val grad = resolved.fillGradientName?.let { gradientDefs[it] }
 
         val text = mutableListOf<OdfParagraph>()
         val depth = parser.depth
@@ -1453,10 +1960,25 @@ object OdfParser {
         }
 
         return when (shapeName) {
-            "rect" -> OdfShape.Rect(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text)
-            "ellipse" -> OdfShape.Ellipse(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text)
-            "line" -> OdfShape.Line(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, x2, y2)
-            else -> OdfShape.CustomShape(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text)
+            "rect" -> OdfShape.Rect(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad)
+            "ellipse" -> OdfShape.Ellipse(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad)
+            "line" -> OdfShape.Line(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, x2, y2, rotationDegrees = rot)
+            "polyline" -> OdfShape.Polyline(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, polyPoints, closed = false, rotationDegrees = rot, fillGradient = grad)
+            "polygon" -> OdfShape.Polyline(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, polyPoints, closed = true, rotationDegrees = rot, fillGradient = grad)
+            else -> OdfShape.CustomShape(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad)
+        }
+    }
+
+    /** Maps a draw:points string (viewBox space) into absolute px@96 vertices. (Priority 8) */
+    private fun parsePolyPoints(raw: String?, vb: List<Float>?, x: Float, y: Float, w: Float, h: Float): List<Pair<Float, Float>> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val vbMinX = vb?.getOrNull(0) ?: 0f; val vbMinY = vb?.getOrNull(1) ?: 0f
+        val vbW = vb?.getOrNull(2)?.takeIf { it != 0f } ?: 1f; val vbH = vb?.getOrNull(3)?.takeIf { it != 0f } ?: 1f
+        return raw.trim().split(Regex("\\s+")).mapNotNull { pair ->
+            val xy = pair.split(","); if (xy.size != 2) return@mapNotNull null
+            val vx = xy[0].toFloatOrNull() ?: return@mapNotNull null
+            val vy = xy[1].toFloatOrNull() ?: return@mapNotNull null
+            (x + (vx - vbMinX) / vbW * w) to (y + (vy - vbMinY) / vbH * h)
         }
     }
 
@@ -1496,4 +2018,38 @@ object OdfParser {
     }
 
     private const val LINK_COLOR = 0xFF0066CCL
+    // Deletion-region text keyed by change-id, populated while parsing text:tracked-changes
+    // and consumed by the inline parser to render struck-through deleted text. (Priority 6)
+    private var trackedDeletionText: Map<String, String> = emptyMap()
+    /** Gradient definitions (draw:gradient name -> def), set during parse(). (Round 3) */
+    private var gradientDefs: Map<String, OdfGradient> = emptyMap()
+
+    /** Parses draw:gradient definitions from a styles/content XML. (Round 3) */
+    private fun parseGradients(xml: String): Map<String, OdfGradient> {
+        val map = mutableMapOf<String, OdfGradient>()
+        val parser = newParser(xml)
+        var e = parser.eventType
+        while (e != XmlPullParser.END_DOCUMENT) {
+            if (e == XmlPullParser.START_TAG && parser.name == "gradient") {
+                val nm = getAttr(parser, "name")
+                val start = getAttr(parser, "start-color")?.let { parseColor(it) }
+                val end = getAttr(parser, "end-color")?.let { parseColor(it) }
+                if (nm != null && start != null && end != null) {
+                    val angle = getAttr(parser, "angle")?.let { a ->
+                        // ODF gradient angle is in 1/10 degree, or with "deg" suffix in newer files.
+                        a.removeSuffix("deg").toFloatOrNull()?.let { if (a.endsWith("deg")) it else it / 10f }
+                    } ?: 0f
+                    map[nm] = OdfGradient(start, end, angle, getAttr(parser, "style") ?: "linear")
+                }
+            }
+            e = parser.next()
+        }
+        return map
+    }
+    // ODF inline text-field element local names recognized by the inline parser. (Priority 2)
+    private val FIELD_TAGS = setOf(
+        "date", "time", "page-number", "page-count", "file-name", "author-name",
+        "author-initials", "title", "subject", "description", "chapter", "sheet-name",
+        "creation-date", "modification-date", "editing-cycles"
+    )
 }

@@ -282,6 +282,9 @@ private fun CellFormatControls(target: FormatTarget.Cell?, viewModel: OfficeView
             DropdownMenuItem(text = { Text("Percent") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(decimals = 0, percent = true)) })
             DropdownMenuItem(text = { Text("Currency ($)") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(decimals = 2, currencySymbol = "$", grouping = true)) })
             DropdownMenuItem(text = { Text("Date") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(isDate = true)) })
+            DropdownMenuItem(text = { Text("Time") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(isTime = true)) })
+            DropdownMenuItem(text = { Text("Scientific") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(decimals = 2, isScientific = true)) })
+            DropdownMenuItem(text = { Text("Fraction") }, onClick = { numMenu = false; moreMenu = false; if (enabled) viewModel.setCellNumberFormat(s, r, c, OdfNumberFormat(isFraction = true, fractionDenominatorDigits = 2)) })
         }
     }
 }

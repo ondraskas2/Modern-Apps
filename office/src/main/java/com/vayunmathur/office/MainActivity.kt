@@ -239,6 +239,9 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     val autoSaveEnabled by viewModel.autoSaveEnabled.collectAsState()
     val nightMode by viewModel.nightMode.collectAsState()
     var showWordBar by remember { mutableStateOf(false) }
+    var showComments by remember { mutableStateOf(false) }
+    var showChanges by remember { mutableStateOf(false) }
+    var showPageSetup by remember { mutableStateOf(false) }
     var findMatches by remember { mutableStateOf<List<Int>>(emptyList()) }
     var findIndex by remember { mutableIntStateOf(0) }
     val selectionInvalidation by viewModel.selectionInvalidation.collectAsState()
@@ -256,6 +259,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     val isSpreadsheet = document is OdfDocument.Spreadsheet
     val isPresentation = document is OdfDocument.Presentation
     val canEdit = isTextDoc || isSpreadsheet || isPresentation
+    val saveAsName = document.title.substringBeforeLast('.').ifBlank { "Untitled" } +
+        when { isTextDoc -> ".odt"; isSpreadsheet -> ".ods"; isPresentation -> ".odp"; else -> ".odg" }
     val focusedPara = if (activeRunStart >= 0 && isTextDoc) viewModel.runParagraphIndexAt(activeRunStart, activeRunEnd, selStart) else -1
 
     val headings = remember(document) { if (document is OdfDocument.TextDocument) extractHeadings(document) else emptyList() }
@@ -294,6 +299,18 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         uri?.let {
             val xml = viewModel.exportFlat()
             if (xml.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(xml) }
+        }
+    }
+    // Replace-image picker: invokes the pending replace action with the chosen bytes. (C4)
+    var pendingReplace by remember { mutableStateOf<((String, ByteArray) -> Unit)?>(null) }
+    val replaceImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val fn = pendingReplace; pendingReplace = null
+        uri?.let {
+            try {
+                val bytes = context.contentResolver.openInputStream(it)?.use { s -> s.readBytes() } ?: return@let
+                val name = it.lastPathSegment?.substringAfterLast('/') ?: "image.png"
+                fn?.invoke(name, bytes)
+            } catch (_: Exception) {}
         }
     }
 
@@ -355,7 +372,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                             if (canEdit) IconButton(onClick = { showSearch = !showSearch }) { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_search_24), contentDescription = "Search") }
                             IconButton(onClick = { viewModel.undo() }, enabled = canUndo) { Icon(painterResource(com.vayunmathur.library.R.drawable.undo_24px), contentDescription = "Undo") }
                             IconButton(onClick = { viewModel.redo() }, enabled = canRedo) { Icon(painterResource(R.drawable.redo_24px), contentDescription = "Redo") }
-                            IconButton(onClick = { viewModel.save() }, enabled = hasUnsavedChanges && !isSaving) {
+                            IconButton(onClick = { if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() }, enabled = hasUnsavedChanges && !isSaving) {
                                 if (isSaving) CircularProgressIndicator(Modifier.size(20.dp)) else Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), contentDescription = "Save")
                             }
                         }
@@ -367,8 +384,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                             Box {
                                 TextButton(onClick = { fileMenu = true }) { Text("File") }
                                 DropdownMenu(expanded = fileMenu, onDismissRequest = { fileMenu = false }) {
-                                    DropdownMenuItem(text = { Text("Save") }, enabled = hasUnsavedChanges, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), null) }, onClick = { fileMenu = false; viewModel.save() })
-                                    DropdownMenuItem(text = { Text("Save As…") }, onClick = { fileMenu = false; saveAsLauncher.launch(document.title) })
+                                    DropdownMenuItem(text = { Text("Save") }, enabled = hasUnsavedChanges, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), null) }, onClick = { fileMenu = false; if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() })
+                                    DropdownMenuItem(text = { Text("Save As…") }, onClick = { fileMenu = false; saveAsLauncher.launch(saveAsName) })
                                     DropdownMenuItem(text = { Text(stringResource(R.string.print_doc)) }, onClick = { fileMenu = false; printDocument(activity, document) })
                                     DropdownMenuItem(text = { Text("Export to PDF…") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_file_download_24), null) }, onClick = { fileMenu = false; printDocument(activity, document) })
                                     viewModel.documentUri?.let { uri ->
@@ -392,8 +409,13 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     DropdownMenuItem(text = { Text("Hyperlink") }, onClick = { insertMenu = false; showInsertLink = true })
                                     DropdownMenuItem(text = { Text("Chart") }, onClick = { insertMenu = false; editingChartBlock = -1; showChartEditor = true })
                                     DropdownMenuItem(text = { Text("Special character…") }, onClick = { insertMenu = false; showSpecialChars = true })
-                                    DropdownMenuItem(text = { Text("Date") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())) })
-                                    DropdownMenuItem(text = { Text("Time") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())) })
+                                    DropdownMenuItem(text = { Text("Date (field)") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "date", viewModel.fieldDisplayValue("date")) })
+                                    DropdownMenuItem(text = { Text("Time (field)") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "time", viewModel.fieldDisplayValue("time")) })
+                                    DropdownMenuItem(text = { Text("Page number") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "page-number", viewModel.fieldDisplayValue("page-number")) })
+                                    DropdownMenuItem(text = { Text("Page count") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "page-count", viewModel.fieldDisplayValue("page-count")) })
+                                    DropdownMenuItem(text = { Text("File name") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "file-name", viewModel.fieldDisplayValue("file-name")) })
+                                    DropdownMenuItem(text = { Text("Author") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "author-name", viewModel.fieldDisplayValue("author-name")) })
+                                    DropdownMenuItem(text = { Text("Title (field)") }, onClick = { insertMenu = false; if (activeRunStart >= 0) viewModel.insertFieldInRun(activeRunStart, activeRunEnd, selStart, "title", viewModel.fieldDisplayValue("title")) })
                                     DropdownMenuItem(text = { Text("Bookmark") }, onClick = { insertMenu = false; showAddBookmark = true })
                                     DropdownMenuItem(text = { Text("Footnote…") }, onClick = { insertMenu = false; showFootnote = true })
                                     DropdownMenuItem(text = { Text("Comment…") }, enabled = focusedPara >= 0, onClick = { insertMenu = false; showComment = true })
@@ -412,6 +434,9 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     DropdownMenuItem(text = { Text("Zoom text") }, onClick = { viewMenu = false; showFontControl = !showFontControl })
                                     DropdownMenuItem(text = { Text(if (nightMode) "✓ Night reading mode" else "Night reading mode") }, onClick = { viewMenu = false; viewModel.toggleNightMode() })
                                     if (isTextDoc) DropdownMenuItem(text = { Text(if (showWordBar) "✓ Word count bar" else "Word count bar") }, onClick = { viewMenu = false; showWordBar = !showWordBar })
+                                    if (isTextDoc) DropdownMenuItem(text = { Text("Comments…") }, onClick = { viewMenu = false; showComments = true })
+                                    if (isTextDoc) DropdownMenuItem(text = { Text("Track changes…") }, onClick = { viewMenu = false; showChanges = true })
+                                    if (isTextDoc) DropdownMenuItem(text = { Text("Page setup…") }, onClick = { viewMenu = false; showPageSetup = true })
                                     if (isTextDoc && wordCount > 0) DropdownMenuItem(text = { Text("$wordCount words · $charCount chars · ~${readingTime} min") }, enabled = false, onClick = { })
                                     if (isPresentation) DropdownMenuItem(text = { Text("Presentation timer") }, onClick = { viewMenu = false; showTimer = !showTimer })
                                 }
@@ -549,7 +574,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onFloatingBoundsChange = { s, e, x, y, w, h -> viewModel.setSheetElementBounds(s, e, x, y, w, h) },
                         onFloatingTextChange = { s, e, t -> viewModel.updateSheetElementText(s, e, t) },
                         onFloatingDelete = { s, e -> viewModel.deleteSheetElement(s, e) },
-                        onFloatingCrop = { s, e -> cropSheetTarget = s to e })
+                        onFloatingCrop = { s, e -> cropSheetTarget = s to e },
+                        onSetFreeze = { s, r, c -> viewModel.setSheetFreeze(s, r, c) })
                     is OdfDocument.Presentation -> PresentationView(doc = document, isEditMode = isEditMode,
                         onAddSlide = { viewModel.addSlide(it) }, onDeleteSlide = { viewModel.deleteSlide(it) },
                         onDuplicateSlide = { viewModel.duplicateSlide(it) }, onMoveSlideUp = { viewModel.moveSlideUp(it) }, onMoveSlideDown = { viewModel.moveSlideDown(it) },
@@ -573,7 +599,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         text = { Text(stringResource(R.string.unsaved_changes_message)) },
         confirmButton = { TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text(stringResource(R.string.discard), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { Row { TextButton(onClick = { showUnsavedDialog = false }) { Text(stringResource(R.string.cancel)) }
-            if (viewModel.documentUri != null) TextButton(onClick = { viewModel.save(); showUnsavedDialog = false }) { Text(stringResource(R.string.save), fontWeight = FontWeight.Bold) } } })
+            TextButton(onClick = { showUnsavedDialog = false; if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() }) { Text(stringResource(R.string.save), fontWeight = FontWeight.Bold) } } })
     if (showSettings) SettingsDialog(autoSave = viewModel.getAutoSaveEnabled(context), autoSaveInterval = viewModel.getAutoSaveInterval(context),
         defaultFontSize = viewModel.getDefaultFontSize(context),
         onSave = { a, i, f -> viewModel.saveSettings(context, a, i, f) }, onDismiss = { showSettings = false })
@@ -585,6 +611,106 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     if (showSpecialChars) SpecialCharsDialog(onPick = { ch -> if (activeRunStart >= 0) viewModel.insertTextInRun(activeRunStart, activeRunEnd, selStart, ch) }, onDismiss = { showSpecialChars = false })
     if (showFootnote) FootnoteDialog(onAdd = { body -> if (activeRunStart >= 0) viewModel.insertFootnote(activeRunStart, activeRunEnd, selStart, body) }, onDismiss = { showFootnote = false })
     if (showComment) CommentDialog(onAdd = { author, text -> if (focusedPara >= 0) viewModel.insertComment(focusedPara, author, text) }, onDismiss = { showComment = false })
+    if (showComments) {
+        val td = document as? OdfDocument.TextDocument
+        val comments = remember(document) {
+            buildList {
+                td?.content?.forEachIndexed { bi, block ->
+                    if (block is OdfContentBlock.Paragraph) block.paragraph.spans.forEachIndexed { si, span ->
+                        span.annotation?.let { add(Triple(bi, si, it)) }
+                    }
+                }
+            }
+        }
+        AlertDialog(onDismissRequest = { showComments = false }, title = { Text("Comments (${comments.size})") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (comments.isEmpty()) Text("No comments yet. Use Insert ▸ Comment to add one.")
+                    comments.forEach { (bi, si, ann) ->
+                        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${ann.author ?: "Anonymous"}${ann.date?.let { " · $it" } ?: ""}", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Text(ann.paragraphs.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }, style = MaterialTheme.typography.bodySmall)
+                            Row {
+                                TextButton(onClick = { scope.launch { listState.animateScrollToItem(bi.coerceIn(0, (td?.content?.size ?: 1) - 1)) } }) { Text("Go to") }
+                                TextButton(onClick = { viewModel.resolveComment(bi, si) }) { Text("Resolve") }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showComments = false }) { Text("Close") } })
+    }
+    if (showChanges) {
+        val td = document as? OdfDocument.TextDocument
+        val changes = td?.changes ?: emptyList()
+        AlertDialog(onDismissRequest = { showChanges = false }, title = { Text("Tracked changes (${changes.size})") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (changes.isEmpty()) Text("No tracked changes in this document.")
+                    changes.forEach { ch ->
+                        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${ch.type.replaceFirstChar { it.uppercase() }} · ${ch.author ?: "Unknown"}${ch.date?.let { " · ${it.take(10)}" } ?: ""}",
+                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Row {
+                                TextButton(onClick = { viewModel.acceptChange(ch.id) }) { Text("Accept") }
+                                TextButton(onClick = { viewModel.rejectChange(ch.id) }) { Text("Reject") }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    if (changes.isNotEmpty()) {
+                        TextButton(onClick = { viewModel.acceptAllChanges() }) { Text("Accept all") }
+                        TextButton(onClick = { viewModel.rejectAllChanges() }) { Text("Reject all") }
+                    }
+                    TextButton(onClick = { showChanges = false }) { Text("Close") }
+                }
+            })
+    }
+    if (showPageSetup) {
+        val cur = (document as? OdfDocument.TextDocument)?.pageSetup ?: OdfPageSetup()
+        data class Paper(val name: String, val wCm: Float, val hCm: Float)
+        val papers = listOf(Paper("A4", 21f, 29.7f), Paper("Letter", 21.59f, 27.94f), Paper("Legal", 21.59f, 35.56f))
+        var landscape by remember(showPageSetup) { mutableStateOf(cur.isLandscape) }
+        var paper by remember(showPageSetup) {
+            val wcm = minOf(cur.widthPx, cur.heightPx) / 37.795f
+            mutableStateOf(papers.minByOrNull { kotlin.math.abs(it.wCm - wcm) }?.name ?: "A4")
+        }
+        var marginCm by remember(showPageSetup) { mutableStateOf(cur.marginLeftPx / 37.795f) }
+        AlertDialog(onDismissRequest = { showPageSetup = false }, title = { Text("Page setup") },
+            text = {
+                Column {
+                    Text("Paper size", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Row { papers.forEach { p -> TextButton(onClick = { paper = p.name }) { Text(if (paper == p.name) "● ${p.name}" else p.name) } } }
+                    Text("Orientation", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Row {
+                        TextButton(onClick = { landscape = false }) { Text(if (!landscape) "● Portrait" else "Portrait") }
+                        TextButton(onClick = { landscape = true }) { Text(if (landscape) "● Landscape" else "Landscape") }
+                    }
+                    Text("Margins", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Row {
+                        TextButton(onClick = { marginCm = 1.27f }) { Text(if (marginCm < 1.5f) "● Narrow" else "Narrow") }
+                        TextButton(onClick = { marginCm = 2f }) { Text(if (marginCm in 1.5f..2.3f) "● Normal" else "Normal") }
+                        TextButton(onClick = { marginCm = 2.54f }) { Text(if (marginCm > 2.3f) "● Wide" else "Wide") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val p = papers.first { it.name == paper }
+                    val wPx = (if (landscape) p.hCm else p.wCm) * 37.795f
+                    val hPx = (if (landscape) p.wCm else p.hCm) * 37.795f
+                    val m = marginCm * 37.795f
+                    viewModel.setPageSetup(OdfPageSetup(wPx, hPx, m, m, m, m))
+                    showPageSetup = false
+                }) { Text("Apply") }
+            },
+            dismissButton = { TextButton(onClick = { showPageSetup = false }) { Text("Cancel") } })
+    }
     if (showHeaderFooter) {
         val td = document as? OdfDocument.TextDocument
         HeaderFooterDialog(
@@ -617,17 +743,23 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     }
     if (cropImageBlock >= 0) {
         val img = ((document as? OdfDocument.TextDocument)?.content?.getOrNull(cropImageBlock) as? OdfContentBlock.Image)?.image
-        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setImageCrop(cropImageBlock, l, t, r, b) }, onDismiss = { cropImageBlock = -1 })
+        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setImageCrop(cropImageBlock, l, t, r, b) }, onDismiss = { cropImageBlock = -1 },
+            onRotate = { viewModel.rotateTextImage(cropImageBlock, 90f) },
+            onReplace = { val bi = cropImageBlock; pendingReplace = { n, b -> viewModel.replaceTextImage(bi, n, b) }; replaceImageLauncher.launch("image/*") })
         else cropImageBlock = -1
     }
     cropSlideTarget?.let { (s, e) ->
         val img = ((document as? OdfDocument.Presentation)?.slides?.getOrNull(s)?.elements?.getOrNull(e) as? OdfSlideElement.Frame)?.frame?.image
-        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSlideImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSlideTarget = null })
+        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSlideImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSlideTarget = null },
+            onRotate = { viewModel.rotateSlideImage(s, e, 90f) },
+            onReplace = { pendingReplace = { n, b -> viewModel.replaceSlideImage(s, e, n, b) }; replaceImageLauncher.launch("image/*") })
         else cropSlideTarget = null
     }
     cropSheetTarget?.let { (s, e) ->
         val img = ((document as? OdfDocument.Spreadsheet)?.sheets?.getOrNull(s)?.floating?.getOrNull(e) as? OdfSlideElement.Frame)?.frame?.image
-        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSheetImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSheetTarget = null })
+        if (img != null) ImageCropDialog(image = img, onApply = { l, t, r, b -> viewModel.setSheetImageCrop(s, e, l, t, r, b) }, onDismiss = { cropSheetTarget = null },
+            onRotate = { viewModel.rotateSheetImage(s, e, 90f) },
+            onReplace = { pendingReplace = { n, b -> viewModel.replaceSheetImage(s, e, n, b) }; replaceImageLauncher.launch("image/*") })
         else cropSheetTarget = null
     }
     if (showChartEditor) {
@@ -732,6 +864,12 @@ private fun documentToHtml(document: OdfDocument): String {
                 is OdfContentBlock.Chart -> sb.append("<p>[Chart]</p>")
                 is OdfContentBlock.Formula -> sb.append("<p><i>${OdfMath.parse(block.mathml)?.let { OdfMath.toText(it) }.orEmpty().replace("&", "&amp;").replace("<", "&lt;")}</i></p>")
                 is OdfContentBlock.PageBreak -> sb.append("""<hr style="page-break-after:always">""")
+                is OdfContentBlock.TableOfContents -> {
+                    sb.append("<h2>${block.title.replace("&", "&amp;").replace("<", "&lt;")}</h2>")
+                    for (entry in block.entries) sb.append("<p>${entry.spans.joinToString("") { it.text }.replace("&", "&amp;").replace("<", "&lt;")}</p>")
+                }
+                is OdfContentBlock.SectionStart -> sb.append(if (block.columnCount > 1) """<div style="column-count:${block.columnCount}">""" else "<div>")
+                is OdfContentBlock.SectionEnd -> sb.append("</div>")
             }
         }
         is OdfDocument.Spreadsheet -> { for (sheet in document.sheets) { sb.append("<h2>${sheet.name}</h2><table>"); for (row in sheet.rows) { sb.append("<tr>"); for (cell in row.cells) { if (cell.isCovered) continue; sb.append("<td"); if (cell.spannedColumns > 1) sb.append(""" colspan="${cell.spannedColumns}""""); sb.append(">${cell.text.replace("&", "&amp;").replace("<", "&lt;")}</td>") }; sb.append("</tr>") }; sb.append("</table>") } }
