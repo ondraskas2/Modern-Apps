@@ -34,6 +34,8 @@ public final class HolidayGen {
         "slovenian", "turkish", "japanese", "china", "taiwan", "hong_kong", "south_korea",
         "singapore", "indonesian", "malaysia", "philippines", "vietnamese", "brazilian",
         "mexican", "new_zealand", "jewish",
+        // Global religious observance calendars.
+        "christian", "islamic", "judaism", "hinduism", "orthodox_christianity",
     };
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
