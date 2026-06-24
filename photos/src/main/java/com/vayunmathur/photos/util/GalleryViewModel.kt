@@ -17,11 +17,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 
 /**
  * ViewModel for the photos gallery screen.
@@ -52,6 +55,12 @@ class GalleryViewModel(
 
     private val _selectedIds = MutableStateFlow<Set<Long>>(emptySet())
     val selectedIds: StateFlow<Set<Long>> = _selectedIds.asStateFlow()
+
+    /** True while a media sync is enqueued or running (drives pull-to-refresh). */
+    val isRefreshing: StateFlow<Boolean> = WorkManager.getInstance(application)
+        .getWorkInfosForUniqueWorkFlow(SyncWorker.WORK_NAME)
+        .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val ocrCount: StateFlow<Int> = photoDao.getOCRCountFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)

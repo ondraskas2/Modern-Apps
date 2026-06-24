@@ -97,7 +97,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     companion object {
-        private const val WORK_NAME = "SyncWorker"
+        const val WORK_NAME = "SyncWorker"
 
         fun enqueue(context: Context) {
             val constraints = Constraints.Builder()

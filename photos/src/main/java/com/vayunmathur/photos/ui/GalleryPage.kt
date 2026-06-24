@@ -98,6 +98,7 @@ fun GalleryPage(
 
     val selectedIds by galleryViewModel.selectedIds.collectAsState()
     val isFeatureEnabled by galleryViewModel.isFeatureEnabled.collectAsState()
+    val isRefreshing by galleryViewModel.isRefreshing.collectAsState()
     val isSelectionMode = selectedIds.isNotEmpty()
 
     val searchQuery by galleryViewModel.searchQuery.collectAsState()
@@ -288,41 +289,47 @@ fun GalleryPage(
         },
         bottomBar = { if (!isSelectionMode) NavigationBar(Route.Gallery, backStack) }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pinchToZoomColumns({ columnCount }, { columnCount = it })
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { galleryViewModel.runSync() },
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
         ) {
-            LazyVerticalGrid(
-                GridCells.Fixed(columnCount.roundToInt().coerceIn(2, 8)),
-                Modifier.padding(paddingValues),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pinchToZoomColumns({ columnCount }, { columnCount = it })
             ) {
-                val currentGroupedPhotos = if (searchActive && searchQuery.isNotEmpty()) displayPhotosGroupedByMonth else photosGroupedByMonth
-                currentGroupedPhotos.forEach { (month, photosInMonth) ->
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            month,
-                            Modifier.padding(top = 16.dp, bottom = 8.dp, start = 16.dp),
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    }
-                    items(photosInMonth, { it.id }, contentType = { "photo_thumbnail" }) { photo ->
-                        val isSelected = photo.id in selectedIds
-                        ImageLoader.SelectablePhotoItem(
-                            photo = photo,
-                            isSelected = isSelected,
-                            isSelectionMode = isSelectionMode,
-                            onToggleSelection = { galleryViewModel.toggleSelection(photo.id) },
-                            onClick = {
-                                if (isSelectionMode) {
-                                    galleryViewModel.toggleSelection(photo.id)
-                                } else {
-                                    backStack.add(Route.PhotoPage(photo.id, null))
+                LazyVerticalGrid(
+                    GridCells.Fixed(columnCount.roundToInt().coerceIn(2, 8)),
+                    Modifier,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val currentGroupedPhotos = if (searchActive && searchQuery.isNotEmpty()) displayPhotosGroupedByMonth else photosGroupedByMonth
+                    currentGroupedPhotos.forEach { (month, photosInMonth) ->
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                month,
+                                Modifier.padding(top = 16.dp, bottom = 8.dp, start = 16.dp),
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        }
+                        items(photosInMonth, { it.id }, contentType = { "photo_thumbnail" }) { photo ->
+                            val isSelected = photo.id in selectedIds
+                            ImageLoader.SelectablePhotoItem(
+                                photo = photo,
+                                isSelected = isSelected,
+                                isSelectionMode = isSelectionMode,
+                                onToggleSelection = { galleryViewModel.toggleSelection(photo.id) },
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        galleryViewModel.toggleSelection(photo.id)
+                                    } else {
+                                        backStack.add(Route.PhotoPage(photo.id, null))
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
