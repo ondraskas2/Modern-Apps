@@ -10,7 +10,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
 
     // ktor
     implementation(project(":library:network"))

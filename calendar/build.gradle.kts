@@ -9,6 +9,5 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
     implementation(project(":library:widgets"))
 }

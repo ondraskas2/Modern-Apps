@@ -1,7 +1,6 @@
 [versions]
 # Build & Core Language
 agp = "9.2.1"
-comAutonomousappsDependencyAnalysisGradlePlugin = "3.14.1"
 fhirModel = "1.0.0-beta02"
 flatgeobuf = "3.29.0"
 kotlin = "2.4.0"
@@ -107,7 +106,6 @@ androidx-media3-datasource-okhttp = { group = "androidx.media3", name = "media3-
 # Images & Visuals
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coilCompose" }
 coil-video = { module = "io.coil-kt:coil-video", version.ref = "coilCompose" }
-com-autonomousapps-dependency-analysis-gradle-plugin = { module = "com.autonomousapps.dependency-analysis:com.autonomousapps.dependency-analysis.gradle.plugin", version.ref = "comAutonomousappsDependencyAnalysisGradlePlugin" }
 fhir-model = { module = "com.google.fhir:fhir-model", version.ref = "fhirModel" }
 flatgeobuf = { module = "org.wololo:flatgeobuf", version.ref = "flatgeobuf" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlinGradlePlugin" }
@@ -177,4 +175,3 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
-dependency-analysis = { id="com.autonomousapps.dependency-analysis", version.ref = "comAutonomousappsDependencyAnalysisGradlePlugin" }

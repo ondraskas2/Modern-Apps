@@ -24,7 +24,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
 
     // room
     implementRoom(libs)

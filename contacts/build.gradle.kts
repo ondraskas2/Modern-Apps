@@ -10,7 +10,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
 
     // External Libraries
     implementation(libs.libphonenumber)

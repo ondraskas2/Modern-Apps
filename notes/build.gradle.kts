@@ -10,7 +10,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
     implementRoom(libs)
     implementation(libs.reorderable)
     implementation("androidx.compose.material:material-icons-extended")

@@ -17,7 +17,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":library:ui"))
     implementation(libs.maplibre.compose)
     implementation(libs.coil.compose)
 

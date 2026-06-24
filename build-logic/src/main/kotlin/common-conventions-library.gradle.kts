@@ -2,7 +2,6 @@ plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
-    id("com.autonomousapps.dependency-analysis")
 }
 
 val libs = the<org.gradle.accessors.dm.LibrariesForLibs>()
