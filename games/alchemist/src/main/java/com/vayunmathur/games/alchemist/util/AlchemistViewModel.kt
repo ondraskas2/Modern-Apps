@@ -40,9 +40,6 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
         .map { set -> set.map { it.toLong() }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
-    val usedRecipes: StateFlow<Set<String>> = ds.stringSetFlow("used_recipes")
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
-
     val availableItems: StateFlow<List<AlchemyItem>> =
         combine(_allItems, itemIds) { items, ids ->
             items.filter { it.id in ids }.sortedBy { it.name }
@@ -60,7 +57,6 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
             _allItems.value = Alchemist.items
             _recipes.value = Alchemist.recipes
             seedInitialItemsIfEmpty()
-            backfillLegacyRecipes()
         }
     }
 
@@ -69,38 +65,6 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
         if (initial.isEmpty()) {
             (1L..4L).forEach { ds.addStringToSet("available_items", it.toString()) }
         }
-    }
-
-    /**
-     * One-time migration for users who unlocked items before recipe logging existed.
-     * For every unlocked element that has no logged recipe creating it, add every recipe
-     * that creates it whose inputs are themselves only such pre-existing elements
-     * (unlocked with no logged recipe creating them).
-     */
-    private suspend fun backfillLegacyRecipes() {
-        if (ds.getBoolean("recipes_backfilled", false)) return
-
-        val unlocked = ds.stringSetFlow("available_items").first()
-            .mapNotNull { it.toLongOrNull() }.toSet()
-        val usedKeys = ds.stringSetFlow("used_recipes").first()
-        val allRecipes = _recipes.value
-
-        // Elements that already have a logged recipe creating them.
-        val createdByLog = allRecipes
-            .filter { recipeKey(it) in usedKeys }
-            .flatMap { it.outputs }
-            .toSet()
-
-        // "Pre-existing" elements: unlocked but not created by any logged recipe.
-        val legacy = unlocked - createdByLog
-
-        allRecipes.forEach { recipe ->
-            if (recipe.outputs.any { it in legacy } && recipe.inputs.all { it in legacy }) {
-                ds.addStringToSet("used_recipes", recipeKey(recipe))
-            }
-        }
-
-        ds.setBoolean("recipes_backfilled", true)
     }
 
     fun unlockItem(id: Long) {
@@ -150,9 +114,6 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
 
         val combined = listOf(movedItem.id, target.id).sorted()
         val recipe = _recipes.value.find { it.inputs.sorted() == combined } ?: return
-
-        // Record this recipe as used
-        ds.addStringToSet("used_recipes", recipeKey(recipe))
 
         val toRemoveKeys = setOf(movedItem.key, target.key)
         val toAdd = recipe.outputs.map { PlacedItem(it, target.offset) }
@@ -216,6 +177,3 @@ class AlchemistViewModel(application: Application) : AndroidViewModel(applicatio
         private const val TIME_UNLOCK_THRESHOLD = 100
     }
 }
-
-fun recipeKey(recipe: AlchemyRecipe): String =
-    "${recipe.inputs.sorted().joinToString(",")}->${recipe.outputs.sorted().joinToString(",")}"
