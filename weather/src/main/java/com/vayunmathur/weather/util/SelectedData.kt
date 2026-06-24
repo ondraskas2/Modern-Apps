@@ -2,6 +2,12 @@ package com.vayunmathur.weather.util
 
 import com.vayunmathur.weather.network.Current
 import com.vayunmathur.weather.network.ForecastResponse
+import com.vayunmathur.weather.network.Hourly
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Conditions resolved for whatever the user has selected (an hour, a day, or
@@ -116,10 +122,68 @@ fun resolveConditions(
                 sunsetIso = daily.sunset.getOrNull(d),
                 precipitationSum = daily.precipitationSum.getOrNull(d),
                 daylightDurationSec = daily.daylightDuration.getOrNull(d),
-                // No daily equivalent for humidity/wind/pressure/visibility —
-                // keep showing the live current values for those blocks.
-                blockCurrent = current,
+                // Humidity/wind/pressure/visibility/cloud have no daily summary
+                // field, so aggregate the day's hourly values instead.
+                blockCurrent = hourly?.let { aggregateDay(it, selected.isoDate, current) } ?: current,
             )
         }
     }
+}
+
+/**
+ * Build a synthetic [Current] representing a whole day by aggregating that
+ * day's hourly samples: averages for humidity, dew point, pressure,
+ * visibility and cloud cover; a vector mean for wind; and the peak gust.
+ * Returns [fallback] unchanged when the day has no hourly rows.
+ */
+private fun aggregateDay(hourly: Hourly, isoDate: String, fallback: Current): Current {
+    val idx = hourly.time.indices.filter { hourly.time[it].substringBefore('T') == isoDate }
+    if (idx.isEmpty()) return fallback
+
+    fun avgOfD(list: List<Double>): Double? =
+        idx.mapNotNull { list.getOrNull(it) }.takeIf { it.isNotEmpty() }?.average()
+    fun avgOfI(list: List<Int>): Double? =
+        idx.mapNotNull { list.getOrNull(it) }.takeIf { it.isNotEmpty() }?.average()
+    fun maxOfD(list: List<Double>): Double? =
+        idx.mapNotNull { list.getOrNull(it) }.maxOrNull()
+
+    val winds = idx.mapNotNull { i ->
+        val s = hourly.windSpeed.getOrNull(i) ?: return@mapNotNull null
+        val dir = hourly.windDirection.getOrNull(i) ?: return@mapNotNull null
+        s to dir
+    }
+    val (windSpeed, windDir) = vectorMeanWind(winds) ?: (fallback.windSpeed to fallback.windDirection)
+
+    return fallback.copy(
+        relativeHumidity = avgOfI(hourly.relativeHumidity)?.roundToInt() ?: fallback.relativeHumidity,
+        dewPoint = avgOfD(hourly.dewPoint) ?: fallback.dewPoint,
+        pressureMsl = avgOfD(hourly.pressureMsl) ?: fallback.pressureMsl,
+        visibility = avgOfD(hourly.visibility) ?: fallback.visibility,
+        cloudCover = avgOfI(hourly.cloudCover)?.roundToInt() ?: fallback.cloudCover,
+        windSpeed = windSpeed,
+        windDirection = windDir,
+        windGusts = maxOfD(hourly.windGusts) ?: fallback.windGusts,
+    )
+}
+
+/**
+ * Vector (resultant) mean of wind samples expressed as (speed, direction-the
+ * -wind-comes-from in degrees). Decomposes each sample into N/E components,
+ * averages, and recombines — the meteorologically correct way to average a
+ * directional quantity. Returns null for an empty input.
+ */
+private fun vectorMeanWind(samples: List<Pair<Double, Int>>): Pair<Double, Int>? {
+    if (samples.isEmpty()) return null
+    var u = 0.0
+    var v = 0.0
+    for ((speed, dirFrom) in samples) {
+        val rad = Math.toRadians(dirFrom.toDouble())
+        u += speed * sin(rad)
+        v += speed * cos(rad)
+    }
+    u /= samples.size
+    v /= samples.size
+    val speed = sqrt(u * u + v * v)
+    val deg = ((Math.toDegrees(atan2(u, v)) % 360) + 360) % 360
+    return speed to deg.roundToInt()
 }
