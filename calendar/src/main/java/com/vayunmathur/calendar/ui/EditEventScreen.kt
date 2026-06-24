@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -124,6 +126,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     var timezone by remember { mutableStateOf(event?.timezone ?: TimeZone.currentSystemDefault().id) }
     var rruleObj by remember { mutableStateOf(event?.rrule) }
     val rruleString by remember { derivedStateOf {rruleObj?.toString() ?: ""} }
+    var reminders by remember { mutableStateOf(event?.reminders ?: emptyList()) }
 
     // Collect results from pickers
     ResultEffect<LocalDate>(KEY_START_DATE) { selected ->
@@ -226,7 +229,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
                     put(CalendarContract.Events.EXDATE, exdateStr)
                 }
             }
-            viewModel.upsertEvent(eventId, values)
+            viewModel.upsertEvent(eventId, values, reminders)
             backStack.pop()
         }) {
             IconSave()
@@ -298,6 +301,40 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
             }
 
             HorizontalDivider(Modifier.padding(vertical = 16.dp))
+
+            // Reminders
+            reminders.forEach { minutes ->
+                Item(
+                    { Icon(painterResource(R.drawable.nest_clock_farsight_analog_24px), null) },
+                    { Text(reminderLabel(minutes)) },
+                    { Text(stringResource(R.string.remove), Modifier.clickable { reminders = reminders - minutes }) },
+                )
+            }
+            var addReminderExpanded by remember { mutableStateOf(false) }
+            val available = REMINDER_PRESETS.filter { it !in reminders }
+            if (available.isNotEmpty()) {
+                Item(
+                    { Icon(painterResource(R.drawable.nest_clock_farsight_analog_24px), null) },
+                    {
+                        Box {
+                            Text(stringResource(R.string.add_reminder), Modifier.clickable { addReminderExpanded = true })
+                            DropdownMenu(addReminderExpanded, { addReminderExpanded = false }) {
+                                available.forEach { m ->
+                                    DropdownMenuItem(
+                                        text = { Text(reminderLabel(m)) },
+                                        onClick = {
+                                            addReminderExpanded = false
+                                            reminders = (reminders + m).sorted()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 16.dp))
             OutlinedTextField(location, { location = it }, Modifier.fillMaxWidth().padding(8.dp), label = { Text(stringResource(R.string.label_location)) })
         }
     }
@@ -341,4 +378,14 @@ val timeFormat24 = LocalTime.Format {
     hour(Padding.ZERO)
     chars(":")
     minute()
+}
+
+/** Common reminder offsets, in minutes before the event start. */
+val REMINDER_PRESETS = listOf(0, 5, 10, 15, 30, 60, 120, 1440)
+
+fun reminderLabel(minutes: Int): String = when {
+    minutes <= 0 -> "At time of event"
+    minutes % 1440 == 0 -> "${minutes / 1440} day${if (minutes / 1440 > 1) "s" else ""} before"
+    minutes % 60 == 0 -> "${minutes / 60} hour${if (minutes / 60 > 1) "s" else ""} before"
+    else -> "$minutes minutes before"
 }

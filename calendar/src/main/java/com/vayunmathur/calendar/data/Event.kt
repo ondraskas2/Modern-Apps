@@ -32,7 +32,8 @@ data class Event(
     val timezone: String = "UTC",
     val allDay: Boolean,
     val rrule: RRule?,
-    val exdate: List<LocalDate> = emptyList()
+    val exdate: List<LocalDate> = emptyList(),
+    val reminders: List<Int> = emptyList(), // minutes before start
 ) {
 
     val startDateTimeDisplay: LocalDateTime
@@ -76,6 +77,7 @@ data class Event(
     companion object {
         fun getAllEvents(context: Context): List<Event> {
             val events = mutableListOf<Event>()
+            val remindersByEvent = loadReminders(context)
 
             val uri = CalendarContract.Events.CONTENT_URI
             val projection = arrayOf(
@@ -169,7 +171,8 @@ data class Event(
                                 timezone,
                                 allDay,
                                 RRule.parse(rrule, TimeZone.of(timezone)),
-                                exdate
+                                exdate,
+                                remindersByEvent[id]?.sorted() ?: emptyList(),
                             )
                             events.add(event)
                         } catch (e: Exception) {
@@ -182,6 +185,29 @@ data class Event(
             }
 
             return events
+        }
+
+        /**
+         * Load every reminder in one query and group by event id, avoiding an
+         * N+1 lookup per event. Returns event id -> list of minutes-before.
+         */
+        private fun loadReminders(context: Context): Map<Long, List<Int>> {
+            val map = HashMap<Long, MutableList<Int>>()
+            runCatching {
+                context.contentResolver.query(
+                    CalendarContract.Reminders.CONTENT_URI,
+                    arrayOf(CalendarContract.Reminders.EVENT_ID, CalendarContract.Reminders.MINUTES),
+                    null, null, null,
+                )?.use { c ->
+                    val eIdx = c.getColumnIndexOrThrow(CalendarContract.Reminders.EVENT_ID)
+                    val mIdx = c.getColumnIndexOrThrow(CalendarContract.Reminders.MINUTES)
+                    while (c.moveToNext()) {
+                        val minutes = c.getInt(mIdx).let { if (it < 0) 0 else it }
+                        map.getOrPut(c.getLong(eIdx)) { mutableListOf() }.add(minutes)
+                    }
+                }
+            }.onFailure { Log.e("Event", "Error querying reminders", it) }
+            return map
         }
     }
 }

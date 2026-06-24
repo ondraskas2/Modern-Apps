@@ -208,16 +208,23 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     }
 
     // Insert or update event using ContentValues. If eventId is null -> insert, otherwise update.
-    fun upsertEvent(eventId: Long?, values: ContentValues): Long? {
+    // When [reminders] is non-null, the event's reminders are replaced with the given
+    // minutes-before list (and HAS_ALARM is set accordingly).
+    fun upsertEvent(eventId: Long?, values: ContentValues, reminders: List<Int>? = null): Long? {
         val app = getApplication<Application>()
         val uri = CalendarContract.Events.CONTENT_URI
+        if (reminders != null) {
+            values.put(CalendarContract.Events.HAS_ALARM, if (reminders.isEmpty()) 0 else 1)
+        }
         return if (eventId == null) {
             try {
                 val newUri = app.contentResolver.insert(uri, values)
+                val newId = newUri?.lastPathSegment?.toLongOrNull()
+                if (newId != null && reminders != null) writeReminders(newId, reminders)
                 // refresh events
                 _events.value = Event.getAllEvents(app)
                 updateWidgets()
-                newUri?.lastPathSegment?.toLongOrNull()
+                newId
             } catch (e: Exception) {
                 Log.e("CalendarViewModel", "Error inserting event", e)
                 null
@@ -225,6 +232,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         } else {
             try {
                 app.contentResolver.update(uri, values, "${CalendarContract.Events._ID} = ?", arrayOf(eventId.toString()))
+                if (reminders != null) writeReminders(eventId, reminders)
                 _events.value = Event.getAllEvents(app)
                 updateWidgets()
                 eventId
@@ -232,6 +240,27 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                 Log.e("CalendarViewModel", "Error updating event", e)
                 null
             }
+        }
+    }
+
+    /** Replace all reminders for [eventId] with [reminders] (minutes before start). */
+    private fun writeReminders(eventId: Long, reminders: List<Int>) {
+        val cr = getApplication<Application>().contentResolver
+        try {
+            cr.delete(
+                CalendarContract.Reminders.CONTENT_URI,
+                "${CalendarContract.Reminders.EVENT_ID} = ?",
+                arrayOf(eventId.toString()),
+            )
+            reminders.distinct().forEach { minutes ->
+                cr.insert(CalendarContract.Reminders.CONTENT_URI, ContentValues().apply {
+                    put(CalendarContract.Reminders.EVENT_ID, eventId)
+                    put(CalendarContract.Reminders.MINUTES, minutes)
+                    put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+                })
+            }
+        } catch (e: Exception) {
+            Log.e("CalendarViewModel", "Error writing reminders", e)
         }
     }
 
