@@ -9,7 +9,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 
 @Composable
-fun HtmlText(html: String, modifier: Modifier = Modifier) {
+fun HtmlText(html: String, modifier: Modifier = Modifier, blockRemoteImages: Boolean = true) {
     val backgroundColor = MaterialTheme.colorScheme.surface
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
     val isDark = isSystemInDarkTheme()
@@ -38,10 +38,13 @@ fun HtmlText(html: String, modifier: Modifier = Modifier) {
                 settings.useWideViewPort = true
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                // Privacy: don't load remote images (tracking pixels) unless asked.
+                settings.blockNetworkImage = blockRemoteImages
                 setBackgroundColor(backgroundColor.toArgb())
             }
         },
         update = { webView ->
+            webView.settings.blockNetworkImage = blockRemoteImages
             if (isDark) {
                 // In dark mode, use JavaScript to force all text to be light colored
                 // and invert the entire page, then re-invert images

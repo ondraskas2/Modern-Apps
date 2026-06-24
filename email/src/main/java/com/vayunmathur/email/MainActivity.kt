@@ -759,8 +759,26 @@ fun MessageItem(
         }
 
         if (msg.isHtml && msg.body != null) {
+            var loadImages by remember(msg.id) { mutableStateOf(false) }
+            if (!loadImages) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Remote images blocked",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = { loadImages = true }) { Text("Load images") }
+                }
+            }
             HtmlText(
                 html = msg.body,
+                blockRemoteImages = !loadImages,
                 modifier = Modifier
                     .padding(horizontal = 16.dp)
                     .fillMaxWidth()
