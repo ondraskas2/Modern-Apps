@@ -33,6 +33,18 @@ data class ForecastUiState(
 )
 
 /**
+ * A user-chosen hour or day to inspect. Identified by the Open-Meteo ISO
+ * string (not an array index) so a refresh that shifts the arrays can't
+ * corrupt the selection.
+ */
+sealed interface SelectedDateOrTime {
+    /** [isoTime] matches a value in `Hourly.time`. */
+    data class Time(val isoTime: String) : SelectedDateOrTime
+    /** [isoDate] matches a value in `Daily.time`. */
+    data class Day(val isoDate: String) : SelectedDateOrTime
+}
+
+/**
  * Holds saved locations, per-location forecast state, and the user's unit
  * prefs. Mirrors the manual-Factory pattern used everywhere else in this
  * repo (see [com.vayunmathur.passwords.util.PasswordsViewModel]).
@@ -50,6 +62,39 @@ class WeatherViewModel(
     /** Per-location forecast state, keyed by [SavedLocation.id]. */
     private val _forecasts = MutableStateFlow<Map<Long, ForecastUiState>>(emptyMap())
     val forecasts: StateFlow<Map<Long, ForecastUiState>> = _forecasts.asStateFlow()
+
+    /**
+     * The hour/day the user is inspecting, or null for "now / today". Reset
+     * whenever the active location changes (see [clearSelection]).
+     */
+    private val _selected = MutableStateFlow<SelectedDateOrTime?>(null)
+    val selectedDateOrTime: StateFlow<SelectedDateOrTime?> = _selected.asStateFlow()
+
+    fun selectTime(isoTime: String) { _selected.value = SelectedDateOrTime.Time(isoTime) }
+
+    fun selectDay(isoDate: String) { _selected.value = SelectedDateOrTime.Day(isoDate) }
+
+    fun clearSelection() { _selected.value = null }
+
+    /** Select the hour, or clear it if it's already the selected one. */
+    fun toggleTime(isoTime: String) {
+        val current = _selected.value
+        _selected.value = if (current is SelectedDateOrTime.Time && current.isoTime == isoTime) {
+            null
+        } else {
+            SelectedDateOrTime.Time(isoTime)
+        }
+    }
+
+    /** Select the day, or clear it if it's already the selected one. */
+    fun toggleDay(isoDate: String) {
+        val current = _selected.value
+        _selected.value = if (current is SelectedDateOrTime.Day && current.isoDate == isoDate) {
+            null
+        } else {
+            SelectedDateOrTime.Day(isoDate)
+        }
+    }
 
     init {
         WeatherRefreshWorker.scheduleHourlyRefresh(application)

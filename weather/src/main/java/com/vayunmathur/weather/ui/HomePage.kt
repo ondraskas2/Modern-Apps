@@ -43,9 +43,11 @@ import com.vayunmathur.weather.ui.components.CurrentWeatherCard
 import com.vayunmathur.weather.ui.components.DailyCard
 import com.vayunmathur.weather.ui.components.HourlyCard
 import com.vayunmathur.weather.ui.components.MainSearchBar
+import com.vayunmathur.weather.ui.components.SelectedDateTimeHeader
 import com.vayunmathur.weather.ui.components.SummaryCard
 import com.vayunmathur.weather.ui.components.WeatherBlocks
 import com.vayunmathur.weather.util.WeatherViewModel
+import com.vayunmathur.weather.util.resolveConditions
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +84,7 @@ fun HomePage(backStack: NavBackStack<Route>, viewModel: WeatherViewModel) {
                     activeLocation = activeLocation,
                     onLocationSelect = { picked ->
                         activeLocationId = picked.id
+                        viewModel.clearSelection()
                         closeDrawer()
                     },
                     onClose = { closeDrawer() },
@@ -113,6 +116,7 @@ private fun LocationPage(
     paddingValues: androidx.compose.foundation.layout.PaddingValues,
 ) {
     val forecasts by viewModel.forecasts.collectAsState()
+    val selected by viewModel.selectedDateOrTime.collectAsState()
     val tempUnit = com.vayunmathur.weather.util.rememberTempUnit()
     val windUnit = com.vayunmathur.weather.util.rememberWindUnit()
     val pressureUnit = com.vayunmathur.weather.util.rememberPressureUnit()
@@ -154,27 +158,60 @@ private fun LocationPage(
 
             val current = forecast.current
             val daily = forecast.daily
-            val sunriseEpoch = daily?.sunrise?.firstOrNull()?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
-            val sunsetEpoch = daily?.sunset?.firstOrNull()?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
+            val resolved = resolveConditions(forecast, selected)
 
-            if (current != null) {
-                CurrentWeatherCard(current = current, today = daily, tempUnit = tempUnit)
+            selected?.let { sel ->
+                SelectedDateTimeHeader(
+                    selection = sel,
+                    forecast = forecast,
+                    use24Hour = use24Hour,
+                    onClear = { viewModel.clearSelection() },
+                )
+            }
+
+            if (current != null && resolved != null) {
+                CurrentWeatherCard(
+                    weatherCode = resolved.weatherCode,
+                    isDay = resolved.isDay,
+                    temperature = resolved.temperature,
+                    apparentTemperature = resolved.apparentTemperature,
+                    high = resolved.high,
+                    low = resolved.low,
+                    tempUnit = tempUnit,
+                )
             }
             Column(
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                SummaryCard(forecast = forecast, tempUnit = tempUnit)
+                if (selected == null) {
+                    SummaryCard(forecast = forecast, tempUnit = tempUnit)
+                }
                 if (forecast.hourly != null) {
-                    HourlyCard(hourly = forecast.hourly, tempUnit = tempUnit, utcOffsetSeconds = forecast.utcOffsetSeconds, use24Hour = use24Hour)
+                    HourlyCard(
+                        hourly = forecast.hourly,
+                        tempUnit = tempUnit,
+                        utcOffsetSeconds = forecast.utcOffsetSeconds,
+                        use24Hour = use24Hour,
+                        selectedIsoTime = (selected as? com.vayunmathur.weather.util.SelectedDateOrTime.Time)?.isoTime,
+                        onHourSelected = { viewModel.toggleTime(it) },
+                        scrollToIsoDate = (selected as? com.vayunmathur.weather.util.SelectedDateOrTime.Day)?.isoDate,
+                    )
                 }
                 if (daily != null) {
-                    DailyCard(daily = daily, tempUnit = tempUnit)
+                    DailyCard(
+                        daily = daily,
+                        tempUnit = tempUnit,
+                        selectedIsoDate = (selected as? com.vayunmathur.weather.util.SelectedDateOrTime.Day)?.isoDate,
+                        onDaySelected = { viewModel.toggleDay(it) },
+                    )
                 }
-                if (current != null) {
+                if (current != null && resolved != null) {
+                    val sunriseEpoch = resolved.sunriseIso?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
+                    val sunsetEpoch = resolved.sunsetIso?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
                     WeatherBlocks(
-                        current = current,
-                        today = daily,
+                        current = resolved.blockCurrent,
+                        uvIndex = resolved.uvIndexMax,
                         air = state.airQuality?.current,
                         sunriseEpochSec = sunriseEpoch,
                         sunsetEpochSec = sunsetEpoch,

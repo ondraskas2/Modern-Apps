@@ -30,7 +30,12 @@ import kotlinx.datetime.LocalDate
  * max/min temps on top, weather icon + precip% + weekday on the bottom.
  */
 @Composable
-fun DailyCard(daily: Daily, tempUnit: TemperatureUnit) {
+fun DailyCard(
+    daily: Daily,
+    tempUnit: TemperatureUnit,
+    selectedIsoDate: String? = null,
+    onDaySelected: (String) -> Unit = {},
+) {
     if (daily.time.isEmpty()) return
 
     Surface(
@@ -58,6 +63,8 @@ fun DailyCard(daily: Daily, tempUnit: TemperatureUnit) {
                         iconRes = weatherConditionForCode(code).iconRes(true),
                         precipitationProbability = precip,
                         tempUnit = tempUnit,
+                        isSelected = date != null && date == selectedIsoDate,
+                        onClick = { if (date != null) onDaySelected(date) },
                     )
 
                     if (index == daily.time.size - 1) Spacer(Modifier.width(16.dp))
@@ -75,10 +82,13 @@ private fun DailyItem(
     iconRes: Int,
     precipitationProbability: Int,
     tempUnit: TemperatureUnit,
+    isSelected: Boolean,
+    onClick: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         shape = CircleShape,
+        onClick = onClick,
     ) {
         Column(
             modifier = Modifier

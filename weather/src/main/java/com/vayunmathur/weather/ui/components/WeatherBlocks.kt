@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.weather.network.AirQualityCurrent
 import com.vayunmathur.weather.network.Current
-import com.vayunmathur.weather.network.Daily
 import com.vayunmathur.weather.ui.components.blocks.AirQualityBlock
 import com.vayunmathur.weather.ui.components.blocks.HumidityBlock
 import com.vayunmathur.weather.ui.components.blocks.PollenBlock
@@ -36,7 +35,7 @@ import com.vayunmathur.weather.util.WindUnit
 @Composable
 fun WeatherBlocks(
     current: Current,
-    today: Daily?,
+    uvIndex: Double?,
     air: AirQualityCurrent?,
     sunriseEpochSec: Long?,
     sunsetEpochSec: Long?,
@@ -54,7 +53,7 @@ fun WeatherBlocks(
         contentPadding = PaddingValues(bottom = 8.dp),
     ) {
         item { HumidityBlock(current = current, tempUnit = tempUnit) }
-        item { UvIndexBlock(uvIndex = today?.uvIndexMax?.firstOrNull()) }
+        item { UvIndexBlock(uvIndex = uvIndex) }
         item { WindBlock(current = current, unit = windUnit) }
         item { PressureBlock(current = current, pressureUnit = pressureUnit) }
         item { VisibilityBlock(current = current, useMiles = windUnit == WindUnit.Mph) }

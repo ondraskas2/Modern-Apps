@@ -1,5 +1,6 @@
 package com.vayunmathur.weather.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +20,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -49,13 +52,23 @@ import kotlin.time.Instant
  * `primary`.
  */
 @Composable
-fun HourlyCard(hourly: Hourly, tempUnit: TemperatureUnit, utcOffsetSeconds: Int = 0, use24Hour: Boolean = false) {
+fun HourlyCard(
+    hourly: Hourly,
+    tempUnit: TemperatureUnit,
+    utcOffsetSeconds: Int = 0,
+    use24Hour: Boolean = false,
+    selectedIsoTime: String? = null,
+    onHourSelected: (String) -> Unit = {},
+    scrollToIsoDate: String? = null,
+) {
     val nowSec = System.currentTimeMillis() / 1000
     val cells = hourly.time.indices
         .mapNotNull { i ->
-            val ts = parseIsoToEpochSec(hourly.time.getOrNull(i), utcOffsetSeconds) ?: return@mapNotNull null
+            val iso = hourly.time.getOrNull(i) ?: return@mapNotNull null
+            val ts = parseIsoToEpochSec(iso, utcOffsetSeconds) ?: return@mapNotNull null
             if (ts < nowSec - 3600) return@mapNotNull null
             HourCell(
+                iso = iso,
                 epochSec = ts,
                 temperature = hourly.temperature.getOrNull(i) ?: 0.0,
                 weatherCode = hourly.weatherCode.getOrNull(i) ?: 0,
@@ -65,6 +78,14 @@ fun HourlyCard(hourly: Hourly, tempUnit: TemperatureUnit, utcOffsetSeconds: Int 
         }
     if (cells.isEmpty()) return
 
+    val listState = rememberLazyListState()
+    LaunchedEffect(scrollToIsoDate, cells) {
+        if (scrollToIsoDate != null) {
+            val target = cells.indexOfFirst { it.iso.substringBefore('T') == scrollToIsoDate }
+            if (target >= 0) listState.animateScrollToItem(target)
+        }
+    }
+
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.extraLarge,
@@ -72,7 +93,7 @@ fun HourlyCard(hourly: Hourly, tempUnit: TemperatureUnit, utcOffsetSeconds: Int 
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             CardsHeader(text = "Hourly forecast", iconRes = R.drawable.outline_schedule_24)
-            LazyRow {
+            LazyRow(state = listState) {
                 items(cells.size, key = { "${cells[it].epochSec}_$it" }) { index ->
                     val cell = cells[index]
                     if (index == 0) Spacer(Modifier.width(10.dp))
@@ -82,8 +103,10 @@ fun HourlyCard(hourly: Hourly, tempUnit: TemperatureUnit, utcOffsetSeconds: Int 
                         precipitationProbability = cell.precip,
                         temperature = cell.temperature,
                         isNow = index == 0,
+                        isSelected = selectedIsoTime == cell.iso,
                         iconRes = weatherConditionForCode(cell.weatherCode).iconRes(cell.isDay),
                         tempUnit = tempUnit,
+                        onClick = { onHourSelected(cell.iso) },
                     )
                     if (index == cells.size - 1) Spacer(Modifier.width(10.dp))
                 }
@@ -99,16 +122,18 @@ private fun HourlyItem(
     precipitationProbability: Int,
     temperature: Double,
     isNow: Boolean,
+    isSelected: Boolean,
     iconRes: Int,
     tempUnit: TemperatureUnit,
+    onClick: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.height(135.dp).width(45.dp),
+        modifier = Modifier.height(135.dp).width(45.dp).clickable(onClick = onClick),
         verticalArrangement = Arrangement.Bottom,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(5.dp))
-        TempWithShape(temperature = temperature, tempUnit = tempUnit, isNow = isNow)
+        TempWithShape(temperature = temperature, tempUnit = tempUnit, highlighted = isNow || isSelected)
         Spacer(Modifier.height(2.dp))
         Text(
             "${precipitationProbability}%",
@@ -135,16 +160,16 @@ private fun HourlyItem(
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun TempWithShape(temperature: Double, tempUnit: TemperatureUnit, isNow: Boolean) {
+private fun TempWithShape(temperature: Double, tempUnit: TemperatureUnit, highlighted: Boolean) {
     Surface(
         shape = MaterialShapes.Cookie4Sided.toShape(),
         modifier = Modifier.size(36.dp),
-        color = if (isNow) MaterialTheme.colorScheme.primary else Color.Transparent,
+        color = if (highlighted) MaterialTheme.colorScheme.primary else Color.Transparent,
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
                 formatTemperatureCompact(temperature, tempUnit),
-                color = if (isNow) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                color = if (highlighted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleMedium,
             )
         }
@@ -152,6 +177,7 @@ private fun TempWithShape(temperature: Double, tempUnit: TemperatureUnit, isNow:
 }
 
 private data class HourCell(
+    val iso: String,
     val epochSec: Long,
     val temperature: Double,
     val weatherCode: Int,

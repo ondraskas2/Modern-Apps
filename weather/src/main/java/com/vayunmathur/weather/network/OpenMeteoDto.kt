@@ -42,8 +42,16 @@ data class Current(
 data class Hourly(
     val time: List<String> = emptyList(),
     @SerialName("temperature_2m") val temperature: List<Double> = emptyList(),
+    @SerialName("apparent_temperature") val apparentTemperature: List<Double> = emptyList(),
+    @SerialName("relative_humidity_2m") val relativeHumidity: List<Int> = emptyList(),
+    @SerialName("dew_point_2m") val dewPoint: List<Double> = emptyList(),
     @SerialName("weather_code") val weatherCode: List<Int> = emptyList(),
     @SerialName("precipitation_probability") val precipitationProbability: List<Int> = emptyList(),
+    @SerialName("wind_speed_10m") val windSpeed: List<Double> = emptyList(),
+    @SerialName("wind_direction_10m") val windDirection: List<Int> = emptyList(),
+    @SerialName("pressure_msl") val pressureMsl: List<Double> = emptyList(),
+    @SerialName("visibility") val visibility: List<Double> = emptyList(),
+    @SerialName("uv_index") val uvIndex: List<Double> = emptyList(),
     @SerialName("is_day") val isDay: List<Int> = emptyList(),
 )
 

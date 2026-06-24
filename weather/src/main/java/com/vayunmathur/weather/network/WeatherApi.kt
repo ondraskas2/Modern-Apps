@@ -43,8 +43,16 @@ object WeatherApi {
             append("&hourly=").append(
                 listOf(
                     "temperature_2m",
+                    "apparent_temperature",
+                    "relative_humidity_2m",
+                    "dew_point_2m",
                     "weather_code",
                     "precipitation_probability",
+                    "wind_speed_10m",
+                    "wind_direction_10m",
+                    "pressure_msl",
+                    "visibility",
+                    "uv_index",
                     "is_day",
                 ).joinToString(",")
             )

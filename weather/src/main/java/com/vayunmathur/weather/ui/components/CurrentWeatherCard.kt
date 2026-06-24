@@ -17,8 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vayunmathur.weather.network.Current
-import com.vayunmathur.weather.network.Daily
 import com.vayunmathur.weather.util.TemperatureUnit
 import com.vayunmathur.weather.util.formatTemperatureCompact
 import com.vayunmathur.weather.util.weatherConditionForCode
@@ -28,12 +26,23 @@ import com.vayunmathur.weather.util.weatherConditionForCode
  * column: 32 dp condition icon + `titleLarge Medium` condition label, then
  * 136 sp bold `primary`-colored temperature, then `titleLarge Medium`
  * feels-like, then a "Max X° Min Y°" row.
+ *
+ * Driven by already-resolved values so it can render the live current
+ * conditions, a selected hour, or a selected day with the same code. When
+ * [apparentTemperature] is null (e.g. a selected day), the feels-like line
+ * is hidden.
  */
 @Composable
-fun CurrentWeatherCard(current: Current, today: Daily?, tempUnit: TemperatureUnit) {
-    val condition = weatherConditionForCode(current.weatherCode)
-    val high = today?.temperatureMax?.firstOrNull()
-    val low = today?.temperatureMin?.firstOrNull()
+fun CurrentWeatherCard(
+    weatherCode: Int,
+    isDay: Boolean,
+    temperature: Double,
+    apparentTemperature: Double?,
+    high: Double?,
+    low: Double?,
+    tempUnit: TemperatureUnit,
+) {
+    val condition = weatherConditionForCode(weatherCode)
 
     Column(
         modifier = Modifier
@@ -43,7 +52,7 @@ fun CurrentWeatherCard(current: Current, today: Daily?, tempUnit: TemperatureUni
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             WeatherIconBox(
-                iconRes = condition.iconRes(current.isDay == 1),
+                iconRes = condition.iconRes(isDay),
                 size = 32.dp,
                 tint = MaterialTheme.colorScheme.onSurface,
             )
@@ -56,17 +65,19 @@ fun CurrentWeatherCard(current: Current, today: Daily?, tempUnit: TemperatureUni
             )
         }
         Text(
-            text = formatTemperatureCompact(current.temperature, tempUnit),
+            text = formatTemperatureCompact(temperature, tempUnit),
             color = MaterialTheme.colorScheme.primary,
             fontSize = 136.sp,
             fontWeight = FontWeight.Bold,
         )
-        Text(
-            text = "Feels like ${formatTemperatureCompact(current.apparentTemperature, tempUnit)}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Medium,
-        )
+        if (apparentTemperature != null) {
+            Text(
+                text = "Feels like ${formatTemperatureCompact(apparentTemperature, tempUnit)}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+            )
+        }
         Spacer(Modifier.height(6.dp))
         if (high != null && low != null) {
             Row(
