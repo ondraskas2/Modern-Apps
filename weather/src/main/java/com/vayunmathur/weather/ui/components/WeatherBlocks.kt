@@ -14,6 +14,7 @@ import com.vayunmathur.weather.network.Current
 import com.vayunmathur.weather.ui.components.blocks.AirQualityBlock
 import com.vayunmathur.weather.ui.components.blocks.HumidityBlock
 import com.vayunmathur.weather.ui.components.blocks.PollenBlock
+import com.vayunmathur.weather.ui.components.blocks.PrecipitationBlock
 import com.vayunmathur.weather.ui.components.blocks.PressureBlock
 import com.vayunmathur.weather.ui.components.blocks.SunBlock
 import com.vayunmathur.weather.ui.components.blocks.UvIndexBlock
@@ -39,6 +40,8 @@ fun WeatherBlocks(
     air: AirQualityCurrent?,
     sunriseEpochSec: Long?,
     sunsetEpochSec: Long?,
+    precipitationMm: Double?,
+    precipitationNowcast: String?,
     tempUnit: TemperatureUnit,
     windUnit: WindUnit,
     pressureUnit: PressureUnit,
@@ -54,6 +57,13 @@ fun WeatherBlocks(
     ) {
         item { HumidityBlock(current = current, tempUnit = tempUnit) }
         item { UvIndexBlock(uvIndex = uvIndex) }
+        item {
+            PrecipitationBlock(
+                amountMm = precipitationMm,
+                useInches = windUnit == WindUnit.Mph,
+                nowcast = precipitationNowcast,
+            )
+        }
         item { WindBlock(current = current, unit = windUnit) }
         item { PressureBlock(current = current, pressureUnit = pressureUnit) }
         item { VisibilityBlock(current = current, useMiles = windUnit == WindUnit.Mph) }

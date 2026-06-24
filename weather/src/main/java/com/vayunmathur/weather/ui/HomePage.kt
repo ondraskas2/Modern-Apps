@@ -209,12 +209,19 @@ private fun LocationPage(
                 if (current != null && resolved != null) {
                     val sunriseEpoch = resolved.sunriseIso?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
                     val sunsetEpoch = resolved.sunsetIso?.let { parseLocalIsoToEpochSec(it, forecast.utcOffsetSeconds) }
+                    val nowcast = if (selected == null) {
+                        com.vayunmathur.weather.util.precipitationNowcast(forecast.minutely15, forecast.utcOffsetSeconds)
+                    } else {
+                        null
+                    }
                     WeatherBlocks(
                         current = resolved.blockCurrent,
                         uvIndex = resolved.uvIndexMax,
                         air = state.airQuality?.current,
                         sunriseEpochSec = sunriseEpoch,
                         sunsetEpochSec = sunsetEpoch,
+                        precipitationMm = resolved.precipitationSum,
+                        precipitationNowcast = nowcast,
                         tempUnit = tempUnit,
                         windUnit = windUnit,
                         pressureUnit = pressureUnit,

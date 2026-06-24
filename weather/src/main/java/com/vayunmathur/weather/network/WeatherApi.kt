@@ -48,6 +48,7 @@ object WeatherApi {
                     "dew_point_2m",
                     "weather_code",
                     "precipitation_probability",
+                    "precipitation",
                     "wind_speed_10m",
                     "wind_direction_10m",
                     "pressure_msl",
@@ -65,8 +66,10 @@ object WeatherApi {
                     "sunset",
                     "uv_index_max",
                     "precipitation_probability_max",
+                    "precipitation_sum",
                 ).joinToString(",")
             )
+            append("&minutely_15=precipitation")
             append("&timezone=auto")
             append("&forecast_days=7")
         }

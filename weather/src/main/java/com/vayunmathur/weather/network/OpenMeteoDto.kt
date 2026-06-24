@@ -21,6 +21,13 @@ data class ForecastResponse(
     val current: Current? = null,
     val hourly: Hourly? = null,
     val daily: Daily? = null,
+    @SerialName("minutely_15") val minutely15: Minutely15? = null,
+)
+
+@Serializable
+data class Minutely15(
+    val time: List<String> = emptyList(),
+    @SerialName("precipitation") val precipitation: List<Double> = emptyList(),
 )
 
 @Serializable
@@ -47,6 +54,7 @@ data class Hourly(
     @SerialName("dew_point_2m") val dewPoint: List<Double> = emptyList(),
     @SerialName("weather_code") val weatherCode: List<Int> = emptyList(),
     @SerialName("precipitation_probability") val precipitationProbability: List<Int> = emptyList(),
+    @SerialName("precipitation") val precipitation: List<Double> = emptyList(),
     @SerialName("wind_speed_10m") val windSpeed: List<Double> = emptyList(),
     @SerialName("wind_direction_10m") val windDirection: List<Int> = emptyList(),
     @SerialName("pressure_msl") val pressureMsl: List<Double> = emptyList(),
@@ -65,4 +73,5 @@ data class Daily(
     @SerialName("sunset") val sunset: List<String> = emptyList(),
     @SerialName("uv_index_max") val uvIndexMax: List<Double> = emptyList(),
     @SerialName("precipitation_probability_max") val precipitationProbabilityMax: List<Int> = emptyList(),
+    @SerialName("precipitation_sum") val precipitationSum: List<Double> = emptyList(),
 )
