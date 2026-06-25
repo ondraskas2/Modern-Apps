@@ -235,6 +235,25 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
         _selectedMessageUids.value = emptySet()
     }
 
+    /** Delete a message: remove locally and expunge it on the IMAP server. */
+    fun deleteMessage(accountEmail: String, folderName: String, uid: Long) {
+        viewModelScope.launch {
+            dao.deleteMessageRow(accountEmail, folderName, uid)
+            val account = dao.getAccountByEmail(accountEmail) ?: return@launch
+            try {
+                emailManager.deleteMessage(
+                    server = account.imapServer(),
+                    user = account.loginUser(),
+                    auth = account.authType(),
+                    folderName = folderName,
+                    uid = uid,
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("EmailViewModel", "Failed to delete message on server: ${e.message}")
+            }
+        }
+    }
+
     fun markAsRead(accountEmail: String, folderName: String, uid: Long, isRead: Boolean) {
         viewModelScope.launch {
             dao.updateReadStatus(accountEmail, folderName, uid, isRead)

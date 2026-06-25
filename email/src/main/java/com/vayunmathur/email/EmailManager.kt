@@ -406,6 +406,25 @@ class EmailManager {
         }
     }
 
+    /** Permanently delete a message on the IMAP server (sets \Deleted and expunges). */
+    suspend fun deleteMessage(
+        server: ServerConfig,
+        user: String,
+        auth: AuthType,
+        folderName: String,
+        uid: Long,
+    ) = withStore(server, user, auth) { store ->
+        val folder = store.getFolder(folderName)
+        folder.open(Folder.READ_WRITE)
+        try {
+            val msg = (folder as UIDFolder).getMessageByUID(uid) ?: return@withStore
+            msg.setFlag(Flags.Flag.DELETED, true)
+            folder.expunge()
+        } finally {
+            try { folder.close(true) } catch (_: Throwable) {}
+        }
+    }
+
     suspend fun downloadAttachment(
         context: Context,
         server: ServerConfig,

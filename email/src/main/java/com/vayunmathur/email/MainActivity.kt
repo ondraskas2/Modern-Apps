@@ -433,6 +433,22 @@ fun MessageListScreen(
     val aiSummaryLoading by viewModel.aiSummaryLoading.collectAsState()
     var isSearching by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    var pendingDelete by remember { mutableStateOf<EmailMessage?>(null) }
+
+    // Show an Undo snackbar; commit the server/local delete only if not undone.
+    LaunchedEffect(pendingDelete) {
+        val msg = pendingDelete ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Message deleted",
+            actionLabel = "Undo",
+            duration = androidx.compose.material3.SnackbarDuration.Short,
+        )
+        if (result != androidx.compose.material3.SnackbarResult.ActionPerformed) {
+            viewModel.deleteMessage(msg.accountEmail, msg.folderName, msg.id)
+        }
+        pendingDelete = null
+    }
 
     androidx.activity.compose.BackHandler(enabled = isSearching || selectedUids.isNotEmpty()) {
         if (selectedUids.isNotEmpty()) {
@@ -454,6 +470,7 @@ fun MessageListScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (selectedUids.isNotEmpty()) {
                 TopAppBar(
@@ -586,9 +603,36 @@ fun MessageListScreen(
                         },
                         key = { "${it.accountEmail}|${it.folderName}|${it.id}" }
                     ) { message ->
+                        val isPending = pendingDelete?.let {
+                            it.id == message.id && it.accountEmail == message.accountEmail && it.folderName == message.folderName
+                        } == true
+                        if (!isPending) {
                         val accountColor = Color(EmailAccount(message.accountEmail).getColor())
                         val isSelected = message.id in selectedUids
-                        
+                        val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
+                            confirmValueChange = { value ->
+                                when (value) {
+                                    androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { pendingDelete = message; true }
+                                    androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> {
+                                        viewModel.markAsRead(message.accountEmail, message.folderName, message.id, !message.isRead)
+                                        false
+                                    }
+                                    else -> false
+                                }
+                            }
+                        )
+                        androidx.compose.material3.SwipeToDismissBox(
+                            state = dismissState,
+                            backgroundContent = {
+                                val toStart = dismissState.dismissDirection == androidx.compose.material3.SwipeToDismissBoxValue.EndToStart
+                                Box(
+                                    modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+                                    contentAlignment = if (toStart) Alignment.CenterEnd else Alignment.CenterStart,
+                                ) {
+                                    if (toStart) com.vayunmathur.library.ui.IconDelete() else IconMarkRead()
+                                }
+                            },
+                        ) {
                         Row(
                             modifier = Modifier
                                 .combinedClickable(
@@ -656,7 +700,9 @@ fun MessageListScreen(
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                             )
                         }
+                        }
                         HorizontalDivider()
+                        }
                     }
                 }
             }
