@@ -6,6 +6,7 @@ import com.vayunmathur.email.EmailAccount
 import com.vayunmathur.email.EmailFolder
 import com.vayunmathur.email.EmailMessage
 import com.vayunmathur.email.OutboxEntry
+import com.vayunmathur.email.DraftEntry
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -130,4 +131,18 @@ interface EmailDao {
 
     @Query("UPDATE OutboxEntry SET lastError = :error, attemptCount = :attempts, lastAttemptAt = :at WHERE id = :id")
     suspend fun updateOutboxAttempt(id: Long, error: String?, attempts: Int, at: Long)
+
+    // ---- Drafts ----
+
+    @Query("SELECT * FROM DraftEntry ORDER BY updatedAt DESC")
+    fun getDraftsFlow(): Flow<List<DraftEntry>>
+
+    @Query("SELECT * FROM DraftEntry WHERE id = :id")
+    suspend fun getDraft(id: Long): DraftEntry?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDraft(draft: DraftEntry): Long
+
+    @Query("DELETE FROM DraftEntry WHERE id = :id")
+    suspend fun deleteDraftById(id: Long)
 }

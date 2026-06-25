@@ -35,6 +35,38 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
     val syncProgress: StateFlow<Float> = EmailSyncState.progress
 
     val outbox: Flow<List<OutboxEntry>> = dao.getOutboxFlow()
+    val drafts: Flow<List<com.vayunmathur.email.DraftEntry>> = dao.getDraftsFlow()
+
+    /** Load a draft for resuming in the composer. */
+    suspend fun loadDraft(id: Long): com.vayunmathur.email.DraftEntry? = dao.getDraft(id)
+
+    /** Insert or update a draft; returns its id (new id when [id] is null). */
+    fun saveDraft(
+        id: Long?,
+        accountEmail: String,
+        to: String,
+        cc: String,
+        bcc: String,
+        subject: String,
+        body: String,
+        onSaved: (Long) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val rowId = dao.insertDraft(
+                com.vayunmathur.email.DraftEntry(
+                    id = id ?: 0,
+                    accountEmail = accountEmail,
+                    to = to, cc = cc, bcc = bcc, subject = subject, body = body,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            )
+            onSaved(if (id != null && id != 0L) id else rowId)
+        }
+    }
+
+    fun deleteDraft(id: Long) {
+        viewModelScope.launch { dao.deleteDraftById(id) }
+    }
 
     private val _aiSummary = MutableStateFlow<String?>(null)
     val aiSummary: StateFlow<String?> = _aiSummary

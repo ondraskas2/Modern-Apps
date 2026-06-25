@@ -8,8 +8,9 @@ import androidx.room.migration.Migration
 import com.vayunmathur.email.EmailFolder
 import com.vayunmathur.email.EmailMessage
 import com.vayunmathur.email.EmailAccount
-import com.vayunmathur.email.Attachment
 import com.vayunmathur.email.OutboxEntry
+import com.vayunmathur.email.DraftEntry
+import com.vayunmathur.email.Attachment
 
 @Database(
     entities = [
@@ -18,8 +19,9 @@ import com.vayunmathur.email.OutboxEntry
         EmailAccount::class,
         Attachment::class,
         OutboxEntry::class,
+        DraftEntry::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class EmailDatabase : RoomDatabase() {
@@ -81,6 +83,23 @@ abstract class EmailDatabase : RoomDatabase() {
             it.execSQL("ALTER TABLE OutboxEntry ADD COLUMN bcc TEXT")
         }
 
+        private val MIGRATION_10_11 = Migration(10, 11) {
+            it.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `DraftEntry` (
+                    `id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    `accountEmail` TEXT NOT NULL,
+                    `to` TEXT NOT NULL,
+                    `cc` TEXT NOT NULL,
+                    `bcc` TEXT NOT NULL,
+                    `subject` TEXT NOT NULL,
+                    `body` TEXT NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+        }
+
         fun getInstance(context: Context): EmailDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -88,7 +107,7 @@ abstract class EmailDatabase : RoomDatabase() {
                     EmailDatabase::class.java,
                     "email-db"
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                     .build().also { instance = it }
             }
         }

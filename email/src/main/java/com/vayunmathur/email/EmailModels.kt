@@ -165,3 +165,15 @@ data class OutboxEntry(
     val attemptCount: Int = 0,
     val lastAttemptAt: Long = 0
 )
+
+@Entity
+data class DraftEntry(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val accountEmail: String,
+    val to: String = "",
+    val cc: String = "",
+    val bcc: String = "",
+    val subject: String = "",
+    val body: String = "",
+    val updatedAt: Long = System.currentTimeMillis(),
+)

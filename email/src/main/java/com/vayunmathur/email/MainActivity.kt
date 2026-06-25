@@ -31,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vayunmathur.email.data.EmailSyncWorker
 import com.vayunmathur.library.ui.*
 import com.vayunmathur.library.util.*
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -132,10 +133,13 @@ sealed interface Route : NavKey {
         val subject: String = "",
         val body: String = "",
         val inReplyTo: String? = null,
-        val references: String? = null
+        val references: String? = null,
+        val draftId: Long? = null
     ) : Route
     @Serializable
     object Outbox : Route
+    @Serializable
+    object Drafts : Route
     @Serializable
     object AddAccount : Route
     @Serializable
@@ -261,6 +265,16 @@ fun EmailApp(viewModel: EmailViewModel) {
                             icon = { com.vayunmathur.library.ui.IconSettings() },
                             modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                         )
+                        NavigationDrawerItem(
+                            label = { Text(stringResource(R.string.drafts)) },
+                            selected = false,
+                            onClick = {
+                                backStack.add(Route.Drafts)
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { com.vayunmathur.library.ui.IconEdit() },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                        )
                     }
 
                     // Pinned footer: logout stays visible no matter how long the list above is.
@@ -314,6 +328,7 @@ fun EmailApp(viewModel: EmailViewModel) {
                     initialBody = route.body,
                     inReplyTo = route.inReplyTo,
                     references = route.references,
+                    draftId = route.draftId,
                     onBack = { backStack.pop() }
                 )
             }
@@ -331,6 +346,13 @@ fun EmailApp(viewModel: EmailViewModel) {
             }
             entry<Route.Settings>(metadata = ListDetailPage()) {
                 SettingsScreen(viewModel = viewModel, onBack = { backStack.pop() })
+            }
+            entry<Route.Drafts>(metadata = ListDetailPage()) {
+                DraftsScreen(
+                    viewModel = viewModel,
+                    onBack = { backStack.pop() },
+                    onOpenDraft = { id -> backStack.add(Route.Composer(draftId = id)) },
+                )
             }
         }
     }
@@ -926,7 +948,7 @@ fun AttachmentItem(attachment: Attachment, viewModel: EmailViewModel) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun ComposerScreen(
     viewModel: EmailViewModel,
@@ -935,6 +957,7 @@ fun ComposerScreen(
     initialBody: String = "",
     inReplyTo: String? = null,
     references: String? = null,
+    draftId: Long? = null,
     onBack: () -> Unit,
 ) {
     val accounts by viewModel.accounts.collectAsState(emptyList())
@@ -956,9 +979,26 @@ fun ComposerScreen(
     
     var showAccountPicker by remember { mutableStateOf(false) }
 
+    // Draft auto-save / resume state.
+    var currentDraftId by remember { mutableStateOf(draftId) }
+    var draftLoaded by remember { mutableStateOf(draftId == null) }
+    LaunchedEffect(draftId) {
+        if (draftId != null) {
+            viewModel.loadDraft(draftId)?.let { d ->
+                to = d.to; cc = d.cc; bcc = d.bcc
+                if (d.cc.isNotBlank() || d.bcc.isNotBlank()) showCcBcc = true
+                subject = d.subject; body = d.body
+                accounts.firstOrNull { it.email == d.accountEmail }?.let { fromAccount = it }
+            }
+            draftLoaded = true
+        }
+    }
+
     // Append the from-account's signature, swapping it when the account changes.
+    // Skipped when editing an existing draft (its body is already saved).
     var appliedSignature by remember { mutableStateOf("") }
     LaunchedEffect(fromAccount) {
+        if (draftId != null) return@LaunchedEffect
         val block = signatureBlock(fromAccount)
         if (block != appliedSignature) {
             body = when {
@@ -968,6 +1008,23 @@ fun ComposerScreen(
             }
             appliedSignature = block
         }
+    }
+
+    // Auto-save the draft as the user types (debounced).
+    LaunchedEffect(fromAccount, draftLoaded) {
+        val acc = fromAccount
+        if (!draftLoaded || acc == null) return@LaunchedEffect
+        snapshotFlow { listOf(to, cc, bcc, subject, body) }
+            .debounce(800)
+            .collect {
+                val hasContent = to.isNotBlank() || cc.isNotBlank() || bcc.isNotBlank() ||
+                    subject.isNotBlank() || body.isNotBlank()
+                if (hasContent) {
+                    viewModel.saveDraft(currentDraftId, acc.email, to, cc, bcc, subject, body) { id ->
+                        currentDraftId = id
+                    }
+                }
+            }
     }
 
     val attachmentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -998,6 +1055,7 @@ fun ComposerScreen(
                             references = references, 
                             onSuccess = {
                                 sending = false
+                                currentDraftId?.let { viewModel.deleteDraft(it) }
                                 android.widget.Toast.makeText(context, "Message sent", android.widget.Toast.LENGTH_SHORT).show()
                                 onBack()
                             },
@@ -1232,6 +1290,49 @@ fun SettingsScreen(viewModel: EmailViewModel, onBack: () -> Unit) {
                     }
                 }
                 HorizontalDivider()
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DraftsScreen(
+    viewModel: EmailViewModel,
+    onBack: () -> Unit,
+    onOpenDraft: (Long) -> Unit,
+) {
+    val drafts by viewModel.drafts.collectAsState(emptyList())
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.drafts)) },
+                navigationIcon = { IconNavigation(onBack) },
+            )
+        }
+    ) { padding ->
+        if (drafts.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("No drafts")
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                items(drafts, key = { it.id }) { d ->
+                    ListItem(
+                        headlineContent = { Text(d.subject.ifBlank { "(no subject)" }) },
+                        supportingContent = {
+                            val prefix = if (d.to.isNotBlank()) "To: ${d.to}  " else ""
+                            Text(prefix + d.body.replace("\n", " ").take(80), maxLines = 2)
+                        },
+                        modifier = Modifier.clickable { onOpenDraft(d.id) },
+                        trailingContent = {
+                            IconButton(onClick = { viewModel.deleteDraft(d.id) }) {
+                                com.vayunmathur.library.ui.IconDelete()
+                            }
+                        },
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }
