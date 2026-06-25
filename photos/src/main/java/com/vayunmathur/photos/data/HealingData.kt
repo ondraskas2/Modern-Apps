@@ -4,11 +4,14 @@ import android.graphics.Bitmap
 import kotlin.math.max
 import kotlin.math.sqrt
 
+enum class HealMode { Heal, Clone, SpotHeal }
+
 data class HealingStroke(
     val sourceX: Float,
     val sourceY: Float,
     val points: List<Pair<Float, Float>>,
     val brushSize: Float = 0.02f,
+    val mode: HealMode = HealMode.Heal,
 )
 
 data class HealingStrokes(

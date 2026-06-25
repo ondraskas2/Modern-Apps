@@ -34,7 +34,7 @@ private fun generateGaussianKernel(radius: Int): FloatArray {
     return kernel
 }
 
-private fun gaussianBlur(pixels: IntArray, w: Int, h: Int, radius: Int): IntArray {
+internal fun gaussianBlur(pixels: IntArray, w: Int, h: Int, radius: Int): IntArray {
     if (radius <= 0) return pixels.copyOf()
     val kernel = generateGaussianKernel(radius)
     val temp = IntArray(w * h)
@@ -153,4 +153,107 @@ fun BlurParams.applyBlurToBitmap(bitmap: Bitmap): Bitmap {
     val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     result.setPixels(output, 0, w, 0, 0, w, h)
     return result
+}
+
+// --- Phase 4: full-image filter blurs -------------------------------------------
+
+enum class FilterBlurMode { Gaussian, Motion, Radial, Spin }
+
+/** Full-image blur filter (destructive), distinct from the masked [BlurParams] lens blur. */
+data class FilterBlur(
+    val mode: FilterBlurMode = FilterBlurMode.Gaussian,
+    val amount: Float = 0f,
+    val angle: Float = 0f,
+    val centerX: Float = 0.5f,
+    val centerY: Float = 0.5f,
+) {
+    fun isIdentity(): Boolean = amount == 0f
+}
+
+fun FilterBlur.applyToBitmap(bitmap: Bitmap): Bitmap {
+    if (isIdentity()) return bitmap.copy(Bitmap.Config.ARGB_8888, true)
+    val w = bitmap.width
+    val h = bitmap.height
+    val src = IntArray(w * h)
+    bitmap.getPixels(src, 0, w, 0, 0, w, h)
+    val out = when (mode) {
+        FilterBlurMode.Gaussian -> gaussianBlur(src, w, h, (amount * 0.5f).toInt().coerceIn(1, 60))
+        FilterBlurMode.Motion -> motionBlur(src, w, h, amount.toInt().coerceIn(1, 100), angle)
+        FilterBlurMode.Radial -> radialBlur(src, w, h, amount, centerX, centerY, spin = false)
+        FilterBlurMode.Spin -> radialBlur(src, w, h, amount, centerX, centerY, spin = true)
+    }
+    val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    result.setPixels(out, 0, w, 0, 0, w, h)
+    return result
+}
+
+private fun motionBlur(src: IntArray, w: Int, h: Int, length: Int, angle: Float): IntArray {
+    val out = IntArray(w * h)
+    val rad = Math.toRadians(angle.toDouble())
+    val dx = kotlin.math.cos(rad).toFloat()
+    val dy = kotlin.math.sin(rad).toFloat()
+    val half = length / 2
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            var aa = 0f; var rr = 0f; var gg = 0f; var bb = 0f; var n = 0f
+            for (k in -half..half) {
+                val sx = (x + (dx * k)).toInt().coerceIn(0, w - 1)
+                val sy = (y + (dy * k)).toInt().coerceIn(0, h - 1)
+                val p = src[sy * w + sx]
+                aa += (p ushr 24) and 0xFF
+                rr += (p ushr 16) and 0xFF
+                gg += (p ushr 8) and 0xFF
+                bb += p and 0xFF
+                n++
+            }
+            out[y * w + x] = ((aa / n).toInt() shl 24) or ((rr / n).toInt() shl 16) or
+                ((gg / n).toInt() shl 8) or (bb / n).toInt()
+        }
+    }
+    return out
+}
+
+private fun radialBlur(
+    src: IntArray, w: Int, h: Int, amount: Float,
+    centerX: Float, centerY: Float, spin: Boolean,
+): IntArray {
+    val out = IntArray(w * h)
+    val cx = centerX * w
+    val cy = centerY * h
+    val samples = (amount * 0.2f).toInt().coerceIn(3, 30)
+    val strength = amount / 100f
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            var aa = 0f; var rr = 0f; var gg = 0f; var bb = 0f
+            val odx = x - cx
+            val ody = y - cy
+            for (s in 0 until samples) {
+                val t = s.toFloat() / samples
+                val sx: Float
+                val sy: Float
+                if (spin) {
+                    val ang = -strength * 0.3f * t
+                    val cosA = kotlin.math.cos(ang.toDouble()).toFloat()
+                    val sinA = kotlin.math.sin(ang.toDouble()).toFloat()
+                    sx = cx + (odx * cosA - ody * sinA)
+                    sy = cy + (odx * sinA + ody * cosA)
+                } else {
+                    val scale = 1f - strength * t
+                    sx = cx + odx * scale
+                    sy = cy + ody * scale
+                }
+                val ix = sx.toInt().coerceIn(0, w - 1)
+                val iy = sy.toInt().coerceIn(0, h - 1)
+                val p = src[iy * w + ix]
+                aa += (p ushr 24) and 0xFF
+                rr += (p ushr 16) and 0xFF
+                gg += (p ushr 8) and 0xFF
+                bb += p and 0xFF
+            }
+            val n = samples.toFloat()
+            out[y * w + x] = ((aa / n).toInt() shl 24) or ((rr / n).toInt() shl 16) or
+                ((gg / n).toInt() shl 8) or (bb / n).toInt()
+        }
+    }
+    return out
 }

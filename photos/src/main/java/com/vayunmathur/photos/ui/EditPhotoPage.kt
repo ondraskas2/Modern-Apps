@@ -29,17 +29,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material.icons.outlined.Photo
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.HighlightAlt
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -56,83 +54,207 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import com.vayunmathur.photos.data.DrawingTool
-import com.vayunmathur.photos.data.ImageAdjustments
-import com.vayunmathur.photos.data.hasPixelEffects
-import com.vayunmathur.photos.data.PhotoFilter
-import com.vayunmathur.photos.data.PhotoFilters
-import com.vayunmathur.photos.data.TextElement
-import com.vayunmathur.photos.data.toBrush
-import com.vayunmathur.photos.data.toColorMatrix
-import com.vayunmathur.photos.data.CurveChannel
-import com.vayunmathur.photos.data.CurvesAdjustment
-import com.vayunmathur.photos.data.HslAdjustments
-import com.vayunmathur.photos.data.HslColorRange
-import com.vayunmathur.photos.data.BlurParams
-import com.vayunmathur.photos.data.SelectiveEdits
-import com.vayunmathur.photos.data.SelectiveMask
-import com.vayunmathur.photos.data.HealingStrokes
-import com.vayunmathur.photos.data.HealingStroke
-import com.vayunmathur.photos.data.PerspectiveCorners
-import com.vayunmathur.library.util.ResultEffect
-import com.vayunmathur.library.util.SerializedStroke
-import com.vayunmathur.library.util.deserialize
-import com.vayunmathur.library.util.serialize
-import com.vayunmathur.library.ui.CanvasTextElement
-import com.vayunmathur.library.ui.InkCanvasView
-import com.vayunmathur.library.util.translate
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.core.net.toUri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.ink.brush.Brush
 import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.Stroke as InkStroke
+import com.vayunmathur.library.ui.CanvasTextElement
+import com.vayunmathur.library.ui.IconBack
 import com.vayunmathur.library.ui.IconBrush
+import com.vayunmathur.library.ui.IconCopy
 import com.vayunmathur.library.ui.IconCheck
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconCrop
 import com.vayunmathur.library.ui.IconDraw
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconEraser
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import com.vayunmathur.library.ui.IconRotateLeft
 import com.vayunmathur.library.ui.IconRotateRight
 import com.vayunmathur.library.ui.IconSave
+import com.vayunmathur.library.ui.IconSettings
+import com.vayunmathur.library.ui.IconStar
 import com.vayunmathur.library.ui.IconUndo
 import com.vayunmathur.library.ui.IconVisible
+import com.vayunmathur.library.ui.InkCanvasView
 import com.vayunmathur.library.util.NavBackStack
+import com.vayunmathur.library.util.translate
 import com.vayunmathur.photos.R
+import com.vayunmathur.photos.data.AdjustmentLayer
+import com.vayunmathur.photos.data.BasicAdjustment
+import com.vayunmathur.photos.data.BlackAndWhiteAdj
+import com.vayunmathur.photos.data.BlurAdj
+import com.vayunmathur.photos.data.BlurParams
+import com.vayunmathur.photos.data.ChannelMixerAdj
+import com.vayunmathur.photos.data.ColorBalanceAdj
+import com.vayunmathur.photos.data.CurveChannel
+import com.vayunmathur.photos.data.CurvesAdj
+import com.vayunmathur.photos.data.CurvesAdjustment
+import com.vayunmathur.photos.data.DodgeBurnMode
+import com.vayunmathur.photos.data.DodgeBurnStroke
+import com.vayunmathur.photos.data.DodgeBurnStrokes
+import com.vayunmathur.photos.data.DrawingTool
+import com.vayunmathur.photos.data.EditDocument
+import com.vayunmathur.photos.data.GradientMapAdj
+import com.vayunmathur.photos.data.HealMode
+import com.vayunmathur.photos.data.HealingStroke
+import com.vayunmathur.photos.data.HealingStrokes
+import com.vayunmathur.photos.data.HslAdj
+import com.vayunmathur.photos.data.HslAdjustments
+import com.vayunmathur.photos.data.HslColorRange
+import com.vayunmathur.photos.data.ImageAdjustments
+import com.vayunmathur.photos.data.LayerAdjustment
+import com.vayunmathur.photos.data.LevelsAdj
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoDao
+import com.vayunmathur.photos.data.PhotoFilter
+import com.vayunmathur.photos.data.PhotoFilters
+import com.vayunmathur.photos.data.PixelLayer
+import com.vayunmathur.photos.data.RedEyeSpot
+import com.vayunmathur.photos.data.RedEyeSpots
+import com.vayunmathur.photos.data.Selection
+import com.vayunmathur.photos.data.SelectiveAdj
+import com.vayunmathur.photos.data.SelectiveEdits
+import com.vayunmathur.photos.data.SelectiveMask
+import com.vayunmathur.photos.data.SmudgeStroke
+import com.vayunmathur.photos.data.SmudgeStrokes
+import com.vayunmathur.photos.data.TextElement
+import com.vayunmathur.photos.data.applyToBitmap
+import com.vayunmathur.photos.data.applyHealingToBitmap
+import com.vayunmathur.photos.data.toColorMatrix
 import com.vayunmathur.photos.util.PhotoEditViewModel
+import com.vayunmathur.library.util.ResultEffect
+import com.vayunmathur.library.util.serialize
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
-private enum class EditorMode { None, Adjust, Filters, Curves, HSL, Blur, Selective, Healing, Perspective }
+private enum class ToolCategory(val label: String) {
+    Adjust("Adjust"), Filters("Filters"), Retouch("Retouch"),
+    Select("Select"), Transform("Crop"), Draw("Draw"), Layers("Layers"),
+}
+
+private enum class EditorMode {
+    None,
+    Adjust, Filters, Curves, HSL, Levels, ColorBalance, ChannelMixer, BlackWhite, GradientMap,
+    LensBlur, Selective, FilterFx, Liquify,
+    Healing, RedEye, DodgeBurn, Smudge,
+    Selection,
+    Crop,
+    Layers,
+}
+
+private data class ToolEntry(val mode: EditorMode, val label: String)
+
+/** A committed marquee selection described as a shape (for drawing the pattern overlay). */
+private data class SelShape(
+    val isEllipse: Boolean,
+    val rect: Rect,
+    val inverted: Boolean,
+    val featherFracX: Float,
+    val featherFracY: Float,
+)
+
+private val categoryTools: Map<ToolCategory, List<ToolEntry>> = mapOf(
+    ToolCategory.Adjust to listOf(
+        ToolEntry(EditorMode.Adjust, "Light"),
+        ToolEntry(EditorMode.Filters, "Presets"),
+        ToolEntry(EditorMode.Curves, "Curves"),
+        ToolEntry(EditorMode.HSL, "HSL"),
+        ToolEntry(EditorMode.Levels, "Levels"),
+        ToolEntry(EditorMode.ColorBalance, "Balance"),
+        ToolEntry(EditorMode.ChannelMixer, "Mixer"),
+        ToolEntry(EditorMode.BlackWhite, "B&W"),
+        ToolEntry(EditorMode.GradientMap, "Gradient"),
+    ),
+    ToolCategory.Filters to listOf(
+        ToolEntry(EditorMode.LensBlur, "Lens Blur"),
+        ToolEntry(EditorMode.Selective, "Selective"),
+        ToolEntry(EditorMode.FilterFx, "Filters"),
+        ToolEntry(EditorMode.Liquify, "Liquify"),
+    ),
+    ToolCategory.Retouch to listOf(
+        ToolEntry(EditorMode.Healing, "Heal"),
+        ToolEntry(EditorMode.RedEye, "Red-Eye"),
+        ToolEntry(EditorMode.DodgeBurn, "Dodge/Burn"),
+        ToolEntry(EditorMode.Smudge, "Smudge"),
+    ),
+    ToolCategory.Select to listOf(
+        ToolEntry(EditorMode.Selection, "Marquee"),
+    ),
+    ToolCategory.Transform to listOf(
+        ToolEntry(EditorMode.Crop, "Crop & Rotate"),
+    ),
+    ToolCategory.Layers to listOf(
+        ToolEntry(EditorMode.Layers, "Layers"),
+    ),
+)
+
+private fun ToolCategory.description(): String = when (this) {
+    ToolCategory.Adjust -> "Tune light and color."
+    ToolCategory.Filters -> "Effects, blur, and presets."
+    ToolCategory.Retouch -> "Fix and clean up areas."
+    ToolCategory.Select -> "Pick an area to limit edits."
+    ToolCategory.Transform -> "Crop, straighten, and rotate."
+    ToolCategory.Draw -> "Draw, highlight, and add text."
+    ToolCategory.Layers -> "Manage layers and masks."
+}
+
+private fun EditorMode.description(): String = when (this) {
+    EditorMode.Adjust -> "Fine-tune light and color with sliders."
+    EditorMode.Filters -> "Apply a one-tap preset look."
+    EditorMode.Curves -> "Reshape brightness and contrast with a curve."
+    EditorMode.HSL -> "Adjust hue, saturation, and lightness per color."
+    EditorMode.Levels -> "Set the black point, white point, and midtones."
+    EditorMode.ColorBalance -> "Shift colors in shadows, midtones, and highlights."
+    EditorMode.ChannelMixer -> "Blend the red, green, and blue channels."
+    EditorMode.BlackWhite -> "Convert to black & white and control how colors map."
+    EditorMode.GradientMap -> "Map dark-to-light tones onto a color gradient."
+    EditorMode.LensBlur -> "Blur the background for a depth-of-field look."
+    EditorMode.Selective -> "Paint an adjustment onto specific spots."
+    EditorMode.FilterFx -> "Apply a baked-in photo filter to the pixels."
+    EditorMode.Liquify -> "Push and warp pixels around."
+    EditorMode.Healing -> "Remove blemishes by copying nearby pixels."
+    EditorMode.RedEye -> "Tap each eye to remove red-eye."
+    EditorMode.DodgeBurn -> "Brush to lighten (dodge) or darken (burn)."
+    EditorMode.Smudge -> "Drag to smear pixels like wet paint."
+    EditorMode.Selection -> "Draw an area; edits then apply only inside it."
+    EditorMode.Crop -> "Crop, straighten, and rotate the photo."
+    EditorMode.Layers -> "Stack, blend, and mask layers."
+    EditorMode.None -> ""
+}
 
 private enum class AdjustmentType(val label: String, val min: Float, val max: Float) {
     Brightness("Brightness", -100f, 100f),
@@ -149,6 +271,9 @@ private enum class AdjustmentType(val label: String, val min: Float, val max: Fl
     Tint("Tint", -100f, 100f),
 }
 
+private inline fun <reified T : LayerAdjustment> EditDocument.activeAdjustment(): T? =
+    (activeLayer as? AdjustmentLayer)?.adjustment as? T
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditPhotoPage(
@@ -156,78 +281,86 @@ fun EditPhotoPage(
     photoDao: PhotoDao,
     photoEditViewModel: PhotoEditViewModel,
     id: Long,
-    initialUri: String? = null
+    initialUri: String? = null,
 ) {
+    val vm = photoEditViewModel
     val context = LocalActivity.current!!
     val photoFromDb by photoDao.getByIdFlow(id).collectAsState(initial = null)
     val photo = remember(photoFromDb, initialUri) {
         photoFromDb ?: initialUri?.let { uri ->
             Photo(
-                id = 0,
-                name = uri.substringAfterLast("/"),
-                uri = uri,
-                date = System.currentTimeMillis(),
-                width = 0,
-                height = 0,
-                dateModified = System.currentTimeMillis() / 1000,
-                exifSet = false,
-                lat = null,
-                long = null,
-                videoData = null
+                id = 0, name = uri.substringAfterLast("/"), uri = uri,
+                date = System.currentTimeMillis(), width = 0, height = 0,
+                dateModified = System.currentTimeMillis() / 1000, exifSet = false,
+                lat = null, long = null, videoData = null,
             )
         }
     }
 
-    var isCropping by remember { mutableStateOf(false) }
-    var rotation by remember { mutableFloatStateOf(0f) }
-    var cropRect by remember { mutableStateOf(Rect(0f, 0f, 1f, 1f)) }
-    var startCropRect by remember { mutableStateOf(Rect(0f, 0f, 1f, 1f)) }
-    var showSaveMenu by remember { mutableStateOf(false) }
+    val document by vm.document.collectAsState()
+    val preview by vm.compositedPreview.collectAsState()
+    val baseBitmap by vm.baseBitmap.collectAsState()
+    val selection by vm.selection.collectAsState()
+    val canUndo by vm.canUndo.collectAsState()
+    val canRedo by vm.canRedo.collectAsState()
 
+    var activeCategory by remember { mutableStateOf<ToolCategory?>(null) }
     var editorMode by remember { mutableStateOf(EditorMode.None) }
     var selectedAdjustment by remember { mutableStateOf(AdjustmentType.Brightness) }
-    val adjustments by photoEditViewModel.adjustments.collectAsState()
-    val selectedFilter by photoEditViewModel.selectedFilter.collectAsState()
-
-    val curvesAdjustment by photoEditViewModel.curvesAdjustment.collectAsState()
-    val hslAdjustments by photoEditViewModel.hslAdjustments.collectAsState()
-    val blurParams by photoEditViewModel.blurParams.collectAsState()
-    val selectiveEdits by photoEditViewModel.selectiveEdits.collectAsState()
-    val healingStrokes by photoEditViewModel.healingStrokes.collectAsState()
-    val perspectiveCorners by photoEditViewModel.perspectiveCorners.collectAsState()
-    val previewBitmap by photoEditViewModel.previewBitmap.collectAsState()
-
     var selectedCurveChannel by remember { mutableStateOf(CurveChannel.Combined) }
     var selectedHslRange by remember { mutableStateOf(HslColorRange.Red) }
+
+    var isCropping by remember { mutableStateOf(false) }
+    var cropCx by remember { mutableFloatStateOf(0.5f) }
+    var cropCy by remember { mutableFloatStateOf(0.5f) }
+    var cropHx by remember { mutableFloatStateOf(0.5f) }
+    var cropHy by remember { mutableFloatStateOf(0.5f) }
+    var cropAngle by remember { mutableFloatStateOf(0f) }
+    var cropAspect by remember { mutableStateOf<Float?>(null) }
+    var showSaveMenu by remember { mutableStateOf(false) }
+
+    // Selective
     var currentSelectiveMask by remember { mutableStateOf(SelectiveMask()) }
     var showSelectiveMask by remember { mutableStateOf(false) }
+
+    // Healing
     var healingBrushSize by remember { mutableFloatStateOf(0.02f) }
     var isSettingHealingSource by remember { mutableStateOf(true) }
     var healingSourceX by remember { mutableStateOf<Float?>(null) }
     var healingSourceY by remember { mutableStateOf<Float?>(null) }
     var currentHealingPoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
 
-    var isDrawing by remember { mutableStateOf(false) }
+    // Retouch brush (dodge/burn/smudge)
+    var retouchPoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
+    var dodgeBurnMode by remember { mutableStateOf(DodgeBurnMode.Dodge) }
+    var brushSize by remember { mutableFloatStateOf(0.05f) }
+
+    // Liquify
+    var liquifyTool by remember { mutableStateOf(com.vayunmathur.photos.data.LiquifyTool.Push) }
+    var liquifyStrength by remember { mutableFloatStateOf(0.5f) }
+    var liquifyRadius by remember { mutableFloatStateOf(0.15f) }
+
+    // Selection tool
+    var selectionIsEllipse by remember { mutableStateOf(false) }
+    var selectionFeather by remember { mutableFloatStateOf(0f) }
+    var committedSel by remember { mutableStateOf<SelShape?>(null) }
+    var selDragStart by remember { mutableStateOf<Offset?>(null) }
+    var selDragCurrent by remember { mutableStateOf<Offset?>(null) }
+
+    // Drawing
     val inkStrokes = remember { mutableStateListOf<InkStroke>() }
-
     var activeTool by remember { mutableStateOf(DrawingTool.Pointer) }
-
     var penColor by remember { mutableStateOf(Color.Red) }
     var penSize by remember { mutableFloatStateOf(10f) }
-
     var highlighterColor by remember { mutableStateOf(Color.Yellow) }
     var highlighterSize by remember { mutableFloatStateOf(40f) }
     var highlighterOpacity by remember { mutableFloatStateOf(0.5f) }
-
     var textFontSize by remember { mutableFloatStateOf(40f) }
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     val transformState = rememberTransformableState { zoomChange, offsetChange, _ ->
-        if (activeTool == DrawingTool.Pointer) {
-            scale *= zoomChange
-            offset += offsetChange
-        }
+        if (activeTool == DrawingTool.Pointer) { scale *= zoomChange; offset += offsetChange }
     }
 
     val texts = remember { mutableStateListOf<TextElement>() }
@@ -238,153 +371,172 @@ fun EditPhotoPage(
     var currentViewportWidth by remember { mutableFloatStateOf(1f) }
     var currentViewportHeight by remember { mutableFloatStateOf(1f) }
 
+    val isDrawing = activeCategory == ToolCategory.Draw
+
+    fun exitCropPreview() {
+        vm.setCroppingPreview(false)
+        isCropping = false
+    }
+
+    fun selectTool(mode: EditorMode) {
+        when (mode) {
+            EditorMode.Crop -> {
+                cropCx = 0.5f; cropCy = 0.5f; cropHx = 0.5f; cropHy = 0.5f
+                cropAngle = 0f; cropAspect = null
+                isCropping = true
+                vm.setCroppingPreview(true)
+                editorMode = EditorMode.Crop
+            }
+            else -> {
+                if (isCropping) exitCropPreview()
+                editorMode = if (editorMode == mode) EditorMode.None else mode
+            }
+        }
+    }
+
+    fun goHome() {
+        if (isCropping) exitCropPreview()
+        activeCategory = null
+        editorMode = EditorMode.None
+        activeTool = DrawingTool.Pointer
+        selectedTextId = null
+        selectedStrokeIndex = null
+        selectedTextIndex = null
+    }
+
+    fun openCategory(cat: ToolCategory) {
+        activeCategory = cat
+        if (cat == ToolCategory.Draw) {
+            activeTool = DrawingTool.Pointer
+        } else {
+            categoryTools[cat]?.firstOrNull()?.let { selectTool(it.mode) }
+        }
+    }
+
+    fun commitSelection(rect: Rect, isEllipse: Boolean, inverted: Boolean, featherPx: Float) {
+        val cw = document.canvasWidth.coerceAtLeast(1)
+        val ch = document.canvasHeight.coerceAtLeast(1)
+        // Build the mask at a capped resolution so it stays cheap on the main thread.
+        val maxDim = 768f
+        val scale = minOf(1f, maxDim / maxOf(cw, ch))
+        val mw = (cw * scale).roundToInt().coerceAtLeast(1)
+        val mh = (ch * scale).roundToInt().coerceAtLeast(1)
+        var sel = if (isEllipse) {
+            Selection.ellipse(mw, mh, (rect.left + rect.right) / 2f, (rect.top + rect.bottom) / 2f, (rect.right - rect.left) / 2f, (rect.bottom - rect.top) / 2f)
+        } else {
+            Selection.rectangle(mw, mh, rect.left, rect.top, rect.right, rect.bottom)
+        }
+        val featherScaled = featherPx * scale
+        if (featherScaled > 0f) sel = sel.applyFeather(featherScaled)
+        if (inverted) sel = sel.invert()
+        vm.setSelection(sel)
+        committedSel = SelShape(isEllipse, rect, inverted, featherPx / cw, featherPx / ch)
+    }
+
+    fun applyCrop() {
+        val w = document.canvasWidth.coerceAtLeast(1).toFloat()
+        val h = document.canvasHeight.coerceAtLeast(1).toFloat()
+        val aRad = Math.toRadians(cropAngle.toDouble())
+        val cosA = cos(aRad)
+        val sinA = sin(aRad)
+        val cpx = cropCx * w
+        val cpy = cropCy * h
+        val hwpx = cropHx * w
+        val hhpx = cropHy * h
+        val wp = w * abs(cosA) + h * abs(sinA)
+        val hp = w * abs(sinA) + h * abs(cosA)
+        val dx = cpx - w / 2.0
+        val dy = cpy - h / 2.0
+        // Rotate the crop center by -angle (the image rotation we will apply), into result space.
+        val rx = cosA * dx + sinA * dy
+        val ry = -sinA * dx + cosA * dy
+        val crx = rx + wp / 2.0
+        val cry = ry + hp / 2.0
+        val l = ((crx - hwpx) / wp).toFloat().coerceIn(0f, 1f)
+        val t = ((cry - hhpx) / hp).toFloat().coerceIn(0f, 1f)
+        val r = ((crx + hwpx) / wp).toFloat().coerceIn(0f, 1f)
+        val b = ((cry + hhpx) / hp).toFloat().coerceIn(0f, 1f)
+        vm.setRotation(-cropAngle)
+        vm.setCropRect(Rect(l, t, r, b))
+        goHome()
+    }
+
     val currentBrush: Brush = remember(activeTool, penColor, penSize, highlighterColor, highlighterSize, highlighterOpacity) {
         when (activeTool) {
-            DrawingTool.Pen -> Brush.createWithColorIntArgb(
-family = StockBrushes.pressurePen(),
-                colorIntArgb = penColor.toArgb(),
-                size = penSize,
-                epsilon = 0.1f,
-            )
             DrawingTool.Highlighter -> {
                 val argb = highlighterColor.toArgb()
                 val alpha = (highlighterOpacity * 255).roundToInt()
                 val colorWithAlpha = (alpha shl 24) or (argb and 0x00FFFFFF)
-                Brush.createWithColorIntArgb(
-                    family = StockBrushes.highlighter(),
-                    colorIntArgb = colorWithAlpha,
-                    size = highlighterSize,
-                    epsilon = 0.1f,
-                )
+                Brush.createWithColorIntArgb(StockBrushes.highlighter(), colorWithAlpha, highlighterSize, 0.1f)
             }
-            else -> Brush.createWithColorIntArgb(
-family = StockBrushes.pressurePen(),
-                colorIntArgb = penColor.toArgb(),
-                size = penSize,
-                epsilon = 0.1f,
-            )
-        }
-    }
-
-    data class EditState(
-        val rotation: Float,
-        val cropRect: Rect,
-        val strokes: List<SerializedStroke>,
-        val texts: List<TextElement>,
-        val adjustments: ImageAdjustments = ImageAdjustments(),
-        val curves: CurvesAdjustment = CurvesAdjustment(),
-        val hsl: HslAdjustments = HslAdjustments(),
-        val blur: BlurParams = BlurParams(),
-        val selective: SelectiveEdits = SelectiveEdits(),
-        val healing: HealingStrokes = HealingStrokes(),
-        val perspective: PerspectiveCorners = PerspectiveCorners(),
-    )
-
-    val history = remember { mutableStateListOf<EditState>() }
-
-    fun pushState() {
-        history.add(EditState(
-            rotation, cropRect, inkStrokes.map { it.serialize() }, texts.toList(),
-            adjustments, curvesAdjustment, hslAdjustments, blurParams,
-            selectiveEdits, healingStrokes, perspectiveCorners,
-        ))
-    }
-
-    fun undo() {
-        if (history.isNotEmpty()) {
-            val lastState = history.removeAt(history.size - 1)
-            rotation = lastState.rotation
-            cropRect = lastState.cropRect
-            inkStrokes.clear()
-            inkStrokes.addAll(lastState.strokes.mapNotNull { try { it.deserialize() } catch (_: Exception) { null } })
-            texts.clear()
-            texts.addAll(lastState.texts)
-            photoEditViewModel.updateAdjustment { lastState.adjustments }
-            photoEditViewModel.updateCurves(lastState.curves)
-            photoEditViewModel.updateHsl(lastState.hsl)
-            photoEditViewModel.updateBlur(lastState.blur)
-            photoEditViewModel.updateSelective(lastState.selective)
-            photoEditViewModel.updateHealing(lastState.healing)
-            photoEditViewModel.updatePerspective(lastState.perspective)
+            else -> Brush.createWithColorIntArgb(StockBrushes.pressurePen(), penColor.toArgb(), penSize, 0.1f)
         }
     }
 
     ResultEffect<DrawingSettingsResult>("drawing_settings") { result ->
         var changed = false
-
-        selectedTextId?.let { id ->
-            val index = texts.indexOfFirst { it.id == id }
+        selectedTextId?.let { tid ->
+            val index = texts.indexOfFirst { it.id == tid }
             if (index != -1) {
-                pushState()
-                texts[index] = texts[index].copy(
-                    color = result.color,
-                    fontSize = result.thickness
-                )
+                texts[index] = texts[index].copy(color = result.color, fontSize = result.thickness)
                 changed = true
             }
         }
-
         if (!changed) {
             activeTool = result.tool
             when (result.tool) {
-                DrawingTool.Pen -> {
-                    penColor = Color(result.color)
-                    penSize = result.thickness
-                }
+                DrawingTool.Pen -> { penColor = Color(result.color); penSize = result.thickness }
                 DrawingTool.Highlighter -> {
-                    highlighterColor = Color(result.color)
-                    highlighterSize = result.thickness
-                    highlighterOpacity = result.opacity
+                    highlighterColor = Color(result.color); highlighterSize = result.thickness; highlighterOpacity = result.opacity
                 }
-                DrawingTool.Eraser -> {}
-                DrawingTool.Text -> {
-                    penColor = Color(result.color)
-                    textFontSize = result.thickness
-                }
-                DrawingTool.Pointer -> {}
+                DrawingTool.Text -> { penColor = Color(result.color); textFontSize = result.thickness }
+                else -> {}
             }
         }
     }
 
-    val originalBitmap by photoEditViewModel.originalBitmap.collectAsState()
-    val transformedBitmap by photoEditViewModel.transformedBitmap.collectAsState()
-
     LaunchedEffect(photo?.uri) {
         val uri = photo?.uri?.toUri() ?: return@LaunchedEffect
-        photoEditViewModel.decode(uri)
+        vm.decode(uri)
     }
 
-    LaunchedEffect(originalBitmap, rotation, isCropping, if (isCropping) Unit else cropRect) {
-        if (originalBitmap != null) {
-            photoEditViewModel.applyTransform(rotation, cropRect, isCropping)
+    // Ensure the right layer is active for the selected tool.
+    LaunchedEffect(editorMode) {
+        when (editorMode) {
+            EditorMode.Adjust, EditorMode.Filters ->
+                vm.ensureAdjustment({ it is BasicAdjustment }, { BasicAdjustment() })
+            EditorMode.Curves -> vm.ensureAdjustment({ it is CurvesAdj }, { CurvesAdj() })
+            EditorMode.HSL -> vm.ensureAdjustment({ it is HslAdj }, { HslAdj() })
+            EditorMode.Levels -> vm.ensureAdjustment({ it is LevelsAdj }, { LevelsAdj() })
+            EditorMode.ColorBalance -> vm.ensureAdjustment({ it is ColorBalanceAdj }, { ColorBalanceAdj() })
+            EditorMode.ChannelMixer -> vm.ensureAdjustment({ it is ChannelMixerAdj }, { ChannelMixerAdj() })
+            EditorMode.BlackWhite -> vm.ensureAdjustment({ it is BlackAndWhiteAdj }, { BlackAndWhiteAdj() })
+            EditorMode.LensBlur -> vm.ensureAdjustment({ it is BlurAdj }, { BlurAdj() })
+            EditorMode.Selective -> vm.ensureAdjustment({ it is SelectiveAdj }, { SelectiveAdj() })
+            EditorMode.Healing, EditorMode.RedEye, EditorMode.DodgeBurn, EditorMode.Smudge, EditorMode.FilterFx, EditorMode.Liquify -> {
+                val idx = document.layers.indexOfLast { it is PixelLayer }
+                if (idx >= 0 && idx != document.activeLayerIndex) vm.setActiveLayer(idx)
+            }
+            else -> {}
         }
     }
 
     val writePermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartIntentSenderForResult()
+        ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            photoEditViewModel.onWritePermissionGranted()
-        } else {
-            photoEditViewModel.onWritePermissionDenied()
-        }
+        if (result.resultCode == Activity.RESULT_OK) vm.onWritePermissionGranted()
+        else vm.onWritePermissionDenied()
     }
-
-    val writePermissionRequest by photoEditViewModel.writePermissionRequest.collectAsState()
+    val writePermissionRequest by vm.writePermissionRequest.collectAsState()
     LaunchedEffect(writePermissionRequest) {
-        writePermissionRequest?.let { intentSender ->
-            writePermissionLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
-        }
+        writePermissionRequest?.let { writePermissionLauncher.launch(IntentSenderRequest.Builder(it).build()) }
     }
 
     fun doSave(asCopy: Boolean) {
         photo?.let {
-            photoEditViewModel.savePhoto(
-                it, rotation, cropRect,
-                inkStrokes.map { s -> s.serialize() },
-                texts.toList(), currentViewportWidth, currentViewportHeight, asCopy, adjustments,
-                curvesAdjustment, hslAdjustments, blurParams,
-                selectiveEdits, healingStrokes, perspectiveCorners,
+            vm.savePhoto(
+                it, asCopy, inkStrokes.map { s -> s.serialize() }, texts.toList(),
+                currentViewportWidth, currentViewportHeight,
             ) { context.finish() }
         }
     }
@@ -392,253 +544,99 @@ family = StockBrushes.pressurePen(),
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.title_edit_photo)) },
+                title = { Text(stringResource(R.string.title_edit_photo), maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = { context.finish() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                     }
                 },
                 actions = {
-                    if (isCropping) {
-                        IconButton(onClick = {
-                    if (cropRect != startCropRect) {
-                                history.add(
-                                    EditState(
-                                        rotation, startCropRect,
-                                        inkStrokes.map { it.serialize() }, texts.toList(),
-                                        adjustments, curvesAdjustment, hslAdjustments, blurParams,
-                                        selectiveEdits, healingStrokes, perspectiveCorners,
-                                    )
-                                )
-                            }
-                            isCropping = false
-                        }) {
-                            IconCheck()
-                        }
-                        IconButton(onClick = {
-                            cropRect = startCropRect
-                            isCropping = false
-                        }) {
-                            IconClose()
-                        }
-                    } else {
-                        IconButton(
-                            onClick = { undo() },
-                            enabled = history.isNotEmpty()
-                        ) {
-                            IconUndo()
-                        }
-                        if (selectedTextId != null) {
-                            IconButton(onClick = {
-                                selectedTextId?.let { id ->
-                                    texts.find { it.id == id }?.let { textElement ->
-                                        backStack.add(
-                                            EditRoute.DrawingSettings(
-                                                DrawingTool.Text,
-                                                textElement.color,
-                                                textElement.fontSize,
-                                                1f
-                                            )
-                                        )
-                                    }
-                                }
-                            }) {
-                                IconEdit()
-                            }
-                        }
-                        if (!isDrawing) {
-                            IconButton(onClick = {
-                                startCropRect = cropRect
-                                isCropping = true
-                                isDrawing = false
-                                editorMode = EditorMode.None
-                            }) {
-                                IconCrop()
-                            }
-                            IconButton(onClick = {
-                                pushState()
-                                rotation -= 90f
-                            }) {
-                                IconRotateLeft()
-                            }
-                            IconButton(onClick = {
-                                pushState()
-                                rotation += 90f
-                            }) {
-                                IconRotateRight()
-                            }
-                        }
-                        IconButton(onClick = {
-                            isDrawing = !isDrawing
-                            isCropping = false
-                            editorMode = EditorMode.None
-                        }) {
-                            if (isDrawing) IconClose() else IconDraw()
-                        }
-                        Box {
-                            IconButton(onClick = { showSaveMenu = true }) {
-                                IconSave()
-                            }
-                            DropdownMenu(
-                                expanded = showSaveMenu,
-                                onDismissRequest = { showSaveMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_save)) },
-                                    onClick = { showSaveMenu = false; doSave(false) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.action_save_as_copy)) },
-                                    onClick = { showSaveMenu = false; doSave(true) }
-                                )
-                            }
+                    IconButton(onClick = { vm.undo() }, enabled = canUndo) { IconUndo() }
+                    IconButton(onClick = { vm.redo() }, enabled = canRedo) {
+                        Text("↻", fontSize = 20.sp)
+                    }
+                    Box {
+                        IconButton(onClick = { showSaveMenu = true }) { IconSave() }
+                        DropdownMenu(expanded = showSaveMenu, onDismissRequest = { showSaveMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_save)) },
+                                onClick = { showSaveMenu = false; doSave(false) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_save_as_copy)) },
+                                onClick = { showSaveMenu = false; doSave(true) },
+                            )
                         }
                     }
-                }
+                },
             )
-        }
+        },
     ) { paddingValues ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .background(Color.Black)
+            modifier = Modifier.fillMaxSize().padding(paddingValues).background(Color.Black),
         ) {
             BoxWithConstraints(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(8.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                val maxWidth = constraints.maxWidth.toFloat()
-                val maxHeight = constraints.maxHeight.toFloat()
-
-                photo?.let { p ->
-                    val isFlipped = (rotation / 90f).roundToInt() % 2 != 0
-                    val actualWidth =
-                        if (p.width > 0) p.width.toFloat() else originalBitmap?.width?.toFloat()
-                            ?: 1f
-                    val actualHeight =
-                        if (p.height > 0) p.height.toFloat() else originalBitmap?.height?.toFloat()
-                            ?: 1f
-                    val photoRatio =
-                        if (isFlipped) actualHeight / actualWidth else actualWidth / actualHeight
-
-                    val displayRatio =
-                        if (isCropping) photoRatio else (cropRect.width / cropRect.height) * photoRatio
-                    val containerRatio = maxWidth / maxHeight
-
-                    val (viewportWidth, viewportHeight) = if (displayRatio > containerRatio) {
-                        maxWidth to (maxWidth / displayRatio)
-                    } else {
-                        (maxHeight * displayRatio) to maxHeight
-                    }
-                    currentViewportWidth = viewportWidth
-                    currentViewportHeight = viewportHeight
+                val maxW = constraints.maxWidth.toFloat()
+                val maxH = constraints.maxHeight.toFloat()
+                val display = preview ?: baseBitmap
+                if (display != null) {
+                    val ratio = display.width.toFloat() / display.height.toFloat()
+                    val containerRatio = maxW / maxH
+                    val (vpW, vpH) = if (ratio > containerRatio) maxW to (maxW / ratio) else (maxH * ratio) to maxH
+                    currentViewportWidth = vpW
+                    currentViewportHeight = vpH
 
                     val density = LocalDensity.current
                     val densityFloat = density.density
-                    val viewportWidthDp = with(density) { viewportWidth.toDp() }
-                    val viewportHeightDp = with(density) { viewportHeight.toDp() }
+                    val vpWdp = with(density) { vpW.toDp() }
+                    val vpHdp = with(density) { vpH.toDp() }
 
                     val isInkDrawing = isDrawing && activeTool != DrawingTool.Pointer && activeTool != DrawingTool.Text
                     Box(
                         modifier = Modifier
-                            .size(viewportWidthDp, viewportHeightDp)
+                            .size(vpWdp, vpHdp)
                             .graphicsLayer {
-                                scaleX = scale
-                                scaleY = scale
-                                translationX = offset.x
-                                translationY = offset.y
-                                clip = false
+                                scaleX = scale; scaleY = scale
+                                translationX = offset.x; translationY = offset.y; clip = false
                             }
                             .then(
-                                if (activeTool == DrawingTool.Text) Modifier
-                                    .pointerInput(activeTool) {
-                                        detectTapGestures { tapOffset ->
-                                            pushState()
-                                            val newId = UUID.randomUUID().toString()
-                                            texts.add(
-                                                TextElement(
-                                                    id = newId,
-                                                    text = "New Text",
-                                                    x = tapOffset.x / size.width,
-                                                    y = tapOffset.y / size.height,
-                                                    rotation = 0f,
-                                                    color = penColor.toArgb(),
-                                                    fontSize = textFontSize
-                                                )
+                                if (activeTool == DrawingTool.Text && isDrawing) Modifier.pointerInput(activeTool) {
+                                    detectTapGestures { tapOffset ->
+                                        val newId = UUID.randomUUID().toString()
+                                        texts.add(
+                                            TextElement(
+                                                id = newId, text = "New Text",
+                                                x = tapOffset.x / size.width, y = tapOffset.y / size.height,
+                                                rotation = 0f, color = penColor.toArgb(), fontSize = textFontSize,
                                             )
-                                            selectedTextId = newId
-                                            selectedTextIndex = texts.size - 1
-                                            textToEdit = texts.last()
-                                        }
+                                        )
+                                        selectedTextId = newId
+                                        selectedTextIndex = texts.size - 1
+                                        textToEdit = texts.last()
                                     }
-                                else if (!isInkDrawing && activeTool != DrawingTool.Pointer) Modifier
-                                    .transformable(state = transformState)
-                                else Modifier
+                                }
+                                else if (!isInkDrawing && activeTool != DrawingTool.Pointer && isDrawing)
+                                    Modifier.transformable(state = transformState)
+                                else Modifier,
                             ),
-                        contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center,
                     ) {
-                        val displayBitmap = when {
-                            editorMode == EditorMode.HSL || editorMode == EditorMode.Blur || editorMode == EditorMode.Selective -> previewBitmap ?: transformedBitmap
-                            adjustments.hasPixelEffects() -> previewBitmap ?: transformedBitmap
-                            else -> transformedBitmap
-                        }
-                        displayBitmap?.let { bitmap ->
-                            val adjMatrix = remember(adjustments) { adjustments.toColorMatrix() }
-                            val curvesMatrix = remember(curvesAdjustment) {
-                                if (!curvesAdjustment.isIdentity()) curvesAdjustment.toColorMatrix() else null
-                            }
-                            val hasAdjustments = adjustments != ImageAdjustments()
-                            val combinedMatrix = remember(adjMatrix, curvesMatrix, hasAdjustments) {
-                                if (curvesMatrix != null) {
-                                    val combined = android.graphics.ColorMatrix(adjMatrix.array)
-                                    combined.postConcat(curvesMatrix)
-                                    ColorMatrix(combined.array)
-                                } else if (hasAdjustments) {
-                                    ColorMatrix(adjMatrix.array)
-                                } else null
-                            }
-
-                            val perspectiveMatrix = remember(perspectiveCorners) {
-                                if (!perspectiveCorners.isIdentity()) {
-                                    perspectiveCorners.toMatrix(1f, 1f)
-                                } else null
-                            }
-
+                        display.let { bitmap ->
                             Image(
                                 bitmap = bitmap.asImageBitmap(),
                                 contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .then(
-                                        if (perspectiveMatrix != null) {
-                                            val values = FloatArray(9)
-                                            perspectiveMatrix.getValues(values)
-                                            Modifier.graphicsLayer {
-                                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
-                                                val m = androidx.compose.ui.graphics.Matrix()
-                                                m[0, 0] = values[0]; m[0, 1] = values[1]; m[0, 3] = values[2]
-                                                m[1, 0] = values[3]; m[1, 1] = values[4]; m[1, 3] = values[5]
-                                                m[3, 0] = values[6]; m[3, 1] = values[7]; m[3, 3] = values[8]
-                                            }
-                                        } else Modifier
-                                    ),
-                                colorFilter = combinedMatrix?.let { ColorFilter.colorMatrix(it) },
+                                modifier = Modifier.fillMaxSize(),
                             )
                         }
 
                         val canvasTextElements = remember(texts.toList(), currentViewportWidth, currentViewportHeight) {
                             texts.map { te ->
                                 CanvasTextElement(
-                                    text = te.text,
-                                    x = te.x * currentViewportWidth,
-                                    y = te.y * currentViewportHeight,
-                                    rotation = te.rotation,
-                                    color = te.color,
-                                    fontSize = te.fontSize,
+                                    text = te.text, x = te.x * currentViewportWidth, y = te.y * currentViewportHeight,
+                                    rotation = te.rotation, color = te.color, fontSize = te.fontSize,
                                 )
                             }
                         }
@@ -646,14 +644,8 @@ family = StockBrushes.pressurePen(),
                         InkCanvasView(
                             currentBrush = currentBrush,
                             finishedStrokes = inkStrokes.toList(),
-                            onStrokeFinished = { stroke ->
-                                pushState()
-                                inkStrokes.add(stroke)
-                            },
-                            onStrokeErased = { stroke ->
-                                pushState()
-                                inkStrokes.remove(stroke)
-                            },
+                            onStrokeFinished = { inkStrokes.add(it) },
+                            onStrokeErased = { inkStrokes.remove(it) },
                             eraserMode = activeTool == DrawingTool.Eraser,
                             enabled = isDrawing && activeTool != DrawingTool.Pointer && activeTool != DrawingTool.Text,
                             textElements = canvasTextElements,
@@ -664,484 +656,325 @@ family = StockBrushes.pressurePen(),
 
                         if (isDrawing && activeTool == DrawingTool.Pointer) {
                             Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .pointerInput(
-                                        inkStrokes.toList(),
-                                        texts.toList(),
-                                        selectedStrokeIndex,
-                                        selectedTextIndex,
-                                        currentViewportWidth,
-                                        currentViewportHeight
-                                    ) {
-                                        detectTapGestures(
-                                            onDoubleTap = { tapOffset ->
-                                                val textIdx = hitTestText(
-                                                    tapOffset.x,
-                                                    tapOffset.y,
-                                                    texts,
-                                                    currentViewportWidth,
-                                                    currentViewportHeight,
-                                                    densityFloat
-                                                )
-                                                if (textIdx != null) {
-                                                    pushState()
-                                                    textToEdit = texts.getOrNull(textIdx)
-                                                }
-                                            },
-                                            onTap = { tapOffset ->
-                                                val textIdx = hitTestText(
-                                                    tapOffset.x,
-                                                    tapOffset.y,
-                                                    texts,
-                                                    currentViewportWidth,
-                                                    currentViewportHeight,
-                                                    densityFloat
-                                                )
-                                                if (textIdx != null) {
-                                                    selectedTextIndex = textIdx
-                                                    selectedStrokeIndex = null
-                                                    selectedTextId = texts.getOrNull(textIdx)?.id
-                                                } else {
-                                                    val strokeIdx = hitTestStroke(
-                                                        tapOffset.x,
-                                                        tapOffset.y,
-                                                        inkStrokes
-                                                    )
-                                                    if (strokeIdx != null) {
-                                                        selectedStrokeIndex = strokeIdx
-                                                        selectedTextIndex = null
-                                                        selectedTextId = null
-                                                    } else {
-                                                        selectedStrokeIndex = null
-                                                        selectedTextIndex = null
-                                                        selectedTextId = null
-                                                    }
+                                modifier = Modifier.fillMaxSize().pointerInput(
+                                    inkStrokes.toList(), texts.toList(), selectedStrokeIndex, selectedTextIndex,
+                                    currentViewportWidth, currentViewportHeight,
+                                ) {
+                                    detectTapGestures(
+                                        onDoubleTap = { tapOffset ->
+                                            val ti = hitTestText(tapOffset.x, tapOffset.y, texts, currentViewportWidth, currentViewportHeight, densityFloat)
+                                            if (ti != null) textToEdit = texts.getOrNull(ti)
+                                        },
+                                        onTap = { tapOffset ->
+                                            val ti = hitTestText(tapOffset.x, tapOffset.y, texts, currentViewportWidth, currentViewportHeight, densityFloat)
+                                            if (ti != null) {
+                                                selectedTextIndex = ti; selectedStrokeIndex = null; selectedTextId = texts.getOrNull(ti)?.id
+                                            } else {
+                                                val si = hitTestStroke(tapOffset.x, tapOffset.y, inkStrokes)
+                                                selectedStrokeIndex = si; selectedTextIndex = null; selectedTextId = null
+                                            }
+                                        },
+                                    )
+                                }.pointerInput(selectedStrokeIndex, selectedTextIndex, currentViewportWidth, currentViewportHeight) {
+                                    detectDragGestures(
+                                        onDrag = { change, dragAmount ->
+                                            change.consume()
+                                            selectedStrokeIndex?.let { idx ->
+                                                if (idx in inkStrokes.indices) inkStrokes[idx] = inkStrokes[idx].translate(dragAmount.x, dragAmount.y)
+                                            }
+                                            selectedTextIndex?.let { idx ->
+                                                if (idx in texts.indices) {
+                                                    val c = texts[idx]
+                                                    texts[idx] = c.copy(x = c.x + dragAmount.x / currentViewportWidth, y = c.y + dragAmount.y / currentViewportHeight)
                                                 }
                                             }
-                                        )
+                                        },
+                                    )
+                                },
+                            )
+                        }
+
+                        // Tool overlays (only when not drawing)
+                        if (!isDrawing && !isCropping) {
+                            val blurAdj = document.activeAdjustment<BlurAdj>()
+                            if (editorMode == EditorMode.LensBlur && blurAdj != null && !blurAdj.blur.isIdentity()) {
+                                BlurOverlay(blurParams = blurAdj.blur, onBlurChanged = { vm.updateActiveAdjustment(BlurAdj(it)) })
+                            }
+                            if (editorMode == EditorMode.Selective) {
+                                MaskOverlay(mask = currentSelectiveMask, showMask = showSelectiveMask, onMaskChanged = { currentSelectiveMask = it })
+                            }
+                            if (editorMode == EditorMode.Healing) {
+                                HealingOverlay(
+                                    sourceX = healingSourceX, sourceY = healingSourceY, brushSize = healingBrushSize,
+                                    isSettingSource = isSettingHealingSource,
+                                    onSourceSet = { x, y -> healingSourceX = x; healingSourceY = y; isSettingHealingSource = false },
+                                    onPaint = { x, y -> if (healingSourceX != null && healingSourceY != null) currentHealingPoints = currentHealingPoints + (x to y) },
+                                )
+                            }
+                            if (editorMode == EditorMode.RedEye) {
+                                Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                    detectTapGestures { o ->
+                                        val nx = o.x / size.width; val ny = o.y / size.height
+                                        vm.applyToActivePixelLayer { RedEyeSpots(listOf(RedEyeSpot(nx, ny, brushSize))).applyToBitmap(it) }
                                     }
-                                    .pointerInput(
-                                        selectedStrokeIndex,
-                                        selectedTextIndex,
-                                        currentViewportWidth,
-                                        currentViewportHeight
-                                    ) {
-                                        detectDragGestures(
-                                            onDragStart = {
-                                                if (selectedStrokeIndex != null || selectedTextIndex != null) {
-                                                    pushState()
-                                                }
-                                            },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                selectedStrokeIndex?.let { idx ->
-                                                    if (idx in inkStrokes.indices) {
-                                                        inkStrokes[idx] = inkStrokes[idx].translate(
-                                                            dragAmount.x,
-                                                            dragAmount.y
-                                                        )
-                                                    }
-                                                }
-                                                selectedTextIndex?.let { idx ->
-                                                    if (idx in texts.indices) {
-                                                        val current = texts[idx]
-                                                        texts[idx] = current.copy(
-                                                            x = current.x + dragAmount.x / currentViewportWidth,
-                                                            y = current.y + dragAmount.y / currentViewportHeight
-                                                        )
-                                                    }
+                                })
+                            }
+                            if (editorMode == EditorMode.DodgeBurn || editorMode == EditorMode.Smudge) {
+                                Box(modifier = Modifier.fillMaxSize().pointerInput(editorMode) {
+                                    detectDragGestures(
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            val nx = (change.position.x / size.width).coerceIn(0f, 1f)
+                                            val ny = (change.position.y / size.height).coerceIn(0f, 1f)
+                                            retouchPoints = retouchPoints + (nx to ny)
+                                        },
+                                    )
+                                })
+                            }
+                            if (editorMode == EditorMode.Liquify) {
+                                var liqStart by remember { mutableStateOf<Offset?>(null) }
+                                Box(modifier = Modifier.fillMaxSize().pointerInput(liquifyTool) {
+                                    detectDragGestures(
+                                        onDragStart = { liqStart = it },
+                                        onDragEnd = {
+                                            val s = liqStart
+                                            if (s != null) {
+                                                val nx = (s.x / size.width).coerceIn(0f, 1f)
+                                                val ny = (s.y / size.height).coerceIn(0f, 1f)
+                                                val op = com.vayunmathur.photos.data.LiquifyOp(
+                                                    tool = liquifyTool, x = nx, y = ny,
+                                                    radius = liquifyRadius, strength = liquifyStrength,
+                                                )
+                                                vm.applyToActivePixelLayer {
+                                                    com.vayunmathur.photos.data.LiquifyParams(listOf(op)).applyToBitmap(it)
                                                 }
                                             }
-                                        )
-                                    }
-                            )
-                        }
-
-                        if (editorMode == EditorMode.Blur && !blurParams.isIdentity()) {
-                            BlurOverlay(
-                                blurParams = blurParams,
-                                onBlurChanged = {
-                                    pushState()
-                                    photoEditViewModel.updateBlur(it)
-                                },
-                            )
-                        }
-
-                        if (editorMode == EditorMode.Selective) {
-                            MaskOverlay(
-                                mask = currentSelectiveMask,
-                                showMask = showSelectiveMask,
-                                onMaskChanged = { currentSelectiveMask = it },
-                            )
-                        }
-
-                        if (editorMode == EditorMode.Healing) {
-                            HealingOverlay(
-                                sourceX = healingSourceX,
-                                sourceY = healingSourceY,
-                                brushSize = healingBrushSize,
-                                isSettingSource = isSettingHealingSource,
-                                onSourceSet = { x, y ->
-                                    healingSourceX = x
-                                    healingSourceY = y
-                                    isSettingHealingSource = false
-                                },
-                                onPaint = { x, y ->
-                                    if (healingSourceX != null && healingSourceY != null) {
-                                        currentHealingPoints = currentHealingPoints + (x to y)
-                                    }
-                                },
-                            )
-                        }
-
-                        if (editorMode == EditorMode.Perspective && !perspectiveCorners.isIdentity()) {
-                            val corners = perspectiveCorners
-                            Handle(offset = Offset(corners.topLeft.first * viewportWidth, corners.topLeft.second * viewportHeight), onDrag = { delta ->
-                                pushState()
-                                photoEditViewModel.updatePerspective(corners.copy(topLeft = (corners.topLeft.first + delta.x / viewportWidth).coerceIn(0f, 1f) to (corners.topLeft.second + delta.y / viewportHeight).coerceIn(0f, 1f)))
-                            })
-                            Handle(offset = Offset(corners.topRight.first * viewportWidth, corners.topRight.second * viewportHeight), onDrag = { delta ->
-                                pushState()
-                                photoEditViewModel.updatePerspective(corners.copy(topRight = (corners.topRight.first + delta.x / viewportWidth).coerceIn(0f, 1f) to (corners.topRight.second + delta.y / viewportHeight).coerceIn(0f, 1f)))
-                            })
-                            Handle(offset = Offset(corners.bottomLeft.first * viewportWidth, corners.bottomLeft.second * viewportHeight), onDrag = { delta ->
-                                pushState()
-                                photoEditViewModel.updatePerspective(corners.copy(bottomLeft = (corners.bottomLeft.first + delta.x / viewportWidth).coerceIn(0f, 1f) to (corners.bottomLeft.second + delta.y / viewportHeight).coerceIn(0f, 1f)))
-                            })
-                            Handle(offset = Offset(corners.bottomRight.first * viewportWidth, corners.bottomRight.second * viewportHeight), onDrag = { delta ->
-                                pushState()
-                                photoEditViewModel.updatePerspective(corners.copy(bottomRight = (corners.bottomRight.first + delta.x / viewportWidth).coerceIn(0f, 1f) to (corners.bottomRight.second + delta.y / viewportHeight).coerceIn(0f, 1f)))
-                            })
+                                            liqStart = null
+                                        },
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            val s = liqStart ?: return@detectDragGestures
+                                            if (liquifyTool == com.vayunmathur.photos.data.LiquifyTool.Push) {
+                                                val nx = (s.x / size.width).coerceIn(0f, 1f)
+                                                val ny = (s.y / size.height).coerceIn(0f, 1f)
+                                                val ddx = (change.position.x - s.x) / size.width
+                                                val ddy = (change.position.y - s.y) / size.height
+                                                val op = com.vayunmathur.photos.data.LiquifyOp(
+                                                    tool = com.vayunmathur.photos.data.LiquifyTool.Push,
+                                                    x = nx, y = ny, dx = ddx, dy = ddy,
+                                                    radius = liquifyRadius, strength = liquifyStrength,
+                                                )
+                                                vm.applyToActivePixelLayer {
+                                                    com.vayunmathur.photos.data.LiquifyParams(listOf(op)).applyToBitmap(it)
+                                                }
+                                                liqStart = change.position
+                                            }
+                                        },
+                                    )
+                                })
+                            }
+                            if (editorMode == EditorMode.Selection && committedSel != null && selDragStart == null) {
+                                SelectionPatternOverlay(committedSel!!)
+                            }
+                            if (editorMode == EditorMode.Selection) {
+                                SelectionOverlay(
+                                    isEllipse = selectionIsEllipse,
+                                    dragStart = selDragStart,
+                                    dragCurrent = selDragCurrent,
+                                    onStart = { selDragStart = it; selDragCurrent = it },
+                                    onDrag = { selDragCurrent = it },
+                                    onEnd = {
+                                        val s = selDragStart; val e = selDragCurrent
+                                        if (s != null && e != null) {
+                                            val l = (minOf(s.x, e.x) / currentViewportWidth).coerceIn(0f, 1f)
+                                            val t = (minOf(s.y, e.y) / currentViewportHeight).coerceIn(0f, 1f)
+                                            val r = (maxOf(s.x, e.x) / currentViewportWidth).coerceIn(0f, 1f)
+                                            val b = (maxOf(s.y, e.y) / currentViewportHeight).coerceIn(0f, 1f)
+                                            if (r - l > 0.01f && b - t > 0.01f) {
+                                                commitSelection(Rect(l, t, r, b), selectionIsEllipse, false, selectionFeather)
+                                            }
+                                        }
+                                        selDragStart = null; selDragCurrent = null
+                                    },
+                                )
+                            }
                         }
 
                         if (isCropping) {
                             CropOverlay(
-                                cropRect = cropRect,
-                                onCropRectChange = { cropRect = it }
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (!isDrawing && !isCropping) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 4.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    data class ToolButton(val mode: EditorMode, val label: String)
-                    val tools = listOf(
-                        ToolButton(EditorMode.Adjust, "Adjust"),
-                        ToolButton(EditorMode.Filters, "Filters"),
-                        ToolButton(EditorMode.Curves, "Curves"),
-                        ToolButton(EditorMode.HSL, "HSL"),
-                        ToolButton(EditorMode.Blur, "Blur"),
-                        ToolButton(EditorMode.Selective, "Selective"),
-                        ToolButton(EditorMode.Healing, "Heal"),
-                        ToolButton(EditorMode.Perspective, "Perspective"),
-                    )
-                    tools.forEach { tool ->
-                        Surface(
-                            modifier = Modifier
-                                .clickable {
-                                    editorMode = if (editorMode == tool.mode) EditorMode.None else tool.mode
+                                cx = cropCx, cy = cropCy, hx = cropHx, hy = cropHy, angleDeg = cropAngle,
+                                onChange = { ncx, ncy, nhx, nhy ->
+                                    cropCx = ncx; cropCy = ncy; cropHx = nhx; cropHy = nhy; cropAspect = null
                                 },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (editorMode == tool.mode) MaterialTheme.colorScheme.primaryContainer
-                                   else MaterialTheme.colorScheme.surfaceVariant,
-                        ) {
-                            Text(
-                                tool.label,
-                                fontSize = 13.sp,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                onAngle = { cropAngle = it },
                             )
                         }
                     }
                 }
             }
 
-            if (editorMode == EditorMode.Adjust && !isDrawing && !isCropping) {
-                AdjustmentPanel(
-                    adjustments = adjustments,
-                    selectedAdjustment = selectedAdjustment,
-                    onSelectAdjustment = { selectedAdjustment = it },
-                    onUpdateAdjustment = { update ->
-                        pushState()
-                        photoEditViewModel.updateAdjustment(update)
-                        photoEditViewModel.applyFilter(null)
-                    },
-                    onReset = {
-                        pushState()
-                        photoEditViewModel.resetAdjustments()
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.Filters && !isDrawing && !isCropping) {
-                FilterPanel(
-                    bitmap = transformedBitmap,
-                    adjustments = adjustments,
-                    selectedFilter = selectedFilter,
-                    onSelectFilter = { filter ->
-                        pushState()
-                        photoEditViewModel.applyFilter(filter)
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.Curves && !isDrawing && !isCropping) {
-                CurvesPanel(
-                    curves = curvesAdjustment,
-                    selectedChannel = selectedCurveChannel,
-                    onChannelSelected = { selectedCurveChannel = it },
-                    onCurvesChanged = {
-                        pushState()
-                        photoEditViewModel.updateCurves(it)
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.HSL && !isDrawing && !isCropping) {
-                HslPanel(
-                    hsl = hslAdjustments,
-                    selectedRange = selectedHslRange,
-                    onRangeSelected = { selectedHslRange = it },
-                    onHslChanged = {
-                        pushState()
-                        photoEditViewModel.updateHsl(it)
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.Blur && !isDrawing && !isCropping) {
-                BlurPanel(
-                    blurParams = blurParams,
-                    onBlurChanged = {
-                        pushState()
-                        photoEditViewModel.updateBlur(it)
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.Selective && !isDrawing && !isCropping) {
-                SelectiveEditPanel(
-                    mask = currentSelectiveMask,
-                    showMask = showSelectiveMask,
-                    onMaskChanged = { currentSelectiveMask = it },
-                    onShowMaskChanged = { showSelectiveMask = it },
-                    onAddMask = {
-                        pushState()
-                        photoEditViewModel.updateSelective(
-                            selectiveEdits.copy(masks = selectiveEdits.masks + currentSelectiveMask)
-                        )
-                        currentSelectiveMask = SelectiveMask()
-                    },
-                )
-            }
-
-            if (editorMode == EditorMode.Healing && !isDrawing && !isCropping) {
-                HealingPanel(
-                    brushSize = healingBrushSize,
-                    isSettingSource = isSettingHealingSource,
-                    onBrushSizeChanged = { healingBrushSize = it },
-                    onSetSourceToggled = { isSettingHealingSource = it },
-                )
-            }
-
-            if (editorMode == EditorMode.Perspective && !isDrawing && !isCropping) {
-                PerspectivePanel(
-                    onApply = {
-                        // Perspective is already live via graphicsLayer; this is a no-op confirmation
-                    },
-                    onReset = {
-                        pushState()
-                        photoEditViewModel.resetPerspective()
-                    },
-                )
-            }
-
-            // Commit healing stroke when dragging ends
+            // Commit healing stroke
             LaunchedEffect(currentHealingPoints.size) {
                 if (currentHealingPoints.isNotEmpty() && editorMode == EditorMode.Healing) {
                     kotlinx.coroutines.delay(300)
-                    if (healingSourceX != null && healingSourceY != null && currentHealingPoints.isNotEmpty()) {
-                        pushState()
-                        val stroke = HealingStroke(
-                            sourceX = healingSourceX!!,
-                            sourceY = healingSourceY!!,
-                            points = currentHealingPoints,
-                            brushSize = healingBrushSize,
-                        )
-                        photoEditViewModel.updateHealing(
-                            healingStrokes.copy(strokes = healingStrokes.strokes + stroke)
-                        )
+                    val sx = healingSourceX; val sy = healingSourceY
+                    if (sx != null && sy != null && currentHealingPoints.isNotEmpty()) {
+                        val stroke = HealingStroke(sx, sy, currentHealingPoints, healingBrushSize, HealMode.Heal)
+                        vm.applyToActivePixelLayer { HealingStrokes(listOf(stroke)).applyHealingToBitmap(it) }
                         currentHealingPoints = emptyList()
                     }
                 }
             }
 
-            if (isDrawing) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = {
-                        activeTool = DrawingTool.Pointer
-                        selectedTextId = null
-                        selectedStrokeIndex = null
-                        selectedTextIndex = null
-                    }) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .then(
-                                    if (activeTool == DrawingTool.Pointer) Modifier.background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        CircleShape
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            IconVisible()
+            // Commit dodge/burn/smudge stroke
+            LaunchedEffect(retouchPoints.size) {
+                if (retouchPoints.isNotEmpty() && (editorMode == EditorMode.DodgeBurn || editorMode == EditorMode.Smudge)) {
+                    kotlinx.coroutines.delay(300)
+                    val pts = retouchPoints
+                    if (pts.isNotEmpty()) {
+                        when (editorMode) {
+                            EditorMode.DodgeBurn -> {
+                                val s = DodgeBurnStroke(pts, dodgeBurnMode, exposure = 0.5f, brushSize = brushSize)
+                                vm.applyToActivePixelLayer { DodgeBurnStrokes(listOf(s)).applyToBitmap(it) }
+                            }
+                            EditorMode.Smudge -> {
+                                val s = SmudgeStroke(pts, strength = 0.5f, brushSize = brushSize)
+                                vm.applyToActivePixelLayer { SmudgeStrokes(listOf(s)).applyToBitmap(it) }
+                            }
+                            else -> {}
                         }
+                        retouchPoints = emptyList()
                     }
-                    IconButton(onClick = {
-                        if (activeTool == DrawingTool.Pen) {
-                            backStack.add(
-                                EditRoute.DrawingSettings(
-                                    DrawingTool.Pen,
-                                    penColor.toArgb(),
-                                    penSize,
-                                    1f
-                                )
-                            )
-                        } else {
-                        activeTool = DrawingTool.Pen
-                            selectedTextId = null
-                            selectedStrokeIndex = null
-                            selectedTextIndex = null
-                        }
-                    }) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .then(
-                                    if (activeTool == DrawingTool.Pen) Modifier.background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        CircleShape
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
+                }
+            }
+
+            // Bottom controls: Home (category bar) or a tool screen
+            val cat = activeCategory
+            when (cat) {
+                null -> CategoryBar(onSelect = { openCategory(it) })
+                ToolCategory.Draw -> {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            IconDraw()
-                        }
-                    }
-                    IconButton(onClick = {
-                        if (activeTool == DrawingTool.Highlighter) {
-                            backStack.add(
-                                EditRoute.DrawingSettings(
-                                    DrawingTool.Highlighter,
-                                    highlighterColor.toArgb(),
-                                    highlighterSize,
-                                    highlighterOpacity
-                                )
-                            )
-                        } else {
-                            activeTool = DrawingTool.Highlighter
-                            selectedTextId = null
-                            selectedStrokeIndex = null
-                            selectedTextIndex = null
-                        }
-                    }) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .then(
-                                    if (activeTool == DrawingTool.Highlighter) Modifier.background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        CircleShape
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            IconBrush()
-                        }
-                    }
-                    IconButton(onClick = {
-                        activeTool = DrawingTool.Eraser
-                        selectedTextId = null
-                        selectedStrokeIndex = null
-                        selectedTextIndex = null
-                    }) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .then(
-                                    if (activeTool == DrawingTool.Eraser) Modifier.background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        CircleShape
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            IconEraser()
-                        }
-                    }
-                    IconButton(onClick = {
-                        if (selectedTextId != null || activeTool == DrawingTool.Text) {
+                            IconButton(onClick = { goHome() }) { IconBack() }
+                            Text("Draw", fontWeight = FontWeight.Bold)
+                            InfoHint("Draw freehand, highlight, erase, or tap to add text. Tap a tool again to change its color and size.")
+                            Spacer(Modifier.weight(1f))
                             if (selectedTextId != null) {
-                                texts.find { it.id == selectedTextId }?.let { textElement ->
-                                    backStack.add(
-                                        EditRoute.DrawingSettings(
-                                            DrawingTool.Text,
-                                            textElement.color,
-                                            textElement.fontSize,
-                                            1f
-                                        )
-                                    )
+                                IconButton(onClick = {
+                                    texts.find { it.id == selectedTextId }?.let { te ->
+                                        backStack.add(EditRoute.DrawingSettings(DrawingTool.Text, te.color, te.fontSize, 1f))
+                                    }
+                                }) { IconEdit() }
+                            }
+                        }
+                        DrawingToolbar(
+                            activeTool = activeTool,
+                            onSelectPointer = { activeTool = DrawingTool.Pointer; selectedTextId = null; selectedStrokeIndex = null; selectedTextIndex = null },
+                            onSelectPen = {
+                                if (activeTool == DrawingTool.Pen) backStack.add(EditRoute.DrawingSettings(DrawingTool.Pen, penColor.toArgb(), penSize, 1f))
+                                else { activeTool = DrawingTool.Pen; selectedTextId = null; selectedStrokeIndex = null; selectedTextIndex = null }
+                            },
+                            onSelectHighlighter = {
+                                if (activeTool == DrawingTool.Highlighter) backStack.add(EditRoute.DrawingSettings(DrawingTool.Highlighter, highlighterColor.toArgb(), highlighterSize, highlighterOpacity))
+                                else { activeTool = DrawingTool.Highlighter; selectedTextId = null; selectedStrokeIndex = null; selectedTextIndex = null }
+                            },
+                            onSelectEraser = { activeTool = DrawingTool.Eraser; selectedTextId = null; selectedStrokeIndex = null; selectedTextIndex = null },
+                            onSelectText = {
+                                if (selectedTextId != null || activeTool == DrawingTool.Text) {
+                                    if (selectedTextId != null) {
+                                        texts.find { it.id == selectedTextId }?.let { te ->
+                                            backStack.add(EditRoute.DrawingSettings(DrawingTool.Text, te.color, te.fontSize, 1f))
+                                        }
+                                    } else backStack.add(EditRoute.DrawingSettings(DrawingTool.Text, penColor.toArgb(), textFontSize, 1f))
+                                } else { activeTool = DrawingTool.Text; selectedTextId = null; selectedStrokeIndex = null; selectedTextIndex = null }
+                            },
+                        )
+                    }
+                }
+                else -> ToolScreen(
+                    category = cat,
+                    editorMode = editorMode,
+                    onToolSelected = { selectTool(it) },
+                    onBack = { goHome() },
+                ) {
+                    if (editorMode == EditorMode.Crop) {
+                        CropRotatePanel(
+                            onRotate90 = { cropAngle = (cropAngle + 90f) % 360f },
+                            selectedAspect = cropAspect,
+                            onAspect = { ar ->
+                                cropAspect = ar
+                                if (ar == null) {
+                                    cropCx = 0.5f; cropCy = 0.5f; cropHx = 0.5f; cropHy = 0.5f
+                                } else {
+                                    val w = document.canvasWidth.coerceAtLeast(1).toFloat()
+                                    val h = document.canvasHeight.coerceAtLeast(1).toFloat()
+                                    val ratioN = ar * h / w
+                                    cropCx = 0.5f; cropCy = 0.5f
+                                    if (ratioN >= 1f) { cropHx = 0.5f; cropHy = 0.5f / ratioN } else { cropHy = 0.5f; cropHx = 0.5f * ratioN }
                                 }
-                            } else {
-                                backStack.add(
-                                    EditRoute.DrawingSettings(
-                                        DrawingTool.Text,
-                                        penColor.toArgb(),
-                                        textFontSize,
-                                        1f
-                                    )
+                            },
+                            onReset = {
+                                cropCx = 0.5f; cropCy = 0.5f; cropHx = 0.5f; cropHy = 0.5f
+                                cropAngle = 0f; cropAspect = null
+                            },
+                            onApply = { applyCrop() },
+                            onCancel = { goHome() },
+                        )
+                    } else {
+                    ActivePanel(
+                        editorMode = editorMode,
+                        document = document,
+                        baseBitmap = baseBitmap,
+                        selection = selection,
+                        vm = vm,
+                        selectedAdjustment = selectedAdjustment,
+                        onSelectAdjustment = { selectedAdjustment = it },
+                        selectedCurveChannel = selectedCurveChannel,
+                        onCurveChannel = { selectedCurveChannel = it },
+                        selectedHslRange = selectedHslRange,
+                        onHslRange = { selectedHslRange = it },
+                        currentSelectiveMask = currentSelectiveMask,
+                        showSelectiveMask = showSelectiveMask,
+                        onSelectiveMask = { currentSelectiveMask = it },
+                        onShowSelectiveMask = { showSelectiveMask = it },
+                        healingBrushSize = healingBrushSize,
+                        isSettingHealingSource = isSettingHealingSource,
+                        onHealingBrushSize = { healingBrushSize = it },
+                        onSetHealingSource = { isSettingHealingSource = it },
+                        dodgeBurnMode = dodgeBurnMode,
+                        onDodgeBurnMode = { dodgeBurnMode = it },
+                        brushSize = brushSize,
+                        onBrushSize = { brushSize = it },
+                        selectionIsEllipse = selectionIsEllipse,
+                        onSelectionShape = { selectionIsEllipse = it },
+                        selectionFeather = selectionFeather,
+                        onSelectionFeather = {
+                            selectionFeather = it
+                            committedSel?.let { s ->
+                                committedSel = s.copy(
+                                    featherFracX = it / document.canvasWidth.coerceAtLeast(1),
+                                    featherFracY = it / document.canvasHeight.coerceAtLeast(1),
                                 )
                             }
-                        } else {
-                            activeTool = DrawingTool.Text
-                            selectedTextId = null
-                            selectedStrokeIndex = null
-                            selectedTextIndex = null
-                        }
-                    }) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .then(
-                                    if (activeTool == DrawingTool.Text) Modifier.background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        CircleShape
-                                    ) else Modifier
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "T",
-                                fontSize = 24.sp,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                            )
-                        }
+                        },
+                        liquifyTool = liquifyTool,
+                        onLiquifyTool = { liquifyTool = it },
+                        liquifyStrength = liquifyStrength,
+                        onLiquifyStrength = { liquifyStrength = it },
+                        liquifyRadius = liquifyRadius,
+                        onLiquifyRadius = { liquifyRadius = it },
+                        onSelectionInvert = { committedSel?.let { s -> commitSelection(s.rect, s.isEllipse, !s.inverted, selectionFeather) } },
+                        onSelectionClear = { committedSel = null; vm.setSelection(null) },
+                        onSelectionDelete = {
+                            vm.applyToActivePixelLayer { src ->
+                                android.graphics.Bitmap.createBitmap(src.width, src.height, android.graphics.Bitmap.Config.ARGB_8888)
+                            }
+                        },
+                        onSelectionFeatherCommit = { committedSel?.let { s -> commitSelection(s.rect, s.isEllipse, s.inverted, selectionFeather) } },
+                    )
                     }
                 }
             }
@@ -1158,21 +991,14 @@ family = StockBrushes.pressurePen(),
                         onValueChange = { newText ->
                             localText = newText
                             val index = texts.indexOfFirst { it.id == textElement.id }
-                            if (index != -1) {
-                                texts[index] = texts[index].copy(text = newText)
-                            }
+                            if (index != -1) texts[index] = texts[index].copy(text = newText)
                         },
                         textStyle = TextStyle(fontSize = 18.sp),
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Edit Text") }
+                        label = { Text("Edit Text") },
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        IconButton(onClick = { textToEdit = null }) {
-                            IconCheck()
-                        }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        IconButton(onClick = { textToEdit = null }) { IconCheck() }
                     }
                 }
             }
@@ -1181,83 +1007,670 @@ family = StockBrushes.pressurePen(),
 }
 
 @Composable
-fun CropOverlay(cropRect: Rect, onCropRectChange: (Rect) -> Unit) {
+private fun CategoryBar(onSelect: (ToolCategory) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        ToolCategory.entries.forEach { cat ->
+            Column(
+                modifier = Modifier.clickable { onSelect(cat) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                CategoryIcon(cat)
+                Text(cat.label, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryIcon(category: ToolCategory) {
+    when (category) {
+        ToolCategory.Adjust -> IconSettings()
+        ToolCategory.Filters -> IconStar()
+        ToolCategory.Retouch -> IconBrush()
+        ToolCategory.Select -> Icon(Icons.Outlined.HighlightAlt, contentDescription = null)
+        ToolCategory.Transform -> IconCrop()
+        ToolCategory.Draw -> IconDraw()
+        ToolCategory.Layers -> IconCopy()
+    }
+}
+
+@Composable
+private fun ToolScreen(
+    category: ToolCategory,
+    editorMode: EditorMode,
+    onToolSelected: (EditorMode) -> Unit,
+    onBack: () -> Unit,
+    panel: @Composable () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) { IconBack() }
+            Text(category.label, fontWeight = FontWeight.Bold)
+            InfoHint(category.description())
+        }
+        if (categoryTools[category].orEmpty().size > 1) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                categoryTools[category].orEmpty().forEach { entry ->
+                    Surface(
+                        modifier = Modifier.clickable { onToolSelected(entry.mode) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (editorMode == entry.mode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(entry.label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                    }
+                }
+            }
+        }
+        val toolLabel = categoryTools[category]?.firstOrNull { it.mode == editorMode }?.label
+        if (toolLabel != null && editorMode != EditorMode.None) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(toolLabel, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                InfoHint(editorMode.description())
+            }
+        }
+        panel()
+    }
+}
+
+/** Positions a popup directly above its anchor (a "drop-up"). */
+private class AbovePopupPositionProvider(private val gapPx: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val maxX = (windowSize.width - popupContentSize.width).coerceAtLeast(0)
+        val x = anchorBounds.left.coerceIn(0, maxX)
+        val y = (anchorBounds.top - popupContentSize.height - gapPx).coerceAtLeast(0)
+        return IntOffset(x, y)
+    }
+}
+
+/** A small ⓘ icon that toggles an inline drop-up description (not a dialog). */
+@Composable
+private fun InfoHint(text: String) {
+    if (text.isBlank()) return
+    var open by remember { mutableStateOf(false) }
+    val gapPx = with(LocalDensity.current) { 4.dp.roundToPx() }
+    Box {
+        Text(
+            "ⓘ",
+            fontSize = 15.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp).clickable { open = !open },
+        )
+        if (open) {
+            Popup(
+                popupPositionProvider = AbovePopupPositionProvider(gapPx),
+                onDismissRequest = { open = false },
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shadowElevation = 6.dp,
+                ) {
+                    Text(
+                        text,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        modifier = Modifier.widthIn(max = 240.dp).padding(10.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CropRotatePanel(
+    onRotate90: () -> Unit,
+    selectedAspect: Float?,
+    onAspect: (Float?) -> Unit,
+    onReset: () -> Unit,
+    onApply: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val aspects: List<Pair<String, Float?>> = listOf(
+        "Free" to null, "1:1" to 1f, "4:3" to 4f / 3f, "3:4" to 3f / 4f, "16:9" to 16f / 9f, "9:16" to 9f / 16f,
+    )
+    Column(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Aspect ratio", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            InfoHint("Locks the crop to a fixed width:height shape. \"Free\" lets you crop to any size.")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            aspects.forEach { (label, ar) ->
+                Surface(
+                    modifier = Modifier.clickable { onAspect(ar) },
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (selectedAspect == ar) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) { Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Rotate", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            InfoHint("Drag the round handle above the crop box to tilt and straighten the photo.")
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                modifier = Modifier.clickable { onRotate90() },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) { IconRotateRight(); Text("Rotate 90°", fontSize = 13.sp) }
+            }
+            Surface(
+                modifier = Modifier.clickable { onReset() },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+            ) { Text("Reset", fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) }
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Surface(
+                modifier = Modifier.clickable { onCancel() },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) { IconClose(); Text("Cancel", fontSize = 13.sp) }
+            }
+            Surface(
+                modifier = Modifier.clickable { onApply() },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) { IconCheck(); Text("Apply", fontSize = 13.sp) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivePanel(
+    editorMode: EditorMode,
+    document: EditDocument,
+    baseBitmap: android.graphics.Bitmap?,
+    selection: Selection?,
+    vm: PhotoEditViewModel,
+    selectedAdjustment: AdjustmentType,
+    onSelectAdjustment: (AdjustmentType) -> Unit,
+    selectedCurveChannel: CurveChannel,
+    onCurveChannel: (CurveChannel) -> Unit,
+    selectedHslRange: HslColorRange,
+    onHslRange: (HslColorRange) -> Unit,
+    currentSelectiveMask: SelectiveMask,
+    showSelectiveMask: Boolean,
+    onSelectiveMask: (SelectiveMask) -> Unit,
+    onShowSelectiveMask: (Boolean) -> Unit,
+    healingBrushSize: Float,
+    isSettingHealingSource: Boolean,
+    onHealingBrushSize: (Float) -> Unit,
+    onSetHealingSource: (Boolean) -> Unit,
+    dodgeBurnMode: DodgeBurnMode,
+    onDodgeBurnMode: (DodgeBurnMode) -> Unit,
+    brushSize: Float,
+    onBrushSize: (Float) -> Unit,
+    selectionIsEllipse: Boolean,
+    onSelectionShape: (Boolean) -> Unit,
+    selectionFeather: Float,
+    onSelectionFeather: (Float) -> Unit,
+    liquifyTool: com.vayunmathur.photos.data.LiquifyTool,
+    onLiquifyTool: (com.vayunmathur.photos.data.LiquifyTool) -> Unit,
+    liquifyStrength: Float,
+    onLiquifyStrength: (Float) -> Unit,
+    liquifyRadius: Float,
+    onLiquifyRadius: (Float) -> Unit,
+    onSelectionInvert: () -> Unit,
+    onSelectionClear: () -> Unit,
+    onSelectionDelete: () -> Unit,
+    onSelectionFeatherCommit: () -> Unit,
+) {
+    when (editorMode) {
+        EditorMode.Adjust -> {
+            val basic = document.activeAdjustment<BasicAdjustment>()?.adjustments ?: ImageAdjustments()
+            AdjustmentPanel(
+                adjustments = basic,
+                selectedAdjustment = selectedAdjustment,
+                onSelectAdjustment = onSelectAdjustment,
+                onUpdateAdjustment = { update -> vm.updateActiveAdjustment(BasicAdjustment(update(basic))) },
+                onReset = { vm.updateActiveAdjustment(BasicAdjustment(ImageAdjustments())) },
+            )
+        }
+        EditorMode.Filters -> {
+            val basic = document.activeAdjustment<BasicAdjustment>()?.adjustments ?: ImageAdjustments()
+            FilterPresetPanel(
+                bitmap = baseBitmap,
+                adjustments = basic,
+                onSelectFilter = { filter -> vm.updateActiveAdjustment(BasicAdjustment(filter.adjustments)) },
+            )
+        }
+        EditorMode.Curves -> {
+            val curves = document.activeAdjustment<CurvesAdj>()?.curves ?: CurvesAdjustment()
+            CurvesPanel(curves, selectedCurveChannel, onCurveChannel) { vm.updateActiveAdjustment(CurvesAdj(it)) }
+        }
+        EditorMode.HSL -> {
+            val hsl = document.activeAdjustment<HslAdj>()?.hsl ?: HslAdjustments()
+            HslPanel(hsl, selectedHslRange, onHslRange) { vm.updateActiveAdjustment(HslAdj(it)) }
+        }
+        EditorMode.Levels -> {
+            val levels = document.activeAdjustment<LevelsAdj>()?.levels ?: com.vayunmathur.photos.data.LevelsAdjustment()
+            LevelsPanel(levels) { vm.updateActiveAdjustment(LevelsAdj(it)) }
+        }
+        EditorMode.ColorBalance -> {
+            val cb = document.activeAdjustment<ColorBalanceAdj>()?.balance ?: com.vayunmathur.photos.data.ColorBalanceAdjustment()
+            ColorBalancePanel(cb) { vm.updateActiveAdjustment(ColorBalanceAdj(it)) }
+        }
+        EditorMode.ChannelMixer -> {
+            val mx = document.activeAdjustment<ChannelMixerAdj>()?.mixer ?: com.vayunmathur.photos.data.ChannelMixerAdjustment()
+            ChannelMixerPanel(mx) { vm.updateActiveAdjustment(ChannelMixerAdj(it)) }
+        }
+        EditorMode.BlackWhite -> {
+            val bw = document.activeAdjustment<BlackAndWhiteAdj>()?.bw ?: com.vayunmathur.photos.data.BlackAndWhiteAdjustment(enabled = true)
+            BlackWhitePanel(bw) { vm.updateActiveAdjustment(BlackAndWhiteAdj(it.copy(enabled = true))) }
+        }
+        EditorMode.GradientMap -> {
+            GradientMapPanel { stops -> vm.updateActiveAdjustment(GradientMapAdj(com.vayunmathur.photos.data.GradientMapAdjustment(stops))) }
+        }
+        EditorMode.LensBlur -> {
+            val blur = document.activeAdjustment<BlurAdj>()?.blur ?: BlurParams()
+            BlurPanel(blur) { vm.updateActiveAdjustment(BlurAdj(it)) }
+        }
+        EditorMode.Selective -> {
+            val sel = document.activeAdjustment<SelectiveAdj>()?.selective ?: SelectiveEdits()
+            SelectiveEditPanel(
+                mask = currentSelectiveMask,
+                showMask = showSelectiveMask,
+                onMaskChanged = onSelectiveMask,
+                onShowMaskChanged = onShowSelectiveMask,
+                onAddMask = {
+                    vm.updateActiveAdjustment(SelectiveAdj(sel.copy(masks = sel.masks + currentSelectiveMask)))
+                    onSelectiveMask(SelectiveMask())
+                },
+            )
+        }
+        EditorMode.FilterFx -> FiltersPanel { transform -> vm.applyToActivePixelLayer(transform) }
+        EditorMode.Liquify -> LiquifyPanel(liquifyTool, onLiquifyTool, liquifyStrength, onLiquifyStrength, liquifyRadius, onLiquifyRadius)
+        EditorMode.Healing -> HealingPanel(healingBrushSize, isSettingHealingSource, onHealingBrushSize, onSetHealingSource)
+        EditorMode.RedEye -> SimpleBrushPanel("Tap each eye. Brush", brushSize, onBrushSize)
+        EditorMode.DodgeBurn -> DodgeBurnPanel(dodgeBurnMode, onDodgeBurnMode, brushSize, onBrushSize)
+        EditorMode.Smudge -> SimpleBrushPanel("Drag to smudge. Brush", brushSize, onBrushSize)
+        EditorMode.Selection -> SelectionPanel(
+            isEllipse = selectionIsEllipse, onShape = onSelectionShape,
+            feather = selectionFeather, onFeather = onSelectionFeather,
+            onFeatherCommit = onSelectionFeatherCommit,
+            hasSelection = selection != null,
+            onInvert = onSelectionInvert,
+            onClear = onSelectionClear,
+            onDelete = onSelectionDelete,
+        )
+        EditorMode.Layers -> LayersPanel(
+            document = document,
+            hasSelection = selection != null,
+            onSelectLayer = { vm.setActiveLayer(it) },
+            onToggleVisibility = { i, v -> vm.setLayerVisibility(i, v) },
+            onOpacityChange = { i, o -> vm.setLayerOpacity(i, o) },
+            onBlendModeChange = { i, m -> vm.setLayerBlendMode(i, m) },
+            onAddAdjustment = { vm.addAdjustmentLayer(it) },
+            onAddPixelLayer = { vm.addEmptyPixelLayer() },
+            onDuplicate = { vm.duplicateLayer(it) },
+            onMergeDown = { vm.mergeDown(it) },
+            onDelete = { vm.removeLayer(it) },
+            onFlatten = { vm.flatten() },
+            onAddMaskFromSelection = { vm.selectionToActiveMask() },
+            onDeleteMask = { vm.deleteLayerMask(it) },
+            onInvertMask = { vm.invertLayerMask(it) },
+        )
+        EditorMode.Crop -> {}
+        EditorMode.None -> {}
+    }
+}
+
+@Composable
+private fun LiquifyPanel(
+    tool: com.vayunmathur.photos.data.LiquifyTool,
+    onTool: (com.vayunmathur.photos.data.LiquifyTool) -> Unit,
+    strength: Float,
+    onStrength: (Float) -> Unit,
+    radius: Float,
+    onRadius: (Float) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.vayunmathur.photos.data.LiquifyTool.entries.forEach { t ->
+                Surface(
+                    modifier = Modifier.clickable { onTool(t) },
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (tool == t) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) { Text(t.name, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) }
+            }
+        }
+        LabeledSlider("Strength", strength * 100f, 5f..100f) { onStrength(it / 100f) }
+        LabeledSlider("Size", radius * 100f, 5f..50f) { onRadius(it / 100f) }
+    }
+}
+
+@Composable
+private fun SimpleBrushPanel(label: String, brushSize: Float, onBrushSize: (Float) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
+    ) {
+        LabeledSlider(label, brushSize * 100f, 1f..20f) { onBrushSize(it / 100f) }
+    }
+}
+
+@Composable
+private fun DodgeBurnPanel(mode: DodgeBurnMode, onMode: (DodgeBurnMode) -> Unit, brushSize: Float, onBrushSize: (Float) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DodgeBurnMode.entries.forEach { m ->
+                Surface(
+                    modifier = Modifier.clickable { onMode(m) },
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (mode == m) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) { Text(m.name, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+            }
+        }
+        LabeledSlider("Brush", brushSize * 100f, 1f..20f) { onBrushSize(it / 100f) }
+    }
+}
+
+@Composable
+private fun SelectionPanel(
+    isEllipse: Boolean,
+    onShape: (Boolean) -> Unit,
+    feather: Float,
+    onFeather: (Float) -> Unit,
+    onFeatherCommit: () -> Unit,
+    hasSelection: Boolean,
+    onInvert: () -> Unit,
+    onClear: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(false to "Rectangle", true to "Ellipse").forEach { (ell, label) ->
+                Surface(
+                    modifier = Modifier.clickable { onShape(ell) },
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (isEllipse == ell) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) { Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Edge softness", fontSize = 12.sp, modifier = Modifier.width(92.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            InfoHint("Blurs the selection's edge so edits fade in gradually. 0 = a hard, crisp edge (this is normal, not \"nothing selected\").")
+            androidx.compose.material3.Slider(value = feather, onValueChange = onFeather, onValueChangeFinished = onFeatherCommit, valueRange = 0f..50f, modifier = Modifier.weight(1f))
+            Text("${feather.roundToInt()}", fontSize = 12.sp, modifier = Modifier.width(36.dp), textAlign = TextAlign.End, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            SmallButton("Invert", hasSelection, onInvert)
+            InfoHint("Swaps inside and outside, so your edits apply everywhere except the selected area.")
+            SmallButton("Delete selected area", hasSelection, onDelete)
+            InfoHint("Erases the pixels inside the selection on the current layer, leaving transparency.")
+            SmallButton("Clear selection", hasSelection, onClear)
+        }
+    }
+}
+
+@Composable
+private fun SmallButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clickable(enabled = enabled) { onClick() },
+        shape = RoundedCornerShape(6.dp),
+        color = if (enabled) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+    ) { Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+}
+
+@Composable
+private fun SelectionOverlay(
+    isEllipse: Boolean,
+    dragStart: Offset?,
+    dragCurrent: Offset?,
+    onStart: (Offset) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onEnd: () -> Unit,
+) {
+    androidx.compose.foundation.Canvas(
+        modifier = Modifier.fillMaxSize().pointerInput(isEllipse) {
+            detectDragGestures(
+                onDragStart = { onStart(it) },
+                onDrag = { change, _ -> change.consume(); onDrag(change.position) },
+                onDragEnd = { onEnd() },
+            )
+        },
+    ) {
+        val s = dragStart; val c = dragCurrent
+        if (s != null && c != null) {
+            val topLeft = Offset(minOf(s.x, c.x), minOf(s.y, c.y))
+            val sz = Size(kotlin.math.abs(c.x - s.x), kotlin.math.abs(c.y - s.y))
+            val effect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f))
+            if (isEllipse) drawOval(Color.White, topLeft, sz, style = Stroke(width = 2f, pathEffect = effect))
+            else drawRect(Color.White, topLeft, sz, style = Stroke(width = 2f, pathEffect = effect))
+        }
+    }
+}
+
+@Composable
+private fun SelectionPatternOverlay(shape: SelShape) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val fx = shape.featherFracX * w
+        val fy = shape.featherFracY * h
+        val r = shape.rect
+        val outer = Rect(r.left * w - fx, r.top * h - fy, r.right * w + fx, r.bottom * h + fy)
+        val inner = Rect(r.left * w + fx, r.top * h + fy, r.right * w - fx, r.bottom * h - fy)
+        fun shapePath(rect: Rect): Path = Path().apply {
+            if (rect.width <= 0f || rect.height <= 0f) return@apply
+            if (shape.isEllipse) addOval(rect) else addRect(rect)
+        }
+        val outerPath = shapePath(outer)
+        val innerPath = shapePath(inner)
+        val bandPath = Path().apply {
+            addPath(outerPath); addPath(innerPath); fillType = PathFillType.EvenOdd
+        }
+        val fullEffectPath = if (shape.inverted) {
+            Path().apply { addRect(Rect(0f, 0f, w, h)); addPath(outerPath); fillType = PathFillType.EvenOdd }
+        } else {
+            innerPath
+        }
+        clipPath(fullEffectPath) { drawDiagonalHatch(w, h, 24f, Color.White.copy(alpha = 0.55f)) }
+        clipPath(bandPath) { drawDiagonalHatch(w, h, 9f, Color.White.copy(alpha = 0.75f)) }
+        drawPath(innerPath, Color.White, style = Stroke(width = 2f))
+        if (shape.featherFracX > 0f || shape.featherFracY > 0f) {
+            drawPath(outerPath, Color.White, style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))))
+        }
+    }
+}
+
+private fun DrawScope.drawDiagonalHatch(w: Float, h: Float, spacing: Float, color: Color) {
+    var x = -h
+    while (x < w) {
+        drawLine(color, Offset(x, 0f), Offset(x + h, h), strokeWidth = 1.5f)
+        x += spacing
+    }
+}
+
+@Composable
+private fun DrawingToolbar(
+    activeTool: DrawingTool,
+    onSelectPointer: () -> Unit,
+    onSelectPen: () -> Unit,
+    onSelectHighlighter: () -> Unit,
+    onSelectEraser: () -> Unit,
+    onSelectText: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ToolIcon(active = activeTool == DrawingTool.Pointer, onClick = onSelectPointer) { IconVisible() }
+        ToolIcon(active = activeTool == DrawingTool.Pen, onClick = onSelectPen) { IconDraw() }
+        ToolIcon(active = activeTool == DrawingTool.Highlighter, onClick = onSelectHighlighter) { IconBrush() }
+        ToolIcon(active = activeTool == DrawingTool.Eraser, onClick = onSelectEraser) { IconEraser() }
+        ToolIcon(active = activeTool == DrawingTool.Text, onClick = onSelectText) {
+            Text("T", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun ToolIcon(active: Boolean, onClick: () -> Unit, content: @Composable () -> Unit) {
+    IconButton(onClick = onClick) {
+        Box(
+            modifier = Modifier.size(40.dp).then(
+                if (active) Modifier.background(MaterialTheme.colorScheme.secondaryContainer, CircleShape) else Modifier
+            ),
+            contentAlignment = Alignment.Center,
+        ) { content() }
+    }
+}
+
+@Composable
+fun CropOverlay(
+    cx: Float,
+    cy: Float,
+    hx: Float,
+    hy: Float,
+    angleDeg: Float,
+    onChange: (cx: Float, cy: Float, hx: Float, hy: Float) -> Unit,
+    onAngle: (Float) -> Unit,
+) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val width = constraints.maxWidth.toFloat()
         val height = constraints.maxHeight.toFloat()
-        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            val rect = Rect(
-                cropRect.left * width,
-                cropRect.top * height,
-                cropRect.right * width,
-                cropRect.bottom * height
-            )
-            val path = Path().apply {
-                addRect(Rect(0f, 0f, width, height))
-                addRect(rect)
-                fillType = PathFillType.EvenOdd
-            }
-            drawPath(path, Color.Black.copy(alpha = 0.5f))
-            drawRect(
-                color = Color.White,
-                topLeft = Offset(rect.left, rect.top),
-                size = androidx.compose.ui.geometry.Size(rect.width, rect.height),
-                style = Stroke(width = 2.dp.toPx())
-            )
+        val onChangeNow by rememberUpdatedState(onChange)
+        val onAngleNow by rememberUpdatedState(onAngle)
+        val armGapPx = with(LocalDensity.current) { 40.dp.toPx() }
+        val minPx = with(LocalDensity.current) { 24.dp.toPx() }
+
+        val a = Math.toRadians(angleDeg.toDouble())
+        val ca = cos(a).toFloat()
+        val sa = sin(a).toFloat()
+        // rotate a vector by +angle
+        fun rot(vx: Float, vy: Float) = Offset(vx * ca - vy * sa, vx * sa + vy * ca)
+        // rotate a vector by -angle (into local frame)
+        fun unrot(vx: Float, vy: Float) = Offset(vx * ca + vy * sa, -vx * sa + vy * ca)
+
+        val cpx = cx * width
+        val cpy = cy * height
+        val phx = hx * width
+        val phy = hy * height
+        fun corner(sx: Int, sy: Int): Offset {
+            val r = rot(sx * phx, sy * phy)
+            return Offset(cpx + r.x, cpy + r.y)
         }
-        Box(
-            modifier = Modifier
-                .offset {
-                    IntOffset(
-                        (cropRect.left * width).roundToInt(),
-                        (cropRect.top * height).roundToInt()
-                    )
-                }
-                .size(
-                    width = with(LocalDensity.current) { (cropRect.width * width).toDp() },
-                    height = with(LocalDensity.current) { (cropRect.height * height).toDp() })
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val dx = dragAmount.x / width
-                        val dy = dragAmount.y / height
-                        val newLeft = (cropRect.left + dx).coerceIn(0f, 1f - cropRect.width)
-                        val newTop = (cropRect.top + dy).coerceIn(0f, 1f - cropRect.height)
-                        onCropRectChange(
-                            Rect(
-                                left = newLeft,
-                                top = newTop,
-                                right = newLeft + cropRect.width,
-                                bottom = newTop + cropRect.height
-                            )
-                        )
-                    }
-                }
-        )
-        Handle(offset = Offset(cropRect.left * width, cropRect.top * height), onDrag = { delta ->
-            val newLeft = (cropRect.left + delta.x / width).coerceIn(0f, cropRect.right - 0.05f)
-            val newTop = (cropRect.top + delta.y / height).coerceIn(0f, cropRect.bottom - 0.05f)
-            onCropRectChange(cropRect.copy(left = newLeft, top = newTop))
-        })
-        Handle(offset = Offset(cropRect.right * width, cropRect.top * height), onDrag = { delta ->
-            val newRight = (cropRect.right + delta.x / width).coerceIn(cropRect.left + 0.05f, 1f)
-            val newTop = (cropRect.top + delta.y / height).coerceIn(0f, cropRect.bottom - 0.05f)
-            onCropRectChange(cropRect.copy(right = newRight, top = newTop))
-        })
-        Handle(offset = Offset(cropRect.left * width, cropRect.bottom * height), onDrag = { delta ->
-            val newLeft = (cropRect.left + delta.x / width).coerceIn(0f, cropRect.right - 0.05f)
-            val newBottom = (cropRect.bottom + delta.y / height).coerceIn(cropRect.top + 0.05f, 1f)
-            onCropRectChange(cropRect.copy(left = newLeft, bottom = newBottom))
-        })
-        Handle(
-            offset = Offset(cropRect.right * width, cropRect.bottom * height),
-            onDrag = { delta ->
-                val newRight =
-                    (cropRect.right + delta.x / width).coerceIn(cropRect.left + 0.05f, 1f)
-                val newBottom =
-                    (cropRect.bottom + delta.y / height).coerceIn(cropRect.top + 0.05f, 1f)
-                onCropRectChange(cropRect.copy(right = newRight, bottom = newBottom))
-            })
+        val tl = corner(-1, -1)
+        val tr = corner(1, -1)
+        val br = corner(1, 1)
+        val bl = corner(-1, 1)
+        fun mid(p: Offset, q: Offset) = Offset((p.x + q.x) / 2f, (p.y + q.y) / 2f)
+        val topMid = mid(tl, tr)
+        val up = rot(0f, -1f)
+        val rotateHandle = Offset(topMid.x + up.x * armGapPx, topMid.y + up.y * armGapPx)
+
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            val quad = Path().apply {
+                moveTo(tl.x, tl.y); lineTo(tr.x, tr.y); lineTo(br.x, br.y); lineTo(bl.x, bl.y); close()
+            }
+            val dim = Path().apply {
+                addRect(Rect(0f, 0f, width, height)); addPath(quad); fillType = PathFillType.EvenOdd
+            }
+            drawPath(dim, Color.Black.copy(alpha = 0.5f))
+            drawPath(quad, Color.White, style = Stroke(width = 2.dp.toPx()))
+            drawLine(Color.White, topMid, rotateHandle, strokeWidth = 2.dp.toPx())
+        }
+
+        // Body drag (move the whole quad).
+        Handle(Offset(cpx, cpy)) { d ->
+            onChangeNow((cpx + d.x) / width, (cpy + d.y) / height, hx, hy)
+        }
+
+        // Corner handles: keep the opposite corner fixed.
+        fun cornerDrag(sx: Int, sy: Int, d: Offset) {
+            val opp = corner(-sx, -sy)
+            val newC = Offset(corner(sx, sy).x + d.x, corner(sx, sy).y + d.y)
+            val nCenter = Offset((opp.x + newC.x) / 2f, (opp.y + newC.y) / 2f)
+            val local = unrot(newC.x - opp.x, newC.y - opp.y)
+            val nhpx = (abs(local.x) / 2f).coerceAtLeast(minPx)
+            val nhpy = (abs(local.y) / 2f).coerceAtLeast(minPx)
+            onChangeNow(nCenter.x / width, nCenter.y / height, nhpx / width, nhpy / height)
+        }
+        Handle(tl) { d -> cornerDrag(-1, -1, d) }
+        Handle(tr) { d -> cornerDrag(1, -1, d) }
+        Handle(br) { d -> cornerDrag(1, 1, d) }
+        Handle(bl) { d -> cornerDrag(-1, 1, d) }
+
+        // Edge handles: move one edge along its local normal, opposite edge fixed.
+        fun edgeDrag(edge: Int, d: Offset) {
+            val local = unrot(d.x, d.y)
+            var nhpx = phx
+            var nhpy = phy
+            var shiftLocalX = 0f
+            var shiftLocalY = 0f
+            when (edge) {
+                0 -> { nhpx = phx - local.x / 2f; shiftLocalX = local.x / 2f } // left
+                1 -> { nhpx = phx + local.x / 2f; shiftLocalX = local.x / 2f } // right
+                2 -> { nhpy = phy - local.y / 2f; shiftLocalY = local.y / 2f } // top
+                3 -> { nhpy = phy + local.y / 2f; shiftLocalY = local.y / 2f } // bottom
+            }
+            nhpx = nhpx.coerceAtLeast(minPx)
+            nhpy = nhpy.coerceAtLeast(minPx)
+            val shift = rot(shiftLocalX, shiftLocalY)
+            onChangeNow((cpx + shift.x) / width, (cpy + shift.y) / height, nhpx / width, nhpy / height)
+        }
+        Handle(mid(tl, bl)) { d -> edgeDrag(0, d) }
+        Handle(mid(tr, br)) { d -> edgeDrag(1, d) }
+        Handle(topMid) { d -> edgeDrag(2, d) }
+        Handle(mid(bl, br)) { d -> edgeDrag(3, d) }
+
+        // Rotate handle.
+        Handle(rotateHandle) { d ->
+            val px = rotateHandle.x + d.x
+            val py = rotateHandle.y + d.y
+            val ang = Math.toDegrees(atan2((px - cpx).toDouble(), (cpy - py).toDouble())).toFloat()
+            onAngleNow(ang)
+        }
     }
 }
 
@@ -1269,22 +1682,13 @@ fun Handle(offset: Offset, onDrag: (Offset) -> Unit) {
     val currentOnDrag by rememberUpdatedState(onDrag)
     Box(
         modifier = Modifier
-            .offset {
-                IntOffset(
-                    (offset.x - handleRadiusPx).roundToInt(),
-                    (offset.y - handleRadiusPx).roundToInt()
-                )
-            }
+            .offset { IntOffset((offset.x - handleRadiusPx).roundToInt(), (offset.y - handleRadiusPx).roundToInt()) }
             .size(handleSize)
             .background(Color.White, CircleShape)
             .border(1.dp, Color.Black, CircleShape)
             .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume(); currentOnDrag(
-                    dragAmount
-                )
-                }
-            }
+                detectDragGestures { change, dragAmount -> change.consume(); currentOnDrag(dragAmount) }
+            },
     )
 }
 
@@ -1329,78 +1733,38 @@ private fun AdjustmentPanel(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             AdjustmentType.entries.forEach { type ->
                 val value = getValue(type)
-                FilterChip(
-                    selected = selectedAdjustment == type,
-                    onClick = { onSelectAdjustment(type) },
-                    label = {
-                        Text(
-                            if (value != 0f) "${type.label} ${value.roundToInt()}" else type.label,
-                            fontSize = 12.sp,
-                        )
-                    },
-                )
+                Surface(
+                    modifier = Modifier.clickable { onSelectAdjustment(type) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (selectedAdjustment == type) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                ) {
+                    Text(
+                        if (value != 0f) "${type.label} ${value.roundToInt()}" else type.label,
+                        fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
-
         val currentValue = getValue(selectedAdjustment)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                selectedAdjustment.label,
-                fontSize = 12.sp,
-                modifier = Modifier.width(72.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Slider(
-                value = currentValue,
-                onValueChange = { newValue ->
-                    onUpdateAdjustment(withValue(selectedAdjustment, newValue))
-                },
-                valueRange = selectedAdjustment.min..selectedAdjustment.max,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "${currentValue.roundToInt()}",
-                fontSize = 12.sp,
-                modifier = Modifier.width(36.dp),
-                textAlign = TextAlign.End,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        LabeledSlider(selectedAdjustment.label, currentValue, selectedAdjustment.min..selectedAdjustment.max) {
+            onUpdateAdjustment(withValue(selectedAdjustment, it))
         }
-
         if (adjustments != ImageAdjustments()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 Surface(
-                    modifier = Modifier
-                        .clickable { onReset() }
-                        .padding(4.dp),
+                    modifier = Modifier.clickable { onReset() }.padding(4.dp),
                     shape = RoundedCornerShape(4.dp),
                     color = MaterialTheme.colorScheme.errorContainer,
                 ) {
-                    Text(
-                        "Reset All",
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
+                    Text("Reset All", fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.onErrorContainer)
                 }
             }
         }
@@ -1408,81 +1772,47 @@ private fun AdjustmentPanel(
 }
 
 @Composable
-private fun FilterPanel(
+private fun FilterPresetPanel(
     bitmap: android.graphics.Bitmap?,
     adjustments: ImageAdjustments,
-    selectedFilter: PhotoFilter?,
     onSelectFilter: (PhotoFilter) -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(8.dp)
-            .horizontalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp).horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PhotoFilters.all.forEach { filter ->
-            val isSelected = if (filter.adjustments == ImageAdjustments()) {
-                selectedFilter == null && adjustments == ImageAdjustments()
-            } else {
-                selectedFilter?.name == filter.name
-            }
-
+            val isSelected = if (filter.adjustments == ImageAdjustments()) adjustments == ImageAdjustments() else adjustments == filter.adjustments
             Column(
-                modifier = Modifier
-                    .width(72.dp)
-                    .clickable { onSelectFilter(filter) },
+                modifier = Modifier.width(72.dp).clickable { onSelectFilter(filter) },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 bitmap?.let { bmp ->
                     val filterMatrix = remember(filter) { filter.adjustments.toColorMatrix() }
                     val hasFilter = filter.adjustments != ImageAdjustments()
                     Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .then(
-                                if (isSelected) Modifier.border(
-                                    2.dp,
-                                    MaterialTheme.colorScheme.primary,
-                                    RoundedCornerShape(8.dp)
-                                ) else Modifier
-                            ),
+                        modifier = Modifier.size(64.dp).then(
+                            if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)) else Modifier
+                        ),
                     ) {
                         Image(
                             bitmap = bmp.asImageBitmap(),
                             contentDescription = filter.name,
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                            colorFilter = if (hasFilter) {
-                                ColorFilter.colorMatrix(ColorMatrix(filterMatrix.array))
-                            } else null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            colorFilter = if (hasFilter) androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(filterMatrix.array)) else null,
                         )
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    filter.name,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface,
-                )
+                Text(filter.name, fontSize = 10.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = TextAlign.Center)
             }
         }
     }
 }
 
 private fun hitTestText(
-    x: Float,
-    y: Float,
-    texts: List<TextElement>,
-    viewportWidth: Float,
-    viewportHeight: Float,
-    density: Float,
+    x: Float, y: Float, texts: List<TextElement>, viewportWidth: Float, viewportHeight: Float, density: Float,
 ): Int? {
     val paint = android.graphics.Paint().apply { isAntiAlias = true }
     for (i in texts.indices.reversed()) {
@@ -1501,9 +1831,7 @@ private fun hitTestStroke(x: Float, y: Float, strokes: List<InkStroke>): Int? {
     val hitRadius = 20f
     for (i in strokes.indices.reversed()) {
         strokes[i].shape.computeBoundingBox()?.let { box ->
-            if (box.xMin <= x + hitRadius && box.xMax >= x - hitRadius &&
-                box.yMin <= y + hitRadius && box.yMax >= y - hitRadius
-            ) return i
+            if (box.xMin <= x + hitRadius && box.xMax >= x - hitRadius && box.yMin <= y + hitRadius && box.yMax >= y - hitRadius) return i
         }
     }
     return null

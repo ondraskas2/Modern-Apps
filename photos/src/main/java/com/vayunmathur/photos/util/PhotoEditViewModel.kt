@@ -11,32 +11,24 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import androidx.compose.ui.geometry.Rect
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.library.util.SerializedStroke
 import com.vayunmathur.library.util.deserialize
-import com.vayunmathur.photos.data.BlurParams
-import com.vayunmathur.photos.data.CurvesAdjustment
-import com.vayunmathur.photos.data.HealingStrokes
-import com.vayunmathur.photos.data.HslAdjustments
-import com.vayunmathur.photos.data.ImageAdjustments
-import com.vayunmathur.photos.data.applyPixelEffects
-import com.vayunmathur.photos.data.hasPixelEffects
-import com.vayunmathur.photos.data.PerspectiveCorners
+import com.vayunmathur.photos.data.AdjustmentLayer
+import com.vayunmathur.photos.data.BasicAdjustment
+import com.vayunmathur.photos.data.BitmapReference
+import com.vayunmathur.photos.data.EditDocument
+import com.vayunmathur.photos.data.Layer
+import com.vayunmathur.photos.data.LayerAdjustment
+import com.vayunmathur.photos.data.LayerBlendMode
+import com.vayunmathur.photos.data.LayerMask
+import com.vayunmathur.photos.data.PixelLayer
 import com.vayunmathur.photos.data.Photo
-import com.vayunmathur.photos.data.PhotoFilter
-import com.vayunmathur.photos.data.SelectiveEdits
+import com.vayunmathur.photos.data.Selection
 import com.vayunmathur.photos.data.TextElement
-import com.vayunmathur.photos.data.applyToBitmap
-import com.vayunmathur.photos.data.applyLutToBitmap
-import com.vayunmathur.photos.data.applyHslToBitmap
-import com.vayunmathur.photos.data.applyBlurToBitmap
-import com.vayunmathur.photos.data.applySelectiveEdits
-import com.vayunmathur.photos.data.applyHealingToBitmap
-import com.vayunmathur.photos.data.applyPerspectiveToBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,32 +38,43 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import kotlin.math.min
 import kotlin.math.roundToInt
 
+/**
+ * Document-centric editor view model. The single source of truth is [document]; the
+ * compositor renders a 512px [compositedPreview] for the screen and a full-res bitmap
+ * on export. Undo/redo snapshots whole [EditDocument]s.
+ *
+ * Drawing (ink) strokes and text overlays remain screen-local state and are baked onto
+ * the composite at save time (see [savePhoto]).
+ */
 class PhotoEditViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
 
-    private val _originalBitmap = MutableStateFlow<Bitmap?>(null)
-    val originalBitmap: StateFlow<Bitmap?> = _originalBitmap.asStateFlow()
+    private val compositor = LayerCompositor()
+    private val history = UndoRedoManager<EditDocument>()
 
-    private val _transformedBitmap = MutableStateFlow<Bitmap?>(null)
-    val transformedBitmap: StateFlow<Bitmap?> = _transformedBitmap.asStateFlow()
+    private val _document = MutableStateFlow(EditDocument())
+    val document: StateFlow<EditDocument> = _document.asStateFlow()
 
-    val adjustments = MutableStateFlow(ImageAdjustments())
-    val selectedFilter = MutableStateFlow<PhotoFilter?>(null)
+    private val _compositedPreview = MutableStateFlow<Bitmap?>(null)
+    val compositedPreview: StateFlow<Bitmap?> = _compositedPreview.asStateFlow()
 
-    val curvesAdjustment = MutableStateFlow(CurvesAdjustment())
-    val hslAdjustments = MutableStateFlow(HslAdjustments())
-    val blurParams = MutableStateFlow(BlurParams())
-    val selectiveEdits = MutableStateFlow(SelectiveEdits())
-    val healingStrokes = MutableStateFlow(HealingStrokes())
-    val perspectiveCorners = MutableStateFlow(PerspectiveCorners())
+    /** The background (bottom) pixel-layer bitmap, used for filter thumbnails. */
+    private val _baseBitmap = MutableStateFlow<Bitmap?>(null)
+    val baseBitmap: StateFlow<Bitmap?> = _baseBitmap.asStateFlow()
 
-    private val _previewBitmap = MutableStateFlow<Bitmap?>(null)
-    val previewBitmap: StateFlow<Bitmap?> = _previewBitmap.asStateFlow()
-    private var previewJob: Job? = null
+    private val _selection = MutableStateFlow<Selection?>(null)
+    val selection: StateFlow<Selection?> = _selection.asStateFlow()
+
+    private val _canUndo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+    private val _canRedo = MutableStateFlow(false)
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
+
+    /** When true the preview is rendered without the document crop so crop handles work. */
+    private var croppingPreview = false
 
     private val _writePermissionRequest = MutableStateFlow<IntentSender?>(null)
     val writePermissionRequest: StateFlow<IntentSender?> = _writePermissionRequest.asStateFlow()
@@ -80,135 +83,18 @@ class PhotoEditViewModel(
     private var pendingSaveUri: Uri? = null
     private var pendingSaveOnComplete: (() -> Unit)? = null
 
-    fun updateAdjustment(update: (ImageAdjustments) -> ImageAdjustments) {
-        val prev = adjustments.value
-        adjustments.value = update(adjustments.value)
-        val curr = adjustments.value
-        if (prev.sharpness != curr.sharpness || prev.vignette != curr.vignette || prev.grain != curr.grain) {
-            requestPreviewUpdate()
-        }
-    }
-
-    fun applyFilter(filter: PhotoFilter?) {
-        val prev = adjustments.value
-        selectedFilter.value = filter
-        if (filter != null) {
-            adjustments.value = filter.adjustments
-        }
-        val curr = adjustments.value
-        if (prev.sharpness != curr.sharpness || prev.vignette != curr.vignette || prev.grain != curr.grain) {
-            requestPreviewUpdate()
-        }
-    }
-
-    fun resetAdjustments() {
-        val prev = adjustments.value
-        adjustments.value = ImageAdjustments()
-        selectedFilter.value = null
-        if (prev.hasPixelEffects()) {
-            requestPreviewUpdate()
-        }
-    }
-
-    fun updateCurves(curves: CurvesAdjustment) { curvesAdjustment.value = curves }
-    fun resetCurves() { curvesAdjustment.value = CurvesAdjustment() }
-
-    fun updateHsl(hsl: HslAdjustments) {
-        hslAdjustments.value = hsl
-        requestPreviewUpdate()
-    }
-    fun resetHsl() {
-        hslAdjustments.value = HslAdjustments()
-        _previewBitmap.value = null
-    }
-
-    fun updateBlur(params: BlurParams) {
-        blurParams.value = params
-        requestPreviewUpdate()
-    }
-    fun resetBlur() {
-        blurParams.value = BlurParams()
-        _previewBitmap.value = null
-    }
-
-    fun updateSelective(edits: SelectiveEdits) {
-        selectiveEdits.value = edits
-        requestPreviewUpdate()
-    }
-    fun resetSelective() {
-        selectiveEdits.value = SelectiveEdits()
-        _previewBitmap.value = null
-    }
-
-    fun updateHealing(strokes: HealingStrokes) { healingStrokes.value = strokes }
-    fun resetHealing() { healingStrokes.value = HealingStrokes() }
-
-    fun updatePerspective(corners: PerspectiveCorners) { perspectiveCorners.value = corners }
-    fun resetPerspective() { perspectiveCorners.value = PerspectiveCorners() }
-
-    private fun requestPreviewUpdate() {
-        previewJob?.cancel()
-        previewJob = viewModelScope.launch(Dispatchers.Default) {
-            delay(150)
-            val source = _transformedBitmap.value ?: return@launch
-            val adj = adjustments.value
-            val hsl = hslAdjustments.value
-            val blur = blurParams.value
-            val selective = selectiveEdits.value
-            val hasPixelEffects = adj.hasPixelEffects() ||
-                !hsl.isIdentity() || !blur.isIdentity() || !selective.isIdentity()
-            if (!hasPixelEffects) {
-                _previewBitmap.value = null
-                return@launch
-            }
-            val maxDim = 512
-            val scale = min(maxDim.toFloat() / source.width, maxDim.toFloat() / source.height).coerceAtMost(1f)
-            var preview = Bitmap.createScaledBitmap(
-                source,
-                (source.width * scale).roundToInt().coerceAtLeast(1),
-                (source.height * scale).roundToInt().coerceAtLeast(1),
-                true,
-            )
-            if (adj.hasPixelEffects()) {
-                preview = adj.applyPixelEffects(preview)
-            }
-            if (!hsl.isIdentity()) {
-                preview = hsl.applyHslToBitmap(preview)
-            }
-            if (!blur.isIdentity()) {
-                preview = blur.applyBlurToBitmap(preview)
-            }
-            if (!selective.isIdentity()) {
-                preview = selective.applySelectiveEdits(preview)
-            }
-            _previewBitmap.value = preview
-        }
-    }
-
-    private val decodedCache = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean {
-            if (size > 32) {
-                val current = _originalBitmap.value
-                if (eldest.value !== current) {
-                    try { eldest.value.recycle() } catch (_: Exception) {}
-                }
-                return true
-            }
-            return false
-        }
-    }
-
+    private var previewJob: Job? = null
     private var lastDecodedUri: String? = null
+
+    val activeLayer: Layer? get() = _document.value.activeLayer
+    val activeAdjustment: LayerAdjustment?
+        get() = (_document.value.activeLayer as? AdjustmentLayer)?.adjustment
+
+    // --- decode ---------------------------------------------------------------
 
     fun decode(uri: Uri) {
         val uriStr = uri.toString()
-        if (uriStr == lastDecodedUri && _originalBitmap.value != null) return
-        val cached = synchronized(decodedCache) { decodedCache[uriStr] }
-        if (cached != null && !cached.isRecycled) {
-            lastDecodedUri = uriStr
-            _originalBitmap.value = cached
-            return
-        }
+        if (uriStr == lastDecodedUri && _document.value.layers.isNotEmpty()) return
         val ctx: Context = getApplication()
         viewModelScope.launch(Dispatchers.Default) {
             try {
@@ -223,68 +109,253 @@ class PhotoEditViewModel(
                     }
                     decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
                 }
-                synchronized(decodedCache) { decodedCache[uriStr] = bmp }
+                val argb = if (bmp.config == Bitmap.Config.ARGB_8888) bmp
+                else bmp.copy(Bitmap.Config.ARGB_8888, true)
                 lastDecodedUri = uriStr
-                _originalBitmap.value = bmp
+                _baseBitmap.value = argb
+                history.clear()
+                _canUndo.value = false
+                _canRedo.value = false
+                compositor.invalidateCache()
+                _document.value = EditDocument.fromBackground(
+                    BitmapReference(argb), argb.width, argb.height,
+                )
+                requestPreviewUpdate(immediate = true)
             } catch (e: Exception) {
                 Log.e(TAG, "decode failed for $uri", e)
             }
         }
     }
 
-    fun applyTransform(rotation: Float, cropRect: Rect, isCropping: Boolean) {
-        val original = _originalBitmap.value ?: return
+    // --- document mutation ----------------------------------------------------
+
+    fun updateDocument(pushUndo: Boolean = true, transform: (EditDocument) -> EditDocument) {
+        val prev = _document.value
+        val next = transform(prev)
+        if (next === prev) return
+        if (pushUndo) {
+            history.push(prev)
+            _canUndo.value = history.canUndo
+            _canRedo.value = history.canRedo
+        }
+        compositor.invalidateCache()
+        _document.value = next
+        requestPreviewUpdate()
+    }
+
+    fun undo() {
+        val current = _document.value
+        val prev = history.undo(current) ?: return
+        _canUndo.value = history.canUndo
+        _canRedo.value = history.canRedo
+        compositor.invalidateCache()
+        _document.value = prev
+        requestPreviewUpdate()
+    }
+
+    fun redo() {
+        val current = _document.value
+        val next = history.redo(current) ?: return
+        _canUndo.value = history.canUndo
+        _canRedo.value = history.canRedo
+        compositor.invalidateCache()
+        _document.value = next
+        requestPreviewUpdate()
+    }
+
+    // --- layer operations -----------------------------------------------------
+
+    fun setActiveLayer(index: Int) = updateDocument(pushUndo = false) { it.setActiveLayer(index) }
+    fun moveLayer(from: Int, to: Int) = updateDocument { it.moveLayer(from, to) }
+    fun removeLayer(index: Int) = updateDocument { it.removeLayer(index) }
+    fun duplicateLayer(index: Int) = updateDocument { it.duplicateLayer(index) }
+    fun mergeDown(index: Int) = updateDocument { compositor.mergeDown(it, index) }
+    fun flatten() = updateDocument { compositor.flatten(it) }
+
+    fun setLayerVisibility(index: Int, visible: Boolean) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(visible = visible) } }
+
+    fun setLayerOpacity(index: Int, opacity: Float) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(opacity = opacity.coerceIn(0f, 1f)) } }
+
+    fun setLayerBlendMode(index: Int, mode: LayerBlendMode) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(blendMode = mode) } }
+
+    fun renameLayer(index: Int, name: String) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(name = name) } }
+
+    fun addAdjustmentLayer(adjustment: LayerAdjustment) =
+        updateDocument { it.addLayer(AdjustmentLayer(adjustment)) }
+
+    fun addEmptyPixelLayer() {
+        val doc = _document.value
+        val w = doc.canvasWidth.coerceAtLeast(1)
+        val h = doc.canvasHeight.coerceAtLeast(1)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        updateDocument { it.addLayer(PixelLayer(BitmapReference(bmp), name = "Layer")) }
+    }
+
+    // --- layer masks ----------------------------------------------------------
+
+    fun deleteLayerMask(index: Int) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(mask = null) } }
+
+    fun invertLayerMask(index: Int) =
+        updateDocument {
+            it.updateLayer(index) { l -> l.copyBase(mask = l.mask?.invert() ?: l.mask) }
+        }
+
+    fun setLayerMask(index: Int, mask: LayerMask) =
+        updateDocument { it.updateLayer(index) { l -> l.copyBase(mask = mask) } }
+
+    // --- adjustment editing ---------------------------------------------------
+
+    /** Ensures the active layer is an [AdjustmentLayer] whose adjustment satisfies [match]. */
+    fun ensureAdjustment(match: (LayerAdjustment) -> Boolean, create: () -> LayerAdjustment) {
+        updateDocument(pushUndo = false) { doc ->
+            val idx = doc.layers.indexOfLast { it is AdjustmentLayer && match(it.adjustment) }
+            if (idx >= 0) doc.setActiveLayer(idx)
+            else doc.addLayer(AdjustmentLayer(create()))
+        }
+    }
+
+    fun updateActiveAdjustment(adjustment: LayerAdjustment) {
+        updateDocument { doc ->
+            val i = doc.activeLayerIndex
+            if (doc.layers.getOrNull(i) is AdjustmentLayer) {
+                doc.updateLayer(i) { (it as AdjustmentLayer).copy(adjustment = adjustment) }
+            } else doc
+        }
+    }
+
+    // --- destructive edits on the active pixel layer --------------------------
+
+    /**
+     * Applies [transform] to the active pixel layer's bitmap on a background thread.
+     * If a [selection] is present, the result is constrained to the selected area.
+     */
+    fun applyToActivePixelLayer(transform: (Bitmap) -> Bitmap) {
+        val doc = _document.value
+        val index = doc.activeLayerIndex
+        val layer = doc.layers.getOrNull(index) as? PixelLayer ?: return
+        val sel = _selection.value
         viewModelScope.launch(Dispatchers.Default) {
-            val matrix = Matrix().apply { postRotate(rotation) }
-            var result = Bitmap.createBitmap(
-                original, 0, 0, original.width, original.height, matrix, true,
-            )
-            if (!isCropping) {
-                val left = (cropRect.left * result.width).roundToInt().coerceIn(0, result.width - 1)
-                val top = (cropRect.top * result.height).roundToInt().coerceIn(0, result.height - 1)
-                val width = ((cropRect.right - cropRect.left) * result.width).roundToInt()
-                    .coerceAtMost(result.width - left)
-                val height = ((cropRect.bottom - cropRect.top) * result.height).roundToInt()
-                    .coerceAtMost(result.height - top)
-                if (width > 0 && height > 0) {
-                    val cropped = Bitmap.createBitmap(result, left, top, width, height)
-                    if (cropped !== result) {
-                        try { if (result !== original) result.recycle() } catch (_: Exception) {}
-                        result = cropped
+            val src = layer.bitmapRef.bitmap
+            val edited = transform(src)
+            val finalBmp = if (sel != null && !sel.isEmpty()) {
+                blendWithSelection(src, edited, sel)
+            } else edited
+            withContext(Dispatchers.Main) {
+                updateDocument {
+                    it.updateLayer(index) { l ->
+                        (l as PixelLayer).copy(bitmapRef = BitmapReference(finalBmp))
                     }
                 }
-            }
-            val previous = _transformedBitmap.value
-            _transformedBitmap.value = result
-            if (previous != null && previous !== original && previous !== result) {
-                try { if (!previous.isRecycled) previous.recycle() } catch (_: Exception) {}
             }
         }
     }
 
+    private fun blendWithSelection(original: Bitmap, edited: Bitmap, sel: Selection): Bitmap {
+        val w = edited.width
+        val h = edited.height
+        val out = edited.copy(Bitmap.Config.ARGB_8888, true)
+        val orig = IntArray(w * h)
+        val origScaled = if (original.width == w && original.height == h) original
+        else Bitmap.createScaledBitmap(original, w, h, true)
+        origScaled.getPixels(orig, 0, w, 0, 0, w, h)
+        val edt = IntArray(w * h)
+        out.getPixels(edt, 0, w, 0, 0, w, h)
+        for (y in 0 until h) {
+            val sy = (y * sel.height / h).coerceIn(0, sel.height - 1)
+            for (x in 0 until w) {
+                val sx = (x * sel.width / w).coerceIn(0, sel.width - 1)
+                val m = sel.mask[sy * sel.width + sx]
+                if (m >= 1f) continue
+                val i = y * w + x
+                val o = orig[i]; val e = edt[i]
+                val a = lerpCh(o ushr 24, e ushr 24, m)
+                val r = lerpCh(o ushr 16, e ushr 16, m)
+                val g = lerpCh(o ushr 8, e ushr 8, m)
+                val b = lerpCh(o, e, m)
+                edt[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        out.setPixels(edt, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    private fun lerpCh(a: Int, b: Int, t: Float): Int {
+        val av = a and 0xFF; val bv = b and 0xFF
+        return (av + (bv - av) * t).toInt().coerceIn(0, 255)
+    }
+
+    // --- selection ------------------------------------------------------------
+
+    fun setSelection(sel: Selection?) { _selection.value = sel }
+
+    fun selectionToActiveMask() {
+        val sel = _selection.value ?: return
+        val index = _document.value.activeLayerIndex
+        setLayerMask(index, sel.toLayerMask())
+    }
+
+    // --- transforms -----------------------------------------------------------
+
+    fun rotate(delta: Float) = updateDocument { it.copy(rotation = it.rotation + delta) }
+
+    fun setRotation(angle: Float) = updateDocument { it.copy(rotation = angle) }
+
+    fun setCropRect(rect: androidx.compose.ui.geometry.Rect) =
+        updateDocument { it.copy(cropRect = rect) }
+
+    fun setCroppingPreview(cropping: Boolean) {
+        croppingPreview = cropping
+        requestPreviewUpdate(immediate = true)
+    }
+
+    fun setPerspective(corners: com.vayunmathur.photos.data.PerspectiveCorners) =
+        updateDocument { it.copy(perspectiveCorners = corners) }
+
+    // --- preview --------------------------------------------------------------
+
+    private fun requestPreviewUpdate(immediate: Boolean = false) {
+        previewJob?.cancel()
+        previewJob = viewModelScope.launch(Dispatchers.Default) {
+            if (!immediate) delay(150)
+            val doc = _document.value
+            if (doc.layers.isEmpty()) {
+                _compositedPreview.value = null
+                return@launch
+            }
+            val renderDoc = if (croppingPreview) doc.copy(cropRect = EditDocument.FULL_CROP, rotation = 0f) else doc
+            val preview = try {
+                compositor.compositePreview(renderDoc, PREVIEW_MAX_DIM)
+            } catch (e: Exception) {
+                Log.e(TAG, "preview composite failed", e)
+                return@launch
+            }
+            _compositedPreview.value = preview
+        }
+    }
+
+    // --- save -----------------------------------------------------------------
+
     fun savePhoto(
         photo: Photo,
-        rotation: Float,
-        cropRect: Rect,
+        asCopy: Boolean,
         strokes: List<SerializedStroke>,
         texts: List<TextElement>,
         viewportWidth: Float,
         viewportHeight: Float,
-        asCopy: Boolean,
-        imageAdjustments: ImageAdjustments = ImageAdjustments(),
-        curves: CurvesAdjustment = CurvesAdjustment(),
-        hsl: HslAdjustments = HslAdjustments(),
-        blur: BlurParams = BlurParams(),
-        selective: SelectiveEdits = SelectiveEdits(),
-        healing: HealingStrokes = HealingStrokes(),
-        perspective: PerspectiveCorners = PerspectiveCorners(),
         onComplete: () -> Unit,
     ) {
-        Log.d(TAG, "savePhoto called with asCopy=$asCopy")
         val ctx: Context = getApplication()
+        val doc = _document.value
         viewModelScope.launch {
             val result = withContext(Dispatchers.Default) {
-                prepareAndWrite(ctx, photo, rotation, cropRect, strokes, texts, viewportWidth, viewportHeight, asCopy, imageAdjustments, curves, hsl, blur, selective, healing, perspective)
+                val composite = compositor.composite(doc, Int.MAX_VALUE)
+                bakeOverlays(composite, strokes, texts, viewportWidth, viewportHeight)
+                writeBitmap(ctx, photo, composite, asCopy)
             }
             when (result) {
                 is WriteResult.Success -> onComplete()
@@ -302,29 +373,62 @@ class PhotoEditViewModel(
         }
     }
 
+    private fun bakeOverlays(
+        target: Bitmap,
+        strokes: List<SerializedStroke>,
+        texts: List<TextElement>,
+        viewportWidth: Float,
+        viewportHeight: Float,
+    ) {
+        if (strokes.isEmpty() && texts.isEmpty()) return
+        val canvas = android.graphics.Canvas(target)
+        if (strokes.isNotEmpty() && viewportWidth > 0f && viewportHeight > 0f) {
+            val renderer = androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create()
+            val identity = Matrix()
+            canvas.save()
+            canvas.scale(target.width / viewportWidth, target.height / viewportHeight)
+            strokes.forEach { s ->
+                try { renderer.draw(canvas, s.deserialize(), identity) } catch (_: Exception) {}
+            }
+            canvas.restore()
+        }
+        if (texts.isNotEmpty()) {
+            val paint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                style = android.graphics.Paint.Style.FILL
+                textAlign = android.graphics.Paint.Align.LEFT
+            }
+            texts.forEach { t ->
+                paint.color = t.color
+                paint.textSize = t.fontSize * (target.width / viewportWidth)
+                val fm = paint.fontMetrics
+                canvas.save()
+                canvas.translate(t.x * target.width, t.y * target.height)
+                canvas.rotate(t.rotation)
+                canvas.drawText(t.text, 0f, -fm.ascent, paint)
+                canvas.restore()
+            }
+        }
+    }
+
     fun onWritePermissionGranted() {
         val bytes = pendingSaveBytes ?: return
         val uri = pendingSaveUri ?: return
         val onComplete = pendingSaveOnComplete ?: return
-        pendingSaveBytes = null
-        pendingSaveUri = null
-        pendingSaveOnComplete = null
+        pendingSaveBytes = null; pendingSaveUri = null; pendingSaveOnComplete = null
         _writePermissionRequest.value = null
-
         val ctx: Context = getApplication()
         viewModelScope.launch {
             withContext(Dispatchers.Default) {
                 try {
                     val resolver = ctx.contentResolver
-                    resolver.openOutputStream(uri, "w")?.use { out ->
-                        out.write(bytes)
-                    } ?: throw Exception("openOutputStream returned null after permission grant")
-                    val updateValues = ContentValues().apply {
+                    resolver.openOutputStream(uri, "w")?.use { it.write(bytes) }
+                        ?: throw Exception("openOutputStream returned null after permission grant")
+                    val values = ContentValues().apply {
                         put(MediaStore.Images.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
                         put(MediaStore.Images.Media.SIZE, bytes.size.toLong())
                     }
-                    resolver.update(uri, updateValues, null, null)
-                    Log.d(TAG, "Overwrite SUCCESS after permission grant")
+                    resolver.update(uri, values, null, null)
                 } catch (e: Exception) {
                     Log.e(TAG, "Overwrite FAILED after permission grant", e)
                 }
@@ -334,31 +438,20 @@ class PhotoEditViewModel(
     }
 
     fun onWritePermissionDenied() {
-        pendingSaveBytes = null
-        pendingSaveUri = null
-        pendingSaveOnComplete = null
+        pendingSaveBytes = null; pendingSaveUri = null; pendingSaveOnComplete = null
         _writePermissionRequest.value = null
     }
 
     override fun onCleared() {
         super.onCleared()
-        val transformed = _transformedBitmap.value
-        val original = _originalBitmap.value
-        _transformedBitmap.value = null
-        _originalBitmap.value = null
-        if (transformed != null && transformed !== original) {
-            try { if (!transformed.isRecycled) transformed.recycle() } catch (_: Exception) {}
-        }
-        synchronized(decodedCache) {
-            decodedCache.values.forEach { bmp ->
-                try { if (!bmp.isRecycled) bmp.recycle() } catch (_: Exception) {}
-            }
-            decodedCache.clear()
-        }
+        _compositedPreview.value = null
+        _baseBitmap.value = null
+        _document.value = EditDocument()
     }
 
     companion object {
         private const val TAG = "PhotoEditViewModel"
+        private const val PREVIEW_MAX_DIM = 1024
 
         private sealed class WriteResult {
             data object Success : WriteResult()
@@ -366,127 +459,14 @@ class PhotoEditViewModel(
             data class Error(val exception: Exception) : WriteResult()
         }
 
-        private fun prepareAndWrite(
+        private fun writeBitmap(
             context: Context,
             photo: Photo,
-            rotation: Float,
-            cropRect: Rect,
-            strokes: List<SerializedStroke>,
-            texts: List<TextElement>,
-            viewportWidth: Float,
-            viewportHeight: Float,
+            bitmap: Bitmap,
             asCopy: Boolean,
-            imageAdjustments: ImageAdjustments = ImageAdjustments(),
-            curves: CurvesAdjustment = CurvesAdjustment(),
-            hsl: HslAdjustments = HslAdjustments(),
-            blur: BlurParams = BlurParams(),
-            selective: SelectiveEdits = SelectiveEdits(),
-            healing: HealingStrokes = HealingStrokes(),
-            perspective: PerspectiveCorners = PerspectiveCorners(),
         ): WriteResult {
-            Log.d(TAG, "prepareAndWrite: asCopy=$asCopy, uri=${photo.uri}")
-            val photoUri = Uri.parse(photo.uri)
-            val source = android.graphics.ImageDecoder.createSource(context.contentResolver, photoUri)
-            var originalBitmap = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
-            }
-
-            // 1. Rotate
-            val matrix = Matrix().apply { postRotate(rotation) }
-            var transformedBitmap = Bitmap.createBitmap(
-                originalBitmap, 0, 0, originalBitmap.width, originalBitmap.height, matrix, true,
-            )
-
-            // 2. Crop
-            val left = (cropRect.left * transformedBitmap.width).roundToInt()
-                .coerceIn(0, transformedBitmap.width - 1)
-            val top = (cropRect.top * transformedBitmap.height).roundToInt()
-                .coerceIn(0, transformedBitmap.height - 1)
-            val width = ((cropRect.right - cropRect.left) * transformedBitmap.width).roundToInt()
-                .coerceAtMost(transformedBitmap.width - left)
-            val height = ((cropRect.bottom - cropRect.top) * transformedBitmap.height).roundToInt()
-                .coerceAtMost(transformedBitmap.height - top)
-            if (width > 0 && height > 0) {
-                transformedBitmap = Bitmap.createBitmap(transformedBitmap, left, top, width, height)
-            }
-
-            // 3. Perspective correction
-            var resultBitmap = transformedBitmap.copy(Bitmap.Config.ARGB_8888, true)
-            if (!perspective.isIdentity()) {
-                resultBitmap = perspective.applyPerspectiveToBitmap(resultBitmap)
-            }
-
-            // 4. Image adjustments via ColorMatrix
-            if (imageAdjustments != ImageAdjustments()) {
-                resultBitmap = imageAdjustments.applyToBitmap(resultBitmap)
-            }
-
-            // 5. Curves LUT
-            if (!curves.isIdentity()) {
-                resultBitmap = curves.applyLutToBitmap(resultBitmap)
-            }
-
-            // 6. HSL tuning
-            if (!hsl.isIdentity()) {
-                resultBitmap = hsl.applyHslToBitmap(resultBitmap)
-            }
-
-            // 7. Selective edits
-            if (!selective.isIdentity()) {
-                resultBitmap = selective.applySelectiveEdits(resultBitmap)
-            }
-
-            // 8. Blur
-            if (!blur.isIdentity()) {
-                resultBitmap = blur.applyBlurToBitmap(resultBitmap)
-            }
-
-            // 9. Healing strokes
-            if (!healing.isIdentity()) {
-                resultBitmap = healing.applyHealingToBitmap(resultBitmap)
-            }
-
-            // 10. Render ink strokes
-            val canvas = android.graphics.Canvas(resultBitmap)
-            if (strokes.isNotEmpty()) {
-                val renderer = androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create()
-                val identityMatrix = Matrix()
-                val scaleX = resultBitmap.width.toFloat() / viewportWidth
-                val scaleY = resultBitmap.height.toFloat() / viewportHeight
-                canvas.save()
-                canvas.scale(scaleX, scaleY)
-                strokes.forEach { serialized ->
-                    try {
-                        val stroke = serialized.deserialize()
-                        renderer.draw(canvas, stroke, identityMatrix)
-                    } catch (_: Exception) {}
-                }
-                canvas.restore()
-            }
-
-            // 11. Render text overlays
-            if (texts.isNotEmpty()) {
-                val textPaint = android.graphics.Paint().apply {
-                    isAntiAlias = true
-                    style = android.graphics.Paint.Style.FILL
-                    textAlign = android.graphics.Paint.Align.LEFT
-                }
-                texts.forEach { textElement ->
-                    textPaint.color = textElement.color
-                    textPaint.textSize = textElement.fontSize * (resultBitmap.width / viewportWidth)
-                    val fontMetrics = textPaint.fontMetrics
-                    canvas.save()
-                    canvas.translate(textElement.x * resultBitmap.width, textElement.y * resultBitmap.height)
-                    canvas.rotate(textElement.rotation)
-                    canvas.drawText(textElement.text, 0f, -fontMetrics.ascent, textPaint)
-                    canvas.restore()
-                }
-            }
-
-            // 12. Write to disk
             val resolver = context.contentResolver
             val nowSeconds = System.currentTimeMillis() / 1000
-
             if (asCopy) {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${photo.name}")
@@ -497,7 +477,7 @@ class PhotoEditViewModel(
                 val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
                 uri?.let {
                     resolver.openOutputStream(it)?.use { out ->
-                        resultBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
                     }
                 }
                 return WriteResult.Success
@@ -505,25 +485,19 @@ class PhotoEditViewModel(
 
             val uri = Uri.parse(photo.uri)
             val jpegBytes = ByteArrayOutputStream().also {
-                resultBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)
             }.toByteArray()
-
-            // Try direct write first (works with MANAGE_MEDIA permission)
             try {
-                resolver.openOutputStream(uri, "w")?.use { out ->
-                    out.write(jpegBytes)
-                }
-                val updateValues = ContentValues().apply {
+                resolver.openOutputStream(uri, "w")?.use { it.write(jpegBytes) }
+                val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DATE_MODIFIED, nowSeconds)
                     put(MediaStore.Images.Media.SIZE, jpegBytes.size.toLong())
                 }
-                resolver.update(uri, updateValues, null, null)
-                Log.d(TAG, "Direct overwrite SUCCESS for $uri")
+                resolver.update(uri, values, null, null)
                 return WriteResult.Success
             } catch (e: Exception) {
                 Log.d(TAG, "Direct write failed, falling back to createWriteRequest", e)
             }
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val pendingIntent = MediaStore.createWriteRequest(resolver, listOf(uri))
                 return WriteResult.NeedsPermission(pendingIntent.intentSender, jpegBytes, uri)
