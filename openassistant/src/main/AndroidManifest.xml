@@ -18,7 +18,7 @@
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -75,8 +75,12 @@
         <service
             android:name=".util.InferenceService"
             android:exported="true"
-            android:foregroundServiceType="dataSync"
-            android:permission="com.vayunmathur.openassistant.permission.ACCESS_INFERENCE" />
+            android:foregroundServiceType="specialUse"
+            android:permission="com.vayunmathur.openassistant.permission.ACCESS_INFERENCE">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device AI inference engine that must stay resident 24/7 to serve inference requests from the other apps on demand; not time-bounded like a data sync." />
+        </service>
     </application>
 
 </manifest>

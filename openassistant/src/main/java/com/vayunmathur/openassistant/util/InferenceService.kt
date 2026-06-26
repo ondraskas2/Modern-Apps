@@ -138,7 +138,12 @@ class InferenceService : Service() {
             .setOngoing(true)
             .build()
 
-        startForeground(1, notification)
+        androidx.core.app.ServiceCompat.startForeground(
+            this,
+            1,
+            notification,
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        )
     }
 
     private suspend fun executeIntentInference(job: InferenceJob.Intent) {
