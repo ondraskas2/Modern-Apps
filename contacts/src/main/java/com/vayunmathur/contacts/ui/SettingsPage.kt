@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -34,10 +35,10 @@ import okio.sink
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
-    val accounts by viewModel.accounts.collectAsState()
-    val hiddenAccounts by viewModel.hiddenAccounts.collectAsState()
-    val isCalendarSyncEnabled by viewModel.isCalendarSyncEnabled.collectAsState()
-    val contacts by viewModel.contacts.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val hiddenAccounts by viewModel.hiddenAccounts.collectAsStateWithLifecycle()
+    val isCalendarSyncEnabled by viewModel.isCalendarSyncEnabled.collectAsStateWithLifecycle()
+    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -61,7 +62,7 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
                             VcfUtils.exportContacts(contacts, outputStream)
                         }
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        android.util.Log.e("SettingsPage", "Error exporting contacts", e)
                     }
                 }
             }
@@ -128,7 +129,7 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
-                val showAccountLabels by viewModel.showAccountLabels.collectAsState()
+                val showAccountLabels by viewModel.showAccountLabels.collectAsStateWithLifecycle()
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.show_account_labels)) },
                     trailingContent = {

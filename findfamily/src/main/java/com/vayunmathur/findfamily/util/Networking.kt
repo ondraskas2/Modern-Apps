@@ -11,6 +11,7 @@ import com.vayunmathur.library.util.DataStoreUtils
 import dev.whyoleg.cryptography.CryptographyProvider
 import dev.whyoleg.cryptography.algorithms.RSA
 import dev.whyoleg.cryptography.algorithms.SHA512
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlin.io.encoding.Base64
@@ -47,7 +48,7 @@ object Networking {
         privatekey = crypto.privateKeyDecoder(SHA512).decodeFromByteArray(RSA.PrivateKey.Format.PEM, dataStoreUtils.getByteArray("privateKey")!!)
         userid = dataStoreUtils.getLong("userid")!!
 
-        if (userDao.getAll().none { it.id == userid }) {
+        if (userDao.getById(userid) == null) {
             userDao.upsert(
                 User(
                     meName,
@@ -68,12 +69,9 @@ object Networking {
             val x = makeRequest()
             network_is_down = false
             return x
+        } catch (e: CancellationException) {
+            throw e
         } catch(e: Exception) {
-            // Check for timeout exceptions without direct Ktor dependency if possible,
-            // but for now we'll just catch all and assume network might be down if it fails.
-            if (!network_is_down) {
-                println("network error: ${e.message}")
-            }
             network_is_down = true
         }
         return null
@@ -88,8 +86,9 @@ object Networking {
                     headers = mapOf("Content-Type" to "application/json"),
                     body = body
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                println("Request failed: ${e.message}")
                 null
             }
         }
@@ -117,7 +116,7 @@ object Networking {
                 url = "$URL/api/getkey",
                 method = "POST",
                 headers = mapOf("Content-Type" to "application/json"),
-                body = "{\"userid\": ${userid.toULong()}}"
+                body = json.encodeToString(GetKeyRequest(userid.toULong()))
             )
             if(response.status != 200) {
                 return@checkNetworkDown null
@@ -153,12 +152,12 @@ object Networking {
     }
 
     suspend fun receiveLocations(): List<LocationValue>? {
-        val strings: List<String>? = makeRequest("/api/location/receive", "{\"userid\": $userid}")
+        val strings: List<String>? = makeRequest("/api/location/receive", json.encodeToString(UserIdRequest(userid)))
         return strings?.map { decryptLocation(it) }?.also { decoded ->
             // Opportunistically update peer platform tags learned from incoming heartbeats.
             decoded.forEach { (loc, platform) ->
                 if (platform != null) {
-                    val u = userDao.getAll().firstOrNull { it.id == loc.userid }
+                    val u = userDao.getById(loc.userid)
                     if (u != null && u.platform != platform) {
                         userDao.upsert(u.copy(platform = platform))
                     }
@@ -210,7 +209,7 @@ object Networking {
      * is cleared on receive (same semantics as `/api/location/receive`).
      */
     suspend fun receiveUwbMessages(): List<UwbEnvelope>? {
-        val strings: List<String>? = makeRequest("/api/uwb/receive", "{\"userid\": $userid}")
+        val strings: List<String>? = makeRequest("/api/uwb/receive", json.encodeToString(UserIdRequest(userid)))
         val cipher = privatekey?.decryptor() ?: return null
         return strings?.mapNotNull { b64 ->
             runCatching {
@@ -240,4 +239,10 @@ object Networking {
 
     @Serializable
     private data class LocationSharingData(val recipientUserID: ULong, val encryptedLocation: String)
+
+    @Serializable
+    private data class UserIdRequest(val userid: Long)
+
+    @Serializable
+    private data class GetKeyRequest(val userid: ULong)
 }

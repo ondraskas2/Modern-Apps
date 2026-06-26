@@ -6,6 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.downloadservice.InitialDownloadChecker
@@ -22,7 +24,6 @@ import com.vayunmathur.openassistant.data.MessageDao
 import com.vayunmathur.openassistant.ui.LiteRTChatUi
 import com.vayunmathur.openassistant.ui.SettingsPage
 import com.vayunmathur.openassistant.util.AssistantViewModel
-import com.vayunmathur.openassistant.util.AssistantViewModelFactory
 
 class MainActivity : ComponentActivity() {
 
@@ -34,7 +35,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var messageDao: MessageDao
     private lateinit var memoryDao: MemoryDao
     private val assistantViewModel: AssistantViewModel by viewModels {
-        AssistantViewModelFactory(application, conversationDao, messageDao, memoryDao)
+        viewModelFactory {
+            initializer {
+                AssistantViewModel(application, conversationDao, messageDao, memoryDao)
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

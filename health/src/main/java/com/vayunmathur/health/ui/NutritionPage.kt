@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.health.R
 import com.vayunmathur.health.Route
+import com.vayunmathur.health.data.NutritionData
 import com.vayunmathur.health.data.RecordType
 import com.vayunmathur.health.ui.components.GroupedSection
 import com.vayunmathur.health.ui.components.MetricRing
@@ -28,57 +29,60 @@ import com.vayunmathur.library.util.round
 import com.vayunmathur.library.ui.*
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.hours
-import kotlin.time.Instant
 import kotlinx.datetime.*
 
 data class NutrientDV(
     val name: String,
-    val type: RecordType,
     val dailyValue: Double,
     val unit: String,
-    val sumFunction: (RecordType, Instant, Instant) -> kotlinx.coroutines.flow.Flow<Double>
+    val accessor: (NutritionData) -> Double,
 )
 
-/** Shared nutrient catalog used by both NutritionPage and NutritionDetailsPage. */
-internal fun nutrientCatalog(viewModel: HealthViewModel): List<NutrientDV> = listOf(
-    NutrientDV("Protein", RecordType.Nutrition, 50.0, "g") { t, s, e -> viewModel.sumProteinInRange(t, s, e) },
-    NutrientDV("Carbohydrates", RecordType.Nutrition, 275.0, "g") { t, s, e -> viewModel.sumCarbsInRange(t, s, e) },
-    NutrientDV("Fat", RecordType.Nutrition, 78.0, "g") { t, s, e -> viewModel.sumFatInRange(t, s, e) },
-    NutrientDV("Fiber", RecordType.Nutrition, 28.0, "g") { t, s, e -> viewModel.sumFiberInRange(t, s, e) },
-    NutrientDV("Sugar", RecordType.Nutrition, 50.0, "g") { t, s, e -> viewModel.sumSugarInRange(t, s, e) },
-    NutrientDV("Sodium", RecordType.Nutrition, 2300.0, "mg") { t, s, e -> viewModel.sumSodiumInRange(t, s, e) },
-    NutrientDV("Cholesterol", RecordType.Nutrition, 300.0, "mg") { t, s, e -> viewModel.sumCholesterolInRange(t, s, e) },
-    NutrientDV("Saturated Fat", RecordType.Nutrition, 20.0, "g") { t, s, e -> viewModel.sumSaturatedFatInRange(t, s, e) },
-    NutrientDV("Trans Fat", RecordType.Nutrition, 2.0, "g") { t, s, e -> viewModel.sumTransFatInRange(t, s, e) },
-    NutrientDV("Vitamin A", RecordType.Nutrition, 900.0, "µg") { t, s, e -> viewModel.sumVitaminAInRange(t, s, e) },
-    NutrientDV("Vitamin C", RecordType.Nutrition, 90.0, "mg") { t, s, e -> viewModel.sumVitaminCInRange(t, s, e) },
-    NutrientDV("Vitamin D", RecordType.Nutrition, 20.0, "µg") { t, s, e -> viewModel.sumVitaminDInRange(t, s, e) },
-    NutrientDV("Vitamin E", RecordType.Nutrition, 15.0, "mg") { t, s, e -> viewModel.sumVitaminEInRange(t, s, e) },
-    NutrientDV("Vitamin K", RecordType.Nutrition, 120.0, "µg") { t, s, e -> viewModel.sumVitaminKInRange(t, s, e) },
-    NutrientDV("Vitamin B6", RecordType.Nutrition, 1.7, "mg") { t, s, e -> viewModel.sumVitaminB6InRange(t, s, e) },
-    NutrientDV("Vitamin B12", RecordType.Nutrition, 2.4, "µg") { t, s, e -> viewModel.sumVitaminB12InRange(t, s, e) },
-    NutrientDV("Thiamin", RecordType.Nutrition, 1.2, "mg") { t, s, e -> viewModel.sumThiaminInRange(t, s, e) },
-    NutrientDV("Riboflavin", RecordType.Nutrition, 1.3, "mg") { t, s, e -> viewModel.sumRiboflavinInRange(t, s, e) },
-    NutrientDV("Niacin", RecordType.Nutrition, 16.0, "mg") { t, s, e -> viewModel.sumNiacinInRange(t, s, e) },
-    NutrientDV("Folate", RecordType.Nutrition, 400.0, "µg") { t, s, e -> viewModel.sumFolateInRange(t, s, e) },
-    NutrientDV("Biotin", RecordType.Nutrition, 30.0, "µg") { t, s, e -> viewModel.sumBiotinInRange(t, s, e) },
-    NutrientDV("Pantothenic Acid", RecordType.Nutrition, 5.0, "mg") { t, s, e -> viewModel.sumPantothenicAcidInRange(t, s, e) },
-    NutrientDV("Calcium", RecordType.Nutrition, 1300.0, "mg") { t, s, e -> viewModel.sumCalciumInRange(t, s, e) },
-    NutrientDV("Iron", RecordType.Nutrition, 18.0, "mg") { t, s, e -> viewModel.sumIronInRange(t, s, e) },
-    NutrientDV("Magnesium", RecordType.Nutrition, 420.0, "mg") { t, s, e -> viewModel.sumMagnesiumInRange(t, s, e) },
-    NutrientDV("Phosphorus", RecordType.Nutrition, 1250.0, "mg") { t, s, e -> viewModel.sumPhosphorusInRange(t, s, e) },
-    NutrientDV("Iodine", RecordType.Nutrition, 150.0, "µg") { t, s, e -> viewModel.sumIodineInRange(t, s, e) },
-    NutrientDV("Zinc", RecordType.Nutrition, 11.0, "mg") { t, s, e -> viewModel.sumZincInRange(t, s, e) },
-    NutrientDV("Selenium", RecordType.Nutrition, 55.0, "µg") { t, s, e -> viewModel.sumSeleniumInRange(t, s, e) },
-    NutrientDV("Copper", RecordType.Nutrition, 0.9, "mg") { t, s, e -> viewModel.sumCopperInRange(t, s, e) },
-    NutrientDV("Manganese", RecordType.Nutrition, 2.3, "mg") { t, s, e -> viewModel.sumManganeseInRange(t, s, e) },
-    NutrientDV("Chromium", RecordType.Nutrition, 35.0, "µg") { t, s, e -> viewModel.sumChromiumInRange(t, s, e) },
-    NutrientDV("Molybdenum", RecordType.Nutrition, 45.0, "µg") { t, s, e -> viewModel.sumMolybdenumInRange(t, s, e) },
-    NutrientDV("Chloride", RecordType.Nutrition, 2300.0, "mg") { t, s, e -> viewModel.sumChlorideInRange(t, s, e) },
-    NutrientDV("Potassium", RecordType.Nutrition, 4700.0, "mg") { t, s, e -> viewModel.sumPotassiumInRange(t, s, e) },
-    NutrientDV("Caffeine", RecordType.Nutrition, 400.0, "mg") { t, s, e -> viewModel.sumCaffeineInRange(t, s, e) },
-    NutrientDV("Hydration", RecordType.Hydration, 3.0, "L") { t, s, e -> viewModel.sumInRange(t, s, e) }
+/**
+ * Shared nutrient catalog used by both NutritionPage and NutritionDetailsPage.
+ * Each entry reads its value off a single summed [NutritionData] (one query) via [NutrientDV.accessor].
+ */
+internal val nutrientCatalog: List<NutrientDV> = listOf(
+    NutrientDV("Protein", 50.0, "g") { it.protein },
+    NutrientDV("Carbohydrates", 275.0, "g") { it.carbohydrates },
+    NutrientDV("Fat", 78.0, "g") { it.fat },
+    NutrientDV("Fiber", 28.0, "g") { it.fiber },
+    NutrientDV("Sugar", 50.0, "g") { it.sugar },
+    NutrientDV("Sodium", 2300.0, "mg") { it.sodium },
+    NutrientDV("Cholesterol", 300.0, "mg") { it.cholesterol },
+    NutrientDV("Saturated Fat", 20.0, "g") { it.saturatedFat },
+    NutrientDV("Trans Fat", 2.0, "g") { it.transFat },
+    NutrientDV("Vitamin A", 900.0, "µg") { it.vitaminA },
+    NutrientDV("Vitamin C", 90.0, "mg") { it.vitaminC },
+    NutrientDV("Vitamin D", 20.0, "µg") { it.vitaminD },
+    NutrientDV("Vitamin E", 15.0, "mg") { it.vitaminE },
+    NutrientDV("Vitamin K", 120.0, "µg") { it.vitaminK },
+    NutrientDV("Vitamin B6", 1.7, "mg") { it.vitaminB6 },
+    NutrientDV("Vitamin B12", 2.4, "µg") { it.vitaminB12 },
+    NutrientDV("Thiamin", 1.2, "mg") { it.thiamin },
+    NutrientDV("Riboflavin", 1.3, "mg") { it.riboflavin },
+    NutrientDV("Niacin", 16.0, "mg") { it.niacin },
+    NutrientDV("Folate", 400.0, "µg") { it.folate },
+    NutrientDV("Biotin", 30.0, "µg") { it.biotin },
+    NutrientDV("Pantothenic Acid", 5.0, "mg") { it.pantothenicAcid },
+    NutrientDV("Calcium", 1300.0, "mg") { it.calcium },
+    NutrientDV("Iron", 18.0, "mg") { it.iron },
+    NutrientDV("Magnesium", 420.0, "mg") { it.magnesium },
+    NutrientDV("Phosphorus", 1250.0, "mg") { it.phosphorus },
+    NutrientDV("Iodine", 150.0, "µg") { it.iodine },
+    NutrientDV("Zinc", 11.0, "mg") { it.zinc },
+    NutrientDV("Selenium", 55.0, "µg") { it.selenium },
+    NutrientDV("Copper", 0.9, "mg") { it.copper },
+    NutrientDV("Manganese", 2.3, "mg") { it.manganese },
+    NutrientDV("Chromium", 35.0, "µg") { it.chromium },
+    NutrientDV("Molybdenum", 45.0, "µg") { it.molybdenum },
+    NutrientDV("Chloride", 2300.0, "mg") { it.chloride },
+    NutrientDV("Potassium", 4700.0, "mg") { it.potassium },
+    NutrientDV("Caffeine", 400.0, "mg") { it.caffeine },
 )
+
+/** Hydration is its own RecordType (not part of NutritionData); its value is supplied separately. */
+internal val hydrationNutrient = NutrientDV("Hydration", 3.0, "L") { 0.0 }
 
 /**
  * Slim nutrition home — answers "how am I doing on nutrition today?" at a glance.
@@ -92,18 +96,13 @@ fun NutritionPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
     val dayStart = today.atStartOfDayIn(tz)
     val dayEnd = dayStart.plus(24.hours)
 
-    val totalCalories by remember(dayStart, dayEnd) {
-        viewModel.sumInRange(RecordType.Nutrition, dayStart, dayEnd)
-    }.collectAsState(0.0)
-    val totalProtein by remember(dayStart, dayEnd) {
-        viewModel.sumProteinInRange(RecordType.Nutrition, dayStart, dayEnd)
-    }.collectAsState(0.0)
-    val totalCarbs by remember(dayStart, dayEnd) {
-        viewModel.sumCarbsInRange(RecordType.Nutrition, dayStart, dayEnd)
-    }.collectAsState(0.0)
-    val totalFat by remember(dayStart, dayEnd) {
-        viewModel.sumFatInRange(RecordType.Nutrition, dayStart, dayEnd)
-    }.collectAsState(0.0)
+    val totals by remember(dayStart, dayEnd) {
+        viewModel.sumNutritionInRange(RecordType.Nutrition, dayStart, dayEnd)
+    }.collectAsState(NutritionData())
+    val totalCalories = totals.calories
+    val totalProtein = totals.protein
+    val totalCarbs = totals.carbohydrates
+    val totalFat = totals.fat
     val loggedMeals by remember(dayStart, dayEnd) {
         viewModel.getAllRecordsInRange(RecordType.Nutrition, dayStart, dayEnd)
     }.collectAsState(emptyList())
@@ -265,10 +264,7 @@ private fun CompactMacroRing(
 
 /** Single nutrient row used by NutritionDetailsPage. */
 @Composable
-internal fun NutrientProgressRow(nutrient: NutrientDV, start: Instant, end: Instant) {
-    val currentAmount by remember(nutrient, start, end) {
-        nutrient.sumFunction(nutrient.type, start, end)
-    }.collectAsState(0.0)
+internal fun NutrientProgressRow(nutrient: NutrientDV, currentAmount: Double) {
     val progress = (currentAmount / nutrient.dailyValue).toFloat().coerceIn(0f, 1f)
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(

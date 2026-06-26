@@ -403,7 +403,7 @@ fun VideoPlayer(
     // Default to a sane ratio until the player loads the real one
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
 
-    val exoPlayer = remember {
+    val exoPlayer = remember(uri) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(uri))
             prepare()

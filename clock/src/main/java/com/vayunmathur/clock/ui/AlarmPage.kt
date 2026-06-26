@@ -1,5 +1,6 @@
 package com.vayunmathur.clock.ui
 
+import android.content.Context
 import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,7 +65,7 @@ import kotlinx.datetime.format.char
 fun AlarmPage(backStack: NavBackStack<Route>, clockViewModel: ClockViewModel, newAlarmParams: Route.NewAlarmDialog? = null) {
     val alarms by clockViewModel.alarms.collectAsState()
     val context = LocalContext.current
-    val alarmScheduler = remember { AlarmScheduler.get() }
+    val alarmScheduler = AlarmScheduler
 
     // One ringtone picker for the whole page; tracks which alarm is choosing.
     var pickingAlarmId by remember { mutableStateOf<Long?>(null) }
@@ -177,22 +178,8 @@ fun AlarmCard(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    val format = if(DateFormat.is24HourFormat(context)) {
-                        LocalTime.Format {
-                            hour(Padding.ZERO)
-                            char(':')
-                            minute()
-                        }
-                    } else {
-                        LocalTime.Format {
-                            amPmHour(Padding.NONE)
-                            char(':')
-                            minute()
-                            amPmMarker(" AM", " PM")
-                        }
-                    }
                     Text(
-                        alarm.time.format(format),
+                        formatAlarmTime(context, alarm.time),
                         style = MaterialTheme.typography.displayMedium,
                         color = if (alarm.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -253,4 +240,26 @@ fun AlarmCard(
             }
         }
     }
+}
+
+/**
+ * Format [time] for display, honoring the device's 12h/24h setting.
+ * Shared by the alarm list and the full-screen ringing activity.
+ */
+fun formatAlarmTime(context: Context, time: LocalTime): String {
+    val format = if (DateFormat.is24HourFormat(context)) {
+        LocalTime.Format {
+            hour(Padding.ZERO)
+            char(':')
+            minute()
+        }
+    } else {
+        LocalTime.Format {
+            amPmHour(Padding.NONE)
+            char(':')
+            minute()
+            amPmMarker(" AM", " PM")
+        }
+    }
+    return time.format(format)
 }

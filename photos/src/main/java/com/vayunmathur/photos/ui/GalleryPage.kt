@@ -130,7 +130,7 @@ fun GalleryPage(
     fun requestManageMediaPermission() {
         if (!MediaStore.canManageMedia(context)) {
             val intent = Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA).apply {
-                data = Uri.parse("package:${context.packageName}")
+                data = "package:${context.packageName}".toUri()
             }
             manageMediaLauncher.launch(intent)
         }

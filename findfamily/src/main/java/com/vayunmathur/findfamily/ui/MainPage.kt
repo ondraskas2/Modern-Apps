@@ -67,7 +67,6 @@ import androidx.compose.ui.unit.sp
 import com.vayunmathur.findfamily.R
 import com.vayunmathur.findfamily.Route
 import com.vayunmathur.findfamily.data.LocationValue
-import com.vayunmathur.findfamily.data.RequestStatus
 import com.vayunmathur.findfamily.data.TemporaryLink
 import com.vayunmathur.findfamily.data.User
 import com.vayunmathur.findfamily.data.Waypoint
@@ -85,7 +84,6 @@ import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconNavigationArrow
 import com.vayunmathur.library.ui.IconSave
-import com.vayunmathur.library.util.DatabaseHelper
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.ResultEffect
 import com.vayunmathur.library.util.formatSpeed
@@ -132,25 +130,13 @@ fun MainPage(
         ffViewModel.clearSelection()
     }
 
-    val users by ffViewModel.users.collectAsState()
     val temporaryLinks by ffViewModel.temporaryLinks.collectAsState()
     val waypoints by ffViewModel.waypoints.collectAsState()
 
-    // Filter once per `users` change rather than on every recomposition.
-    val connectedUsers by remember(users) {
-        derivedStateOf {
-            users.filter {
-                it.requestStatus == RequestStatus.MUTUAL_CONNECTION ||
-                    it.requestStatus == RequestStatus.AWAITING_RESPONSE
-            }
-        }
-    }
-    val awaitingRequestUsers by remember(users) {
-        derivedStateOf { users.filter { it.requestStatus == RequestStatus.AWAITING_REQUEST } }
-    }
+    val connectedUsers by ffViewModel.connectedUsers.collectAsState()
+    val awaitingRequestUsers by ffViewModel.awaitingRequestUsers.collectAsState()
+    val usersByLocationName by ffViewModel.usersByLocationName.collectAsState()
     val userPositions by ffViewModel.latestLocationByUser.collectAsState()
-
-    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -169,9 +155,8 @@ fun MainPage(
                 },
                 actions = {
                     if (selectedUserId == null && (selectedWaypointId == null || selectedWaypointId == 0L)) {
-                        val pass = remember { DatabaseHelper(context).getPassphrase() }
                         BackupButtons(
-                            dbConfigs = listOf("passwords-db" to pass),
+                            dbConfigs = listOf("passwords-db" to ffViewModel.backupPassphrase),
                             extraFiles = emptyList()
                         )
                     } else if (selectedUserId != null) {
@@ -292,7 +277,7 @@ fun MainPage(
                             }
                         }
                         items(waypoints, key = { it.id }) {
-                            WaypointCard(it, users) {
+                            WaypointCard(it, usersByLocationName[it.name].orEmpty()) {
                                 ffViewModel.beginEditWaypoint(it)
                             }
                         }
@@ -455,12 +440,10 @@ fun BoxScope.HistoryBar(
                     currentTime.toSecondOfDay().toFloat(), valueRange = 0.0f..(24f * 60f * 60f - 0.1f)
                 )
 
-                LaunchedEffect(Unit) {
-                    sliderState.onValueChange = {
-                        val maximum = if (currentDate == pickedLocalDate) currentTime.toSecondOfDay().toFloat() else null
-                        if (maximum != null && it > maximum) sliderState.value = maximum
-                        else sliderState.value = it
-                    }
+                sliderState.onValueChange = {
+                    val maximum = if (currentDate == pickedLocalDate) currentTime.toSecondOfDay().toFloat() else null
+                    if (maximum != null && it > maximum) sliderState.value = maximum
+                    else sliderState.value = it
                 }
                 val pickedLocalTime by remember {
                     derivedStateOf {
@@ -522,11 +505,11 @@ fun BoxScope.HistoryBar(
 
                 val locs by ffViewModel.locationHistory.collectAsState()
 
-                if (locs.isNotEmpty()) {
-                    val points = locs.map { it.timestamp to it.coord }
-                    val closest =
-                        points.minBy { (it.first - simulatedTimestamp).absoluteValue }
-                    setHistoricalPosition(closest.second.toPosition())
+                LaunchedEffect(simulatedTimestamp, locs) {
+                    if (locs.isNotEmpty()) {
+                        val closest = locs.minBy { (it.timestamp - simulatedTimestamp).absoluteValue }
+                        setHistoricalPosition(closest.coord.toPosition())
+                    }
                 }
             }
             OutlinedButton({
@@ -580,12 +563,11 @@ fun TemporaryLinkCard(platform: Platform, ffViewModel: FindFamilyViewModel, temp
 }
 
 @Composable
-fun WaypointCard(waypoint: Waypoint, users: List<User>, onSelect: () -> Unit) {
-    val usersWithin = users.filter { it.locationName == waypoint.name }
-    val usersString = when (usersWithin.size) {
+fun WaypointCard(waypoint: Waypoint, userNamesHere: List<String>, onSelect: () -> Unit) {
+    val usersString = when (userNamesHere.size) {
         0 -> stringResource(R.string.nobody_here)
-        1 -> stringResource(R.string.user_is_here, usersWithin.first().name)
-        else -> stringResource(R.string.users_are_here, usersWithin.joinToString { it.name })
+        1 -> stringResource(R.string.user_is_here, userNamesHere.first())
+        else -> stringResource(R.string.users_are_here, userNamesHere.joinToString())
     }
     Card(Modifier.clickable(onClick = onSelect)) {
         ListItem(

@@ -3,16 +3,15 @@ package com.vayunmathur.notes.intents
 import com.vayunmathur.library.intents.notes.NoteData
 import com.vayunmathur.library.util.AssistantIntent
 import com.vayunmathur.library.util.buildDatabase
+import com.vayunmathur.notes.data.DB_NAME
 import com.vayunmathur.notes.data.Note
 import com.vayunmathur.notes.data.NoteDatabase
-import kotlinx.serialization.InternalSerializationApi
-import kotlinx.serialization.serializer
+import kotlinx.serialization.builtins.serializer
 
-@OptIn(InternalSerializationApi::class)
-class InsertIntent: AssistantIntent<NoteData, Unit>(serializer<NoteData>(), serializer<Unit>()) {
+class InsertIntent: AssistantIntent<NoteData, Unit>(NoteData.serializer(), Unit.serializer()) {
 
     override suspend fun performCalculation(input: NoteData) {
-        val db = buildDatabase<NoteDatabase>(dbName = "notes-db")
+        val db = buildDatabase<NoteDatabase>(dbName = DB_NAME)
         db.noteDao().upsert(Note(title = input.title, content = input.content))
     }
 }

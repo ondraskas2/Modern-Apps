@@ -17,6 +17,23 @@ import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 
+private val mdListLineRegex = Regex("^(\\s*)([•*+-]|\\d+[.)])(\\s+.*)")
+private val mdBlockMathRegex = Regex("""\$\$(.*?)\$\$""", RegexOption.DOT_MATCHES_ALL)
+private val mdInlineMathRegex = Regex("""(?<![$\\])\$([^\s$](?:[^$]*[^\s$])?)\$(?!$)""")
+private val mdHeaderRegex = Regex("(?m)^(#{1,6} )(.*(?:\\R|$))")
+private val mdListItemRegex = Regex("(?m)^(\\s*)([•*+-]|\\d+[.)])[^\\S\\r\\n]+(?:\\[([ xX])][^\\S\\r\\n]+)?(.*(?:\\R|$))")
+private val mdLatexFormatRegex = Regex("""\\(cancel|mathbf|mathrm|underline|mathtt|mathsf|mathit)\{((?:[^{}]|\{[^{}]*\})*)\}""")
+private val mdLinkRegex = Regex("\\[(.*?)\\]\\((.*?)\\)")
+private val mdBoldRegex = Regex("(\\*\\*|__)(.*?)\\1")
+private val mdItalicRegex = Regex("(?<!\\*)\\*(?!\\*)(.*?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.*?)(?<!_)_(?!_)")
+private val mdFencedRegex = Regex("(?m)^([^\\S\\r\\n]*```[^\\n]*)\\n([\\s\\S]*?)\\n([^\\S\\r\\n]*```[^\\S\\r\\n]*)$")
+private val mdCodeRegex = Regex("`(.+?)`")
+private val mdStrikethroughRegex = Regex("~~(.+?)~~")
+private val mdBlockquoteRegex = Regex("(?m)^>\\s")
+private val mdFracRegex = Regex("""\\frac\{((?:[^{}]|\{[^{}]*\})*)\}\{((?:[^{}]|\{[^{}]*\})*)\}""")
+private val mdSqrtNRegex = Regex("""\\sqrt\[([^]]*)\]\{([^}]*)\}""")
+private val mdSqrtRegex = Regex("""\\sqrt\{([^}]*)\}""")
+
 /**
  * Converts a Markdown string into an AnnotatedString for Jetpack Compose.
  * @param mdtext The raw markdown text.
@@ -46,7 +63,7 @@ fun parseMarkdown(
                 }
 
                 val trimmed = line.trimStart()
-                val listMatch = if (process) Regex("^(\\s*)([•*+-]|\\d+[.)])(\\s+.*)").matchEntire(line) else null
+                val listMatch = if (process) mdListLineRegex.matchEntire(line) else null
                 val isCurrentSpecial = process && (trimmed.startsWith("#") || trimmed.startsWith(">") || trimmed.startsWith("$$") || listMatch != null)
 
                 if (isCurrentSpecial) {
@@ -67,7 +84,7 @@ fun parseMarkdown(
                         while (i + 1 < lines.size && lines[i + 1].isNotBlank()) {
                             val nextLine = lines[i + 1]
                             val nextTrimmed = nextLine.trimStart()
-                            val nextListMatch = if (process) Regex("^(\\s*)([•*+-]|\\d+[.)])(\\s+.*)").matchEntire(nextLine) else null
+                            val nextListMatch = if (process) mdListLineRegex.matchEntire(nextLine) else null
                             val isNextSpecial = process && (nextTrimmed.startsWith("#") || nextTrimmed.startsWith(">") || nextTrimmed.startsWith("$$") || nextListMatch != null)
 
                             if (isNextSpecial) break
@@ -91,11 +108,11 @@ fun parseMarkdown(
     // 2. Math content formatting if markers are hidden
     val finalText = if (!showMarkers) {
         // Block Math $$ ... $$
-        Regex("""\$\$(.*?)\$\$""", RegexOption.DOT_MATCHES_ALL).replace(processedText) {
+        mdBlockMathRegex.replace(processedText) {
             "$$" + formatMathContent(it.groupValues[1]) + "$$"
         }.let { text ->
             // Inline Math $ ... $
-            Regex("""(?<![$\\])\$([^\s$](?:[^$]*[^\s$])?)\$(?!$)""").replace(text) {
+            mdInlineMathRegex.replace(text) {
                 "$" + formatMathContent(it.groupValues[1]) + "$"
             }
         }
@@ -122,8 +139,7 @@ fun parseMarkdown(
         }
 
         // 1. Headers
-        val headerRegex = Regex("(?m)^(#{1,6} )(.*(?:\\R|$))")
-        headerRegex.findAll(finalText).forEach { match ->
+        mdHeaderRegex.findAll(finalText).forEach { match ->
             val start = match.range.first
             val end = match.range.last + 1
             val markers = match.groups[1]!!
@@ -144,8 +160,7 @@ fun parseMarkdown(
         }
 
         // 2. Lists
-        val listRegex = Regex("(?m)^(\\s*)([•*+-]|\\d+[.)])[^\\S\\r\\n]+(?:\\[([ xX])][^\\S\\r\\n]+)?(.*(?:\\R|$))")
-        listRegex.findAll(finalText).forEach { match ->
+        mdListItemRegex.findAll(finalText).forEach { match ->
             val start = match.range.first
             val end = match.range.last + 1
             val indentation = match.groups[1]!!.value
@@ -194,7 +209,7 @@ fun parseMarkdown(
         // 3. Math Formulas
 
         // Block Math $$ ... $$
-        Regex("""\$\$(.*?)\$\$""", RegexOption.DOT_MATCHES_ALL).findAll(finalText).forEach { match ->
+        mdBlockMathRegex.findAll(finalText).forEach { match ->
             val start = match.range.first
             val end = match.range.last + 1
             hideRange(start, start + 2)
@@ -215,7 +230,7 @@ fun parseMarkdown(
         }
 
         // Inline Math $ ... $
-        Regex("""(?<![$\\])\$([^\s$](?:[^$]*[^\s$])?)\$(?!$)""").findAll(finalText).forEach { match ->
+        mdInlineMathRegex.findAll(finalText).forEach { match ->
             val start = match.range.first
             val end = match.range.last + 1
             hideRange(start, start + 1)
@@ -229,8 +244,7 @@ fun parseMarkdown(
         }
 
         // 4. LaTeX Specific Formatting (\cancel, \mathbf, etc.)
-        val latexFormatRegex = Regex("""\\(cancel|mathbf|mathrm|underline|mathtt|mathsf|mathit)\{((?:[^{}]|\{[^{}]*\})*)\}""")
-        latexFormatRegex.findAll(finalText).forEach { match ->
+        mdLatexFormatRegex.findAll(finalText).forEach { match ->
             val start = match.range.first
             val end = match.range.last + 1
             val cmd = match.groups[1]!!.value
@@ -256,7 +270,7 @@ fun parseMarkdown(
         // 5. Inline Formatting (Post-processing)
         
         // Links
-        Regex("\\[(.*?)\\]\\((.*?)\\)").findAll(finalText).forEach { match ->
+        mdLinkRegex.findAll(finalText).forEach { match ->
             val textStart = match.groups[1]!!.range.first
             val textEnd = match.groups[1]!!.range.last + 1
             val url = match.groups[2]!!.value
@@ -277,7 +291,7 @@ fun parseMarkdown(
         }
 
         // Bold
-        Regex("(\\*\\*|__)(.*?)\\1").findAll(finalText).forEach { match ->
+        mdBoldRegex.findAll(finalText).forEach { match ->
             val m = match.groups[1]!!.value
             hideRange(match.range.first, match.range.first + m.length)
             hideRange(match.range.last + 1 - m.length, match.range.last + 1)
@@ -285,14 +299,36 @@ fun parseMarkdown(
         }
 
         // Italic
-        Regex("(?<!\\*)\\*(?!\\*)(.*?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.*?)(?<!_)_(?!_)").findAll(finalText).forEach { match ->
+        mdItalicRegex.findAll(finalText).forEach { match ->
             hideRange(match.range.first, match.range.first + 1)
             hideRange(match.range.last, match.range.last + 1)
             addStyle(SpanStyle(fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
         }
 
+        // Fenced code blocks ``` ... ``` (must run before inline code so the
+        // single-backtick regex does not chew on the fence backticks).
+        val fencedRanges = mutableListOf<IntRange>()
+        mdFencedRegex
+            .findAll(finalText).forEach { match ->
+                fencedRanges += match.range
+                val open = match.groups[1]!!
+                val content = match.groups[2]!!
+                val close = match.groups[3]!!
+
+                // Hide the fence lines (with their newlines) when markers are hidden.
+                hideRange(open.range.first, content.range.first)
+                hideRange(content.range.last + 1, close.range.last + 1)
+
+                addStyle(
+                    SpanStyle(fontFamily = FontFamily.Monospace, background = Color.LightGray.copy(0.2f)),
+                    content.range.first,
+                    content.range.last + 1
+                )
+            }
+
         // Code
-        Regex("`(.+?)`").findAll(finalText).forEach { match ->
+        mdCodeRegex.findAll(finalText).forEach { match ->
+            if (fencedRanges.any { match.range.first in it }) return@forEach
             hideRange(match.range.first, match.range.first + 1)
             hideRange(match.range.last, match.range.last + 1)
             addStyle(
@@ -303,14 +339,14 @@ fun parseMarkdown(
         }
 
         // Strikethrough
-        Regex("~~(.+?)~~").findAll(finalText).forEach { match ->
+        mdStrikethroughRegex.findAll(finalText).forEach { match ->
             hideRange(match.range.first, match.range.first + 2)
             hideRange(match.range.last - 1, match.range.last + 1)
             addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), match.range.first, match.range.last + 1)
         }
 
         // Blockquotes
-        Regex("(?m)^>\\s").findAll(finalText).forEach { match ->
+        mdBlockquoteRegex.findAll(finalText).forEach { match ->
             hideRange(match.range.first, match.range.last + 1)
             val lineEnd = finalText.indexOf('\n', match.range.first).let { if (it == -1) finalText.length else it }
             addStyle(SpanStyle(color = Color.Gray, fontStyle = FontStyle.Italic), match.range.first, lineEnd)
@@ -408,12 +444,12 @@ private fun formatMathContent(content: String): String {
 
     // 2. Handle \frac{a}{b} -> ((a)/(b))
     repeat(3) {
-        result = result.replace(Regex("""\\frac\{((?:[^{}]|\{[^{}]*\})*)\}\{((?:[^{}]|\{[^{}]*\})*)\}"""), "(($1)/($2))")
+        result = result.replace(mdFracRegex, "(($1)/($2))")
     }
 
     // 3. Handle \sqrt[n]{a} or \sqrt{a}
-    result = result.replace(Regex("""\\sqrt\[([^]]*)\]\{([^}]*)\}"""), "($2)^(1/$1)")
-    result = result.replace(Regex("""\\sqrt\{([^}]*)\}"""), "√($1)")
+    result = result.replace(mdSqrtNRegex, "($2)^(1/$1)")
+    result = result.replace(mdSqrtRegex, "√($1)")
 
     // 4. Replace known commands (Longer commands first to avoid partial matches)
     latexCommands.entries.sortedByDescending { it.key.length }.forEach { (cmd, replacement) ->

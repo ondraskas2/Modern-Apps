@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,8 +23,8 @@ fun AddToGroupDialog(
     contactIds: List<Long>,
     onDismiss: () -> Unit
 ) {
-    val groups by viewModel.groups.collectAsState()
-    val memberships by viewModel.contactGroupMemberships.collectAsState()
+    val groups by viewModel.groups.collectAsStateWithLifecycle()
+    val memberships by viewModel.contactGroupMemberships.collectAsStateWithLifecycle()
     
     AlertDialog(
         onDismissRequest = onDismiss,

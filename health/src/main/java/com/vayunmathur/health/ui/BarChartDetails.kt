@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
@@ -641,15 +642,7 @@ fun GenericLineChart(
             val height = size.height
             val width = size.width
 
-            // Subtle horizontal grid lines at 25/50/75/100%
-            listOf(0.25f, 0.5f, 0.75f, 1f).forEach { frac ->
-                drawLine(
-                    color = labelColor.copy(alpha = 0.10f),
-                    start = Offset(0f, height * (1f - frac)),
-                    end = Offset(width, height * (1f - frac)),
-                    strokeWidth = 1.dp.toPx()
-                )
-            }
+            gridLines(labelColor)
 
             val drawSeries = { series: List<Pair<String, Double?>>, color: Color, isPrimary: Boolean ->
                 // Filled area under the primary line
@@ -724,32 +717,15 @@ fun GenericLineChart(
         }
 
         // Decimated X-axis labels
-        val labelStep = decimationStep(data.size)
-        data.forEachIndexed { index, pair ->
-            if (pair.first.isNotEmpty() && index % labelStep == 0) {
-                val x = index * spacing
-                Text(
-                    text = pair.first,
-                    color = labelColor,
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = with(density) { x.toDp() })
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            layout(placeable.width, placeable.height) {
-                                placeable.placeRelative(-(placeable.width / 2), 0)
-                            }
-                        })
-            }
-        }
+        XAxisLabels(
+            labels = data.map { it.first },
+            totalCount = data.size,
+            density = density,
+            color = labelColor,
+        ) { index -> index * spacing }
 
         // Y-axis labels: max, avg, min, 0
-        val format = { v: Double ->
-            if (v >= 10000) resources.getString(
-                R.string.k_format, (v / 1000).round(0).toString()
-            ) else v.toLong().toStringCommas()
-        }
+        val format = { v: Double -> chartValueFormat(resources, v) }
 
         YAxisLabel(format(maxChartValue), labelColor, sideLabelWidth, 0f, density)
         if (allValues.isNotEmpty()) {
@@ -797,11 +773,7 @@ fun GenericBarChart(
         val barWidth = with(density) { 6.dp.toPx() }
         val spacing =
             (chartWidthPx - (totalBarCount * barWidth)) / (totalBarCount + 1).coerceAtLeast(1)
-        val format = { v: Double ->
-            if (v >= 10000) resources.getString(
-                R.string.k_format, (v / 1000).round(0).toString()
-            ) else v.toLong().toStringCommas()
-        }
+        val format = { v: Double -> chartValueFormat(resources, v) }
 
         // Tooltip above selected bar
         if (selectedIndex in data.indices) {
@@ -844,15 +816,7 @@ fun GenericBarChart(
             val height = size.height
             val width = size.width
 
-            // Subtle horizontal grid lines at 25/50/75/100%
-            listOf(0.25f, 0.5f, 0.75f, 1f).forEach { frac ->
-                drawLine(
-                    color = labelColor.copy(alpha = 0.10f),
-                    start = Offset(0f, height * (1f - frac)),
-                    end = Offset(width, height * (1f - frac)),
-                    strokeWidth = 1.dp.toPx()
-                )
-            }
+            gridLines(labelColor)
 
             val goalY = height - (goalValue.toFloat() / maxChartValue * height).coerceIn(0f, height)
             drawLine(
@@ -882,25 +846,12 @@ fun GenericBarChart(
         }
 
         // Decimated X-axis labels
-        val labelStep = decimationStep(totalBarCount)
-        data.forEachIndexed { index, pair ->
-            if (pair.first.isNotEmpty() && index % labelStep == 0) {
-                val x = spacing + index * (barWidth + spacing) + barWidth / 2
-                Text(
-                    text = pair.first,
-                    color = labelColor,
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = with(density) { x.toDp() })
-                        .layout { measurable, constraints ->
-                            val placeable = measurable.measure(constraints)
-                            layout(placeable.width, placeable.height) {
-                                placeable.placeRelative(-(placeable.width / 2), 0)
-                            }
-                        })
-            }
-        }
+        XAxisLabels(
+            labels = data.map { it.first },
+            totalCount = totalBarCount,
+            density = density,
+            color = labelColor,
+        ) { index -> spacing + index * (barWidth + spacing) + barWidth / 2 }
 
         // Y-axis labels: max, avg, 0
         val actualChartHeightPx = with(density) { (chartHeight - xAxisHeight).toPx() }
@@ -911,6 +862,54 @@ fun GenericBarChart(
             YAxisLabel("avg ${format(avgValueFound)}", barColor, sideLabelWidth, avgY, density)
         }
         YAxisLabel("0", labelColor, sideLabelWidth, topOffsetPx + actualChartHeightPx, density)
+    }
+}
+
+/** Subtle horizontal grid lines at 25/50/75/100% of the canvas height. */
+private fun DrawScope.gridLines(color: Color) {
+    listOf(0.25f, 0.5f, 0.75f, 1f).forEach { frac ->
+        drawLine(
+            color = color.copy(alpha = 0.10f),
+            start = Offset(0f, size.height * (1f - frac)),
+            end = Offset(size.width, size.height * (1f - frac)),
+            strokeWidth = 1.dp.toPx()
+        )
+    }
+}
+
+/** Shared "12,345" / "12k" axis value formatter for both chart types. */
+private fun chartValueFormat(resources: android.content.res.Resources, v: Double): String =
+    if (v >= 10000) resources.getString(R.string.k_format, (v / 1000).round(0).toString())
+    else v.toLong().toStringCommas()
+
+/** Decimated, center-aligned X-axis labels shared by both chart types. */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.XAxisLabels(
+    labels: List<String>,
+    totalCount: Int,
+    density: androidx.compose.ui.unit.Density,
+    color: Color,
+    xForIndex: (Int) -> Float,
+) {
+    val labelStep = decimationStep(totalCount)
+    labels.forEachIndexed { index, label ->
+        if (label.isNotEmpty() && index % labelStep == 0) {
+            val x = xForIndex(index)
+            Text(
+                text = label,
+                color = color,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = with(density) { x.toDp() })
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        layout(placeable.width, placeable.height) {
+                            placeable.placeRelative(-(placeable.width / 2), 0)
+                        }
+                    }
+            )
+        }
     }
 }
 

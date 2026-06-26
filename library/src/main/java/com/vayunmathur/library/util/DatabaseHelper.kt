@@ -7,6 +7,7 @@ import android.util.Base64
 import androidx.core.content.edit
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.KeyStoreException
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -34,8 +35,8 @@ open class DatabaseHelper(val context: Context) {
             // Key exists but IV doesn't - clean up the orphaned key
             try {
                 keyStore.deleteEntry(keyStoreAlias)
-            } catch (e: Exception) {
-                // Ignore errors when deleting key
+            } catch (e: KeyStoreException) {
+                // Best-effort cleanup; a failure here just leaves the orphaned key.
             }
             return false
         }
@@ -47,8 +48,8 @@ open class DatabaseHelper(val context: Context) {
             val keyStore = KeyStore.getInstance("AndroidKeyStore")
             keyStore.load(null)
             keyStore.deleteEntry(keyStoreAlias)
-        } catch (e: Exception) {
-            // Ignore errors when deleting key
+        } catch (e: KeyStoreException) {
+            // Best-effort deletion; SharedPreferences are still cleared below.
         }
         // Also clear the SharedPreferences
         val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
@@ -78,21 +79,22 @@ open class DatabaseHelper(val context: Context) {
         return keyStore.getKey(keyStoreAlias, null) as SecretKey
     }
 
+    private fun persist(passphrase: String, cipher: Cipher) {
+        val encryptedBytes = cipher.doFinal(passphrase.toByteArray(StandardCharsets.UTF_8))
+        val iv = cipher.iv
+        val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
+        prefs.edit {
+            putString(passphraseKey, Base64.encodeToString(encryptedBytes, Base64.NO_WRAP))
+            putString(ivKey, Base64.encodeToString(iv, Base64.NO_WRAP))
+        }
+    }
+
     fun createAndStorePassphrase(cipher: Cipher): String {
         val random = SecureRandom()
         val passphraseBytes = ByteArray(32)
         random.nextBytes(passphraseBytes)
         val passphrase = Base64.encodeToString(passphraseBytes, Base64.NO_WRAP)
-
-        val encryptedBytes = cipher.doFinal(passphrase.toByteArray(StandardCharsets.UTF_8))
-        val iv = cipher.iv
-
-        val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
-        prefs.edit {
-            putString(passphraseKey, Base64.encodeToString(encryptedBytes, Base64.NO_WRAP))
-                .putString(ivKey, Base64.encodeToString(iv, Base64.NO_WRAP))
-        }
-
+        persist(passphrase, cipher)
         return passphrase
     }
 
@@ -121,21 +123,10 @@ open class DatabaseHelper(val context: Context) {
 
     fun storePassphrase(passphrase: String) {
         if (!isKeyGenerated()) generateKey()
-        val cipher = getCipherForEncryption()
-        val encryptedBytes = cipher.doFinal(passphrase.toByteArray(StandardCharsets.UTF_8))
-        val iv = cipher.iv
-        val prefs = context.getSharedPreferences(sharedPrefsName, Context.MODE_PRIVATE)
-        prefs.edit {
-            putString(passphraseKey, Base64.encodeToString(encryptedBytes, Base64.NO_WRAP))
-            putString(ivKey, Base64.encodeToString(iv, Base64.NO_WRAP))
-        }
+        persist(passphrase, getCipherForEncryption())
     }
 
     fun getPassphrase(): String {
-        return try {
-            decryptPassphrase(getCipherForDecryption())
-        } catch (e: Exception) {
-            ""
-        }
+        return decryptPassphrase(getCipherForDecryption())
     }
 }

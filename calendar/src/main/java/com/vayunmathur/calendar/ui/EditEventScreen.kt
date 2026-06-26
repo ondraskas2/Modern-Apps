@@ -1,7 +1,5 @@
 package com.vayunmathur.calendar.ui
 
-import android.content.ContentValues
-import android.provider.CalendarContract
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,7 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -50,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.util.NavBackStack
+import com.vayunmathur.calendar.data.Event
 import com.vayunmathur.calendar.util.CalendarViewModel
 import com.vayunmathur.calendar.R
 import com.vayunmathur.calendar.util.RRule
@@ -71,8 +70,7 @@ import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.hours
 
 // Result keys for the date/time pickers
 private const val KEY_START_DATE = "EditEvent.startDate"
@@ -87,8 +85,8 @@ private const val KEY_TIMEZONE = "EditEvent.timezone"
 @Composable
 fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, backStack: NavBackStack<Route>) {
     val eventId = editRoute.id
-    val events by viewModel.events.collectAsState()
-    val calendars by viewModel.calendars.collectAsState()
+    val events by viewModel.events.collectAsStateWithLifecycle()
+    val calendars by viewModel.calendars.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
 
@@ -120,7 +118,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     val initialEndLdt = editRoute.endTime?.let { Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.currentSystemDefault()) }
         ?: initialBeginLdt?.let {
             val tz = TimeZone.currentSystemDefault()
-            it.toInstant(tz).plus(1.milliseconds * 3600000).toLocalDateTime(tz)
+            it.toInstant(tz).plus(1.hours).toLocalDateTime(tz)
         }
 
     var allDay by remember { mutableStateOf(event?.allDay ?: editRoute.allDay ?: false) }
@@ -133,22 +131,23 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     val rruleString by remember { derivedStateOf {rruleObj?.toString() ?: ""} }
     var reminders by remember { mutableStateOf(event?.reminders ?: emptyList()) }
 
-    // Collect results from pickers
-    ResultEffect<LocalDate>(KEY_START_DATE) { selected ->
-        // preserve duration between old start and end
+    // Shift the end date/time to preserve the current event duration when the start moves.
+    fun applyStartChange(newStartDate: LocalDate, newStartTime: LocalTime) {
         val tz = TimeZone.of(timezone)
         val oldStart = startDate.atTime(startTime).toInstant(tz)
         val oldEnd = endDate.atTime(endTime).toInstant(tz)
         var dur = oldEnd - oldStart
         if (dur.isNegative()) dur = Duration.ZERO
-
-        startDate = selected
-
-        val newStart = startDate.atTime(startTime).toInstant(tz)
-        val newEnd = newStart + dur
-        val newEndLdt = newEnd.toLocalDateTime(tz)
+        startDate = newStartDate
+        startTime = newStartTime
+        val newEndLdt = (newStartDate.atTime(newStartTime).toInstant(tz) + dur).toLocalDateTime(tz)
         endDate = newEndLdt.date
         endTime = newEndLdt.time
+    }
+
+    // Collect results from pickers
+    ResultEffect<LocalDate>(KEY_START_DATE) { selected ->
+        applyStartChange(selected, startTime)
     }
 
     ResultEffect<LocalDate>(KEY_END_DATE) { selected ->
@@ -157,20 +156,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     }
 
     ResultEffect<LocalTime>(KEY_START_TIME) { selected ->
-        // preserve duration between old start and end
-        val tz = TimeZone.of(timezone)
-        val oldStart = startDate.atTime(startTime).toInstant(tz)
-        val oldEnd = endDate.atTime(endTime).toInstant(tz)
-        var dur = oldEnd - oldStart
-        if (dur.isNegative()) dur = Duration.ZERO
-
-        startTime = selected
-
-        val newStart = startDate.atTime(startTime).toInstant(tz)
-        val newEnd = newStart + dur
-        val newEndLdt = newEnd.toLocalDateTime(tz)
-        endDate = newEndLdt.date
-        endTime = newEndLdt.time
+        applyStartChange(startDate, selected)
     }
 
     ResultEffect<LocalTime>(KEY_END_TIME) { selected ->
@@ -209,39 +195,23 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
         }
     }, floatingActionButton = {
         FloatingActionButton(onClick = {
-            val values = ContentValues().apply {
-                put(CalendarContract.Events.TITLE, title)
-                put(CalendarContract.Events.DESCRIPTION, description.text)
-                put(CalendarContract.Events.EVENT_LOCATION, location)
-                put(CalendarContract.Events.CALENDAR_ID, selectedCalendar)
-                val tz = if(allDay) "UTC" else timezone
-                val dtstart = startDate.atTime(startTime).toInstant(TimeZone.of(tz)).toEpochMilliseconds()
-                val dtendActual = endDate.atTime(endTime).toInstant(TimeZone.of(tz)).toEpochMilliseconds()
-                put(CalendarContract.Events.DTSTART, dtstart)
-                if (rruleObj != null) {
-                    // For recurring events, DTEND must be 0 and DURATION set to the event length
-                    put(CalendarContract.Events.DTEND, null as Long?)
-                    var duration = (dtendActual - dtstart).milliseconds
-                    if(allDay) duration += 1.days
-                    put(CalendarContract.Events.DURATION, duration.toIsoString())
-                    put(CalendarContract.Events.RRULE, rruleObj!!.asString(startDate, TimeZone.of(timezone)))
-                } else {
-                    put(CalendarContract.Events.DTEND, dtendActual)
-                    // clear DURATION and RRULE if present
-                    put(CalendarContract.Events.DURATION, null as String?)
-                    put(CalendarContract.Events.RRULE, null as String?)
-                }
-                put(CalendarContract.Events.ALL_DAY, if(allDay) 1 else 0)
-                put(CalendarContract.Events.EVENT_TIMEZONE, tz)
-                // Preserve EXDATE when editing recurring events
-                event?.exdate?.takeIf { it.isNotEmpty() }?.let { exdateList ->
-                    val exdateStr = exdateList.joinToString(",") { date ->
-                        String.format("%04d%02d%02d", date.year, date.monthNumber, date.day)
-                    }
-                    put(CalendarContract.Events.EXDATE, exdateStr)
-                }
-            }
-            viewModel.upsertEvent(eventId, values, reminders)
+            val buildTz = if (allDay) TimeZone.UTC else TimeZone.of(timezone)
+            val newEvent = Event(
+                id = eventId,
+                calendarID = selectedCalendar,
+                title = title,
+                description = description.text,
+                location = location,
+                color = event?.color,
+                start = startDate.atTime(startTime).toInstant(buildTz).toEpochMilliseconds(),
+                end = endDate.atTime(endTime).toInstant(buildTz).toEpochMilliseconds(),
+                timezone = if (allDay) "UTC" else timezone,
+                allDay = allDay,
+                rrule = rruleObj,
+                exdate = event?.exdate ?: emptyList(),
+                reminders = reminders,
+            )
+            viewModel.upsertEvent(eventId, newEvent.toContentValues(selectedCalendar), reminders)
             backStack.pop()
         }) {
             IconSave()

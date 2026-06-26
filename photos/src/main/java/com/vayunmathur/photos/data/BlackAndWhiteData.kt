@@ -18,11 +18,6 @@ data class BlackAndWhiteAdjustment(
 }
 
 fun BlackAndWhiteAdjustment.applyToBitmap(bitmap: Bitmap): Bitmap {
-    val w = bitmap.width
-    val h = bitmap.height
-    val pixels = IntArray(w * h)
-    bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-
     // Band centers in degrees and associated weights (percent).
     val centers = floatArrayOf(0f, 60f, 120f, 180f, 240f, 300f)
     val weights = floatArrayOf(reds, yellows, greens, cyans, blues, magentas)
@@ -31,38 +26,35 @@ fun BlackAndWhiteAdjustment.applyToBitmap(bitmap: Bitmap): Bitmap {
     val tintG = (tint ushr 8) and 0xFF
     val tintB = tint and 0xFF
 
-    for (i in pixels.indices) {
-        val p = pixels[i]
-        val a = (p ushr 24) and 0xFF
-        val r = (p ushr 16) and 0xFF
-        val g = (p ushr 8) and 0xFF
-        val b = p and 0xFF
+    return bitmap.copy(Bitmap.Config.ARGB_8888, true).apply {
+        mapPixels { p ->
+            val a = (p ushr 24) and 0xFF
+            val r = (p ushr 16) and 0xFF
+            val g = (p ushr 8) and 0xFF
+            val b = p and 0xFF
 
-        val hue = rgbToHue(r, g, b)
-        val selectedWeight = interpolateWeight(hue, centers, weights)
+            val hue = rgbToHue(r, g, b)
+            val selectedWeight = interpolateWeight(hue, centers, weights)
 
-        val luminance = 0.299f * r + 0.587f * g + 0.114f * b
-        val gray = (luminance * (selectedWeight / 60f)).toInt().coerceIn(0, 255)
+            val luminance = 0.299f * r + 0.587f * g + 0.114f * b
+            val gray = (luminance * (selectedWeight / 60f)).toInt().coerceIn(0, 255)
 
-        val nr: Int
-        val ng: Int
-        val nb: Int
-        if (tint != 0) {
-            nr = (gray * (tintR / 255f)).toInt().coerceIn(0, 255)
-            ng = (gray * (tintG / 255f)).toInt().coerceIn(0, 255)
-            nb = (gray * (tintB / 255f)).toInt().coerceIn(0, 255)
-        } else {
-            nr = gray
-            ng = gray
-            nb = gray
+            val nr: Int
+            val ng: Int
+            val nb: Int
+            if (tint != 0) {
+                nr = (gray * (tintR / 255f)).toInt().coerceIn(0, 255)
+                ng = (gray * (tintG / 255f)).toInt().coerceIn(0, 255)
+                nb = (gray * (tintB / 255f)).toInt().coerceIn(0, 255)
+            } else {
+                nr = gray
+                ng = gray
+                nb = gray
+            }
+
+            (a shl 24) or (nr shl 16) or (ng shl 8) or nb
         }
-
-        pixels[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
     }
-
-    val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    result.setPixels(pixels, 0, w, 0, 0, w, h)
-    return result
 }
 
 private fun rgbToHue(r: Int, g: Int, b: Int): Float {

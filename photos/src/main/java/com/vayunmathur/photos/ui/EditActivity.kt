@@ -26,7 +26,7 @@ import com.vayunmathur.photos.util.PhotoEditViewModelFactory
 class EditActivity : ComponentActivity() {
     private lateinit var photoDao: PhotoDao
     private val photoEditViewModel: PhotoEditViewModel by viewModels {
-        PhotoEditViewModelFactory(application)
+        PhotoEditViewModelFactory(application, photoDao)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,7 +59,7 @@ class EditActivity : ComponentActivity() {
                 }
 
                 if (photoId != -1L || photoUri != null) {
-                    EditNavigation(photoDao, photoEditViewModel, photoId, photoUri)
+                    EditNavigation(photoEditViewModel, photoId, photoUri)
                 }
             }
         }
@@ -68,7 +68,6 @@ class EditActivity : ComponentActivity() {
 
 @Composable
 fun EditNavigation(
-    photoDao: PhotoDao,
     photoEditViewModel: PhotoEditViewModel,
     photoId: Long,
     photoUri: String?,
@@ -76,7 +75,7 @@ fun EditNavigation(
     val backStack = rememberNavBackStack<EditRoute>(EditRoute.EditPhoto(photoId, photoUri))
     MainNavigation(backStack) {
         entry<EditRoute.EditPhoto> {
-            EditPhotoPage(backStack, photoDao, photoEditViewModel, it.id, it.uri)
+            EditPhotoPage(backStack, photoEditViewModel, it.id, it.uri)
         }
 
         entry<EditRoute.DrawingSettings>(DialogPage()) {

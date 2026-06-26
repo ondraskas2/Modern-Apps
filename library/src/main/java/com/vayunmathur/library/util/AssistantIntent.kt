@@ -1,7 +1,6 @@
 package com.vayunmathur.library.util
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.util.Log
 import android.content.Context
 import android.content.Intent
@@ -9,21 +8,19 @@ import android.os.Bundle
 import android.os.ResultReceiver
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.datastore.core.Serializer
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellableContinuation
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.serializer
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import androidx.core.content.IntentCompat
-import kotlin.reflect.KClass
 
-abstract class AssistantIntent<Input: Any, Output: Any>(val inputSerializer: KSerializer<Input>, val outputSerializer: KSerializer<Output>): Activity() {
+abstract class AssistantIntent<Input: Any, Output: Any>(val inputSerializer: KSerializer<Input>, val outputSerializer: KSerializer<Output>): ComponentActivity() {
     @OptIn(InternalSerializationApi::class, kotlinx.serialization.ExperimentalSerializationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,25 +33,27 @@ abstract class AssistantIntent<Input: Any, Output: Any>(val inputSerializer: KSe
         }
         val input = Json.decodeFromString(inputSerializer, inputString)
 
-        // 2. Do your "rare" processing
-        val result = runBlocking { performCalculation(input) }
+        lifecycleScope.launch {
+            // 2. Do your "rare" processing
+            val result = performCalculation(input)
 
-        // 3. Prepare the response
-        val responseData = Json.encodeToString(outputSerializer, result)
-        val responseIntent = Intent()
-        responseIntent.putExtra("RESPONSE_DATA", responseData)
+            // 3. Prepare the response
+            val responseData = Json.encodeToString(outputSerializer, result)
+            val responseIntent = Intent()
+            responseIntent.putExtra("RESPONSE_DATA", responseData)
 
-        // 4. Send the result back to the calling app
-        setResult(RESULT_OK, responseIntent)
+            // 4. Send the result back to the calling app
+            setResult(RESULT_OK, responseIntent)
 
-        // Also send to ResultReceiver if present (useful for Services)
-        val receiver = IntentCompat.getParcelableExtra(intent, "RECEIVER", ResultReceiver::class.java)
-        receiver?.send(RESULT_OK, Bundle().apply {
-            putString("RESPONSE_DATA", responseData)
-        })
+            // Also send to ResultReceiver if present (useful for Services)
+            val receiver = IntentCompat.getParcelableExtra(intent, "RECEIVER", ResultReceiver::class.java)
+            receiver?.send(RESULT_OK, Bundle().apply {
+                putString("RESPONSE_DATA", responseData)
+            })
 
-        // 5. Vital: Close immediately!
-        finish()
+            // 5. Vital: Close immediately!
+            finish()
+        }
     }
 
     abstract suspend fun performCalculation(input: Input): Output

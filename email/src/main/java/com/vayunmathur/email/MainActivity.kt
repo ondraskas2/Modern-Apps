@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.lifecycleScope
+import androidx.core.net.toUri
 import com.vayunmathur.email.data.EmailSyncWorker
 import com.vayunmathur.library.ui.*
 import com.vayunmathur.library.util.*
@@ -49,7 +52,7 @@ class MainActivity : ComponentActivity() {
         // accounts yet (it'll just stopSelf).
         com.vayunmathur.email.data.ImapIdleService.start(this)
         // One-shot backfill for dateMillis on rows persisted before that column.
-        com.vayunmathur.email.data.DateMillisBackfill.runIfNeeded(this)
+        com.vayunmathur.email.data.DateMillisBackfill.runIfNeeded(lifecycleScope, this)
         // Android 13+: request POST_NOTIFICATIONS so new-mail alerts can be shown.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -108,7 +111,7 @@ object IntentState {
 
 @Composable
 fun MainContent(viewModel: EmailViewModel) {
-    val accounts by viewModel.accounts.collectAsState(emptyList())
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle(emptyList())
     if (accounts.isEmpty()) {
         // First run: jump straight into the add-account picker. The conditional
         // above auto-swaps us into EmailApp once the first account lands.
@@ -152,11 +155,11 @@ fun EmailApp(viewModel: EmailViewModel) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val context = LocalContext.current
 
-    val accounts by viewModel.accounts.collectAsState(emptyList())
-    val selectedAccountEmail by viewModel.selectedAccountEmail.collectAsState()
-    val folders by viewModel.folders.collectAsState(emptyList())
-    val selectedFolderName by viewModel.selectedFolderName.collectAsState()
-    val outbox by viewModel.outbox.collectAsState(emptyList())
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle(emptyList())
+    val selectedAccountEmail by viewModel.selectedAccountEmail.collectAsStateWithLifecycle()
+    val folders by viewModel.folders.collectAsStateWithLifecycle(emptyList())
+    val selectedFolderName by viewModel.selectedFolderName.collectAsStateWithLifecycle()
+    val outbox by viewModel.outbox.collectAsStateWithLifecycle(emptyList())
 
     val backStack = rememberNavBackStack<Route>(Route.MessageList)
 
@@ -232,7 +235,7 @@ fun EmailApp(viewModel: EmailViewModel) {
                         if (selectedAccountEmail != null) {
                             HorizontalDivider(Modifier.padding(vertical = 8.dp))
                             Text("Folders", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
-                            FolderList(folders, selectedFolderName ?: "INBOX") { folderName ->
+                            FolderList(folders, selectedFolderName) { folderName ->
                                 viewModel.selectFolder(folderName)
                                 backStack.reset(Route.MessageList)
                                 scope.launch { drawerState.close() }
@@ -422,15 +425,15 @@ fun MessageListScreen(
     onComposeClick: () -> Unit,
     onOpenDrawer: () -> Unit
 ) {
-    val messages by viewModel.messages.collectAsState(emptyList())
-    val selectedAccountEmail by viewModel.selectedAccountEmail.collectAsState()
-    val selectedFolderName by viewModel.selectedFolderName.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val selectedUids by viewModel.selectedMessageUids.collectAsState()
-    val isSyncing by viewModel.isSyncing.collectAsState()
-    val syncProgress by viewModel.syncProgress.collectAsState()
-    val aiSummary by viewModel.aiSummary.collectAsState()
-    val aiSummaryLoading by viewModel.aiSummaryLoading.collectAsState()
+    val messages by viewModel.messages.collectAsStateWithLifecycle(emptyList())
+    val selectedAccountEmail by viewModel.selectedAccountEmail.collectAsStateWithLifecycle()
+    val selectedFolderName by viewModel.selectedFolderName.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val selectedUids by viewModel.selectedMessageUids.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by viewModel.syncProgress.collectAsStateWithLifecycle()
+    val aiSummary by viewModel.aiSummary.collectAsStateWithLifecycle()
+    val aiSummaryLoading by viewModel.aiSummaryLoading.collectAsStateWithLifecycle()
     var isSearching by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -513,7 +516,7 @@ fun MessageListScreen(
                 )
             } else {
                 TopAppBar(
-                    title = { Text(selectedFolderName ?: "Unified Inbox") },
+                    title = { Text(if (selectedAccountEmail == null) "Unified Inbox" else selectedFolderName) },
                     navigationIcon = {
                         IconButton(onClick = onOpenDrawer) {
                             IconMenu()
@@ -557,6 +560,15 @@ fun MessageListScreen(
                 androidx.compose.material3.FilterChip(selected = msgFilter == 1, onClick = { msgFilter = 1 }, label = { Text("Unread") })
                 androidx.compose.material3.FilterChip(selected = msgFilter == 2, onClick = { msgFilter = 2 }, label = { Text("Attachments") })
             }
+            val filteredMessages by remember {
+                derivedStateOf {
+                    when (msgFilter) {
+                        1 -> messages.filter { !it.isRead }
+                        2 -> messages.filter { it.hasAttachments }
+                        else -> messages
+                    }
+                }
+            }
             androidx.compose.material3.pulltorefresh.PullToRefreshBox(
                 isRefreshing = isSyncing,
                 onRefresh = { viewModel.refresh(context) },
@@ -596,18 +608,14 @@ fun MessageListScreen(
                         }
                     }
                     items(
-                        when (msgFilter) {
-                            1 -> messages.filter { !it.isRead }
-                            2 -> messages.filter { it.hasAttachments }
-                            else -> messages
-                        },
+                        filteredMessages,
                         key = { "${it.accountEmail}|${it.folderName}|${it.id}" }
                     ) { message ->
                         val isPending = pendingDelete?.let {
                             it.id == message.id && it.accountEmail == message.accountEmail && it.folderName == message.folderName
                         } == true
                         if (!isPending) {
-                        val accountColor = Color(EmailAccount(message.accountEmail).getColor())
+                        val accountBandColor = Color(accountColor(message.accountEmail))
                         val isSelected = message.id in selectedUids
                         // Read the latest message snapshot inside the swipe handler so
                         // repeated read/unread swipes toggle the CURRENT persisted state
@@ -665,7 +673,7 @@ fun MessageListScreen(
                             if (selectedAccountEmail == null) {
                                 Surface(
                                     modifier = Modifier.width(4.dp).fillMaxHeight(),
-                                    color = accountColor
+                                    color = accountBandColor
                                 ) {}
                             }
                             // Primary color band indicator for unread messages
@@ -685,15 +693,12 @@ fun MessageListScreen(
                                 supportingContent = {
                                     Column {
                                         Text(
-                                            text = message.from.substringBefore("<").trim(),
+                                            text = senderDisplayName(message.from),
                                             style = MaterialTheme.typography.titleSmall
                                         )
+                                        val preview = remember(message.body, message.isHtml) { (message.plainTextBody() ?: "").take(100) }
                                         Text(
-                                            text = (if (message.isHtml && message.body != null) {
-                                                androidx.core.text.HtmlCompat.fromHtml(message.body, androidx.core.text.HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                                            } else {
-                                                message.body ?: ""
-                                            }).take(100),
+                                            text = preview,
                                             style = MaterialTheme.typography.bodySmall,
                                             maxLines = 1,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -733,7 +738,7 @@ fun MessageThreadScreen(
     onReply: (String, String, String?) -> Unit,
     onForward: (String, String?) -> Unit
 ) {
-    val messages by viewModel.getThread(accountEmail, threadId).collectAsState(emptyList())
+    val messages by viewModel.getThread(accountEmail, threadId).collectAsStateWithLifecycle(emptyList())
     var hasMarkedAsRead by remember(threadId) { mutableStateOf(false) }
 
     // Mark all unread messages in the thread as read when the screen loads.
@@ -791,10 +796,10 @@ fun MessageItem(
         }
     }
 
-    val senderName = msg.from.substringBefore("<").trim().ifEmpty { msg.from }
+    val senderName = senderDisplayName(msg.from).ifEmpty { msg.from }
     val senderEmail = msg.from.substringAfter("<").substringBefore(">").trim()
     val initial = senderName.take(1).uppercase()
-    val avatarColor = Color(EmailAccount(msg.accountEmail).getColor())
+    val avatarColor = Color(accountColor(msg.accountEmail))
 
     Column {
         // Header
@@ -1073,8 +1078,8 @@ fun ComposerScreen(
     draftId: Long? = null,
     onBack: () -> Unit,
 ) {
-    val accounts by viewModel.accounts.collectAsState(emptyList())
-    val selectedAccount by viewModel.selectedAccount.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle(emptyList())
+    val selectedAccount by viewModel.selectedAccount.collectAsStateWithLifecycle()
     val context = LocalContext.current
     
     var fromAccount by remember(selectedAccount, accounts) { 
@@ -1349,7 +1354,7 @@ fun ComposerScreen(
             
             if (attachments.isNotEmpty()) {
                 val totalBytes = remember(attachments) { attachments.sumOf { uriSize(context, it) } }
-                Text("Attachments (${formatBytes(totalBytes)})", style = MaterialTheme.typography.labelLarge)
+                Text("Attachments (${android.text.format.Formatter.formatShortFileSize(context, totalBytes)})", style = MaterialTheme.typography.labelLarge)
                 if (totalBytes > 25L * 1024 * 1024) {
                     Text(
                         "Total attachment size exceeds 25 MB; many providers will reject it.",
@@ -1358,6 +1363,9 @@ fun ComposerScreen(
                     )
                 }
                 attachments.forEach { uri ->
+                    val attachmentLabel = remember(uri) {
+                        "${uriName(context, uri)} · " + android.text.format.Formatter.formatShortFileSize(context, uriSize(context, uri))
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1365,7 +1373,7 @@ fun ComposerScreen(
                         IconAttachment(modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "${uriName(context, uri)} · ${formatBytes(uriSize(context, uri))}",
+                            attachmentLabel,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
@@ -1387,7 +1395,7 @@ fun OutboxScreen(
     viewModel: EmailViewModel,
     onBack: () -> Unit,
 ) {
-    val outbox by viewModel.outbox.collectAsState(emptyList())
+    val outbox by viewModel.outbox.collectAsStateWithLifecycle(emptyList())
     val context = LocalContext.current
 
     Scaffold(
@@ -1495,14 +1503,14 @@ private fun OutboxRow(entry: OutboxEntry, onDelete: () -> Unit) {
 private fun signatureBlockHtml(acc: com.vayunmathur.email.EmailAccount?): String {
     val s = acc?.signature?.trim().orEmpty()
     if (s.isEmpty()) return ""
-    val escaped = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+    val escaped = android.text.TextUtils.htmlEncode(s).replace("\n", "<br>")
     return "<br><br>-- <br>$escaped"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: EmailViewModel, onBack: () -> Unit) {
-    val accounts by viewModel.accounts.collectAsState(emptyList())
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle(emptyList())
     val context = LocalContext.current
     Scaffold(
         topBar = {
@@ -1548,7 +1556,7 @@ fun SettingsScreen(viewModel: EmailViewModel, onBack: () -> Unit) {
                 HorizontalDivider()
             }
 
-            val blocked by viewModel.blockedSenders.collectAsState(emptyList())
+            val blocked by viewModel.blockedSenders.collectAsStateWithLifecycle(emptyList())
             Text("Blocked senders", style = MaterialTheme.typography.titleMedium)
             if (blocked.isEmpty()) {
                 Text("None", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1573,7 +1581,7 @@ fun DraftsScreen(
     onBack: () -> Unit,
     onOpenDraft: (Long) -> Unit,
 ) {
-    val drafts by viewModel.drafts.collectAsState(emptyList())
+    val drafts by viewModel.drafts.collectAsStateWithLifecycle(emptyList())
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1622,12 +1630,6 @@ private fun uriSize(context: android.content.Context, uri: android.net.Uri): Lon
             if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L
         }
     }.getOrNull() ?: 0L
-
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
-    bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
-    else -> "$bytes B"
-}
 
 /** Epoch millis for [hour]:00 today (or tomorrow if that time already passed, or sameDay=false forces next day). */
 private fun scheduleTime(hour: Int, sameDay: Boolean): Long {
@@ -1686,5 +1688,5 @@ private fun parseUnsubscribeUri(header: String): android.net.Uri? {
         .ifEmpty { header.split(",").map { it.trim() } }
     val pick = urls.firstOrNull { it.startsWith("http", ignoreCase = true) }
         ?: urls.firstOrNull { it.startsWith("mailto:", ignoreCase = true) }
-    return pick?.let { runCatching { android.net.Uri.parse(it) }.getOrNull() }
+    return pick?.let { runCatching { it.toUri() }.getOrNull() }
 }

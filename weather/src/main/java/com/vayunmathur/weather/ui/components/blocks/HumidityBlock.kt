@@ -4,8 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,33 +40,27 @@ fun HumidityBlock(current: Current, tempUnit: TemperatureUnit) {
     }
     val tint = MaterialTheme.colorScheme.inversePrimary
 
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.extraLarge,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Image(
-                painter = painterResource(id = waveDrawable),
-                contentDescription = null,
-                modifier = Modifier.matchParentSize().align(Alignment.BottomCenter),
-                alignment = Alignment.BottomCenter,
-                colorFilter = ColorFilter.tint(tint),
-            )
-            Box(Modifier.align(Alignment.TopStart)) {
-                BlockHeader(iconRes = R.drawable.outline_drizzle_24, title = "Humidity")
-            }
-            Text(
-                text = "${humidity}%",
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(horizontal = 12.dp),
-                style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Box(Modifier.align(Alignment.BottomStart)) {
-                DewPointRow(dewPointCelsius = current.dewPoint, tempUnit = tempUnit)
-            }
+    SquareBlock {
+        Image(
+            painter = painterResource(id = waveDrawable),
+            contentDescription = null,
+            modifier = Modifier.matchParentSize().align(Alignment.BottomCenter),
+            alignment = Alignment.BottomCenter,
+            colorFilter = ColorFilter.tint(tint),
+        )
+        Box(Modifier.align(Alignment.TopStart)) {
+            BlockHeader(iconRes = R.drawable.outline_drizzle_24, title = "Humidity")
+        }
+        Text(
+            text = "${humidity}%",
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(horizontal = 12.dp),
+            style = MaterialTheme.typography.displayMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Box(Modifier.align(Alignment.BottomStart)) {
+            DewPointRow(dewPointCelsius = current.dewPoint, tempUnit = tempUnit)
         }
     }
 }

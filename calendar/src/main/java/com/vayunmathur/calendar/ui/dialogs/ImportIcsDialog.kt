@@ -2,21 +2,18 @@ package com.vayunmathur.calendar.ui.dialogs
 
 import android.net.Uri
 import android.provider.CalendarContract
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vayunmathur.calendar.R
 import com.vayunmathur.calendar.data.Calendar
+import com.vayunmathur.calendar.ui.CalendarSelectorDropdown
 import com.vayunmathur.calendar.ui.EventCard
 import com.vayunmathur.calendar.util.CalendarViewModel
 
@@ -26,10 +23,9 @@ fun ImportIcsDialog(
     uris: List<Uri>,
     onDismiss: () -> Unit
 ) {
-    val parsedEvents by viewModel.parsedIcsEvents.collectAsState()
-    val calendars by viewModel.calendars.collectAsState()
+    val parsedEvents by viewModel.parsedIcsEvents.collectAsStateWithLifecycle()
+    val calendars by viewModel.calendars.collectAsStateWithLifecycle()
     var selectedCalendar by remember { mutableStateOf<Calendar?>(null) }
-    var showDropdown by remember { mutableStateOf(false) }
     var showAddCalendar by remember { mutableStateOf(false) }
     var newCalName by remember { mutableStateOf("") }
 
@@ -99,47 +95,14 @@ fun ImportIcsDialog(
                 Column(Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.select_calendar_to_import))
                     Spacer(Modifier.height(8.dp))
-                    
-                    Box {
-                        val editable = calendars.filter(Calendar::canModify)
-                        val grouped = editable.groupBy { it.accountName.ifEmpty { "(Local)" } }
-                        
-                        ListItem(
-                            headlineContent = { Text(selectedCalendar?.displayName ?: "Select Calendar") },
-                            leadingContent = {
-                                selectedCalendar?.color?.let { Box(Modifier.size(24.dp).background(Color(it), RectangleShape)) }
-                            },
-                            trailingContent = {
-                                Icon(painterResource(R.drawable.arrow_drop_down_24px), contentDescription = null)
-                            },
-                            modifier = Modifier.clickable { showDropdown = true }
-                        )
-                        
-                        DropdownMenu(expanded = showDropdown, onDismissRequest = { showDropdown = false }) {
-                            grouped.forEach { (account, cals) ->
-                                DropdownMenuItem(text = { Text(account) }, onClick = {}, enabled = false)
-                                cals.forEach { cal ->
-                                    DropdownMenuItem(
-                                        text = { Text(cal.displayName) },
-                                        leadingIcon = { Box(Modifier.size(16.dp).background(Color(cal.color), RectangleShape)) },
-                                        onClick = {
-                                            selectedCalendar = cal
-                                            showDropdown = false
-                                        }
-                                    )
-                                }
-                            }
-                            Divider()
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.create_new_calendar)) },
-                                onClick = {
-                                    showAddCalendar = true
-                                    showDropdown = false
-                                }
-                            )
-                        }
-                    }
-                    
+
+                    CalendarSelectorDropdown(
+                        calendars = calendars,
+                        selectedCalendar = selectedCalendar,
+                        onSelect = { selectedCalendar = it },
+                        onCreateNew = { showAddCalendar = true },
+                    )
+
                     Spacer(Modifier.height(16.dp))
                     
                     LazyColumn(Modifier.weight(1f, fill = false)) {

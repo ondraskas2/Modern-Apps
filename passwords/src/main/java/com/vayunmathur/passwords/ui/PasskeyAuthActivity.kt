@@ -1,6 +1,5 @@
 package com.vayunmathur.passwords.ui
 
-import android.app.PendingIntent
 import android.content.Intent
 import android.os.Bundle
 import android.util.Base64
@@ -8,12 +7,7 @@ import android.util.Log
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.PublicKeyCredential
-import androidx.credentials.provider.BeginGetCredentialResponse
-import androidx.credentials.provider.BeginGetPasswordOption
-import androidx.credentials.provider.BeginGetPublicKeyCredentialOption
-import androidx.credentials.provider.PasswordCredentialEntry
 import androidx.credentials.provider.PendingIntentHandler
-import androidx.credentials.provider.PublicKeyCredentialEntry
 import androidx.fragment.app.FragmentActivity
 import com.vayunmathur.library.biometric.unlockDatabaseWithBiometrics
 import com.vayunmathur.library.util.DatabaseHelper
@@ -23,6 +17,7 @@ import com.vayunmathur.passwords.data.PasswordDatabase
 import com.vayunmathur.passwords.util.Cbor
 import com.vayunmathur.passwords.util.PasskeyCredentialService
 import com.vayunmathur.passwords.util.PasskeyUtils
+import com.vayunmathur.passwords.util.buildGetCredentialResponse
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -353,65 +348,17 @@ class PasskeyAuthActivity : FragmentActivity() {
             return
         }
 
-        val responseBuilder = BeginGetCredentialResponse.Builder()
-        runBlocking {
-            for (option in request.beginGetCredentialOptions) {
-                when (option) {
-                    is BeginGetPublicKeyCredentialOption -> {
-                        val json = org.json.JSONObject(option.requestJson)
-                        val rpId = json.optString("rpId", "")
-                        if (rpId.isBlank()) continue
-
-                        val passkeys = passkeyDao.getByRpId(rpId)
-                        for (passkey in passkeys) {
-                            val intent = Intent(applicationContext, PasskeyAuthActivity::class.java).apply {
-                                putExtra(EXTRA_FLOW, FLOW_GET)
-                                putExtra(EXTRA_CREDENTIAL_ID, passkey.credentialId)
-                            }
-                            val pendingIntent = PendingIntent.getActivity(
-                                applicationContext,
-                                passkey.id.toInt(),
-                                intent,
-                                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                            )
-                            val entry = PublicKeyCredentialEntry.Builder(
-                                applicationContext,
-                                passkey.userName,
-                                pendingIntent,
-                                option,
-                            ).build()
-                            responseBuilder.addCredentialEntry(entry)
-                        }
-                    }
-                    is BeginGetPasswordOption -> {
-                        val allPasswords = db.passwordDao().getAll()
-                        for (pass in allPasswords) {
-                            val intent = Intent(applicationContext, PasskeyAuthActivity::class.java).apply {
-                                putExtra(EXTRA_FLOW, FLOW_PASSWORD)
-                                putExtra(PasskeyCredentialService.EXTRA_PASSWORD_ID, pass.id)
-                            }
-                            val pendingIntent = PendingIntent.getActivity(
-                                applicationContext,
-                                (pass.id + 100000).toInt(),
-                                intent,
-                                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-                            )
-                            val entry = PasswordCredentialEntry.Builder(
-                                applicationContext,
-                                pass.userId,
-                                pendingIntent,
-                                option,
-                            ).setDisplayName(pass.name.ifBlank { null })
-                                .build()
-                            responseBuilder.addCredentialEntry(entry)
-                        }
-                    }
-                }
-            }
+        val response = runBlocking {
+            buildGetCredentialResponse(
+                applicationContext,
+                request.beginGetCredentialOptions,
+                passkeyDao,
+                db.passwordDao(),
+            )
         }
 
         val result = Intent()
-        PendingIntentHandler.setBeginGetCredentialResponse(result, responseBuilder.build())
+        PendingIntentHandler.setBeginGetCredentialResponse(result, response)
         setResult(RESULT_OK, result)
     }
 

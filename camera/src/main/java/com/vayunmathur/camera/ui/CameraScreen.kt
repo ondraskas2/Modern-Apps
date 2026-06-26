@@ -81,6 +81,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -174,6 +175,12 @@ private enum class CameraSetting {
     BRIGHTNESS, SHADOWS, WARMTH, EXPOSURE_TIME
 }
 
+private fun Modifier.selectedPill(
+    selected: Boolean,
+    shape: Shape,
+    color: Color = Color(0xFF3C3C3C)
+): Modifier = if (selected) background(color, shape) else this
+
 @Composable
 fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     val context = LocalContext.current
@@ -242,15 +249,8 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
 
     val controller = remember { LifecycleCameraController(context) }
 
-    // Gallery thumbnail
-    val galleryBitmap = remember(lastCaptureUri) {
-        lastCaptureUri?.let { uri ->
-            try {
-                val size = android.util.Size(96, 96)
-                context.contentResolver.loadThumbnail(uri, size, null)
-            } catch (_: Exception) { null }
-        }
-    }
+    // Gallery thumbnail (loaded off the main thread in the ViewModel)
+    val galleryBitmap by viewModel.galleryThumbnail.collectAsState()
 
     LaunchedEffect(lensFacing) {
         controller.cameraSelector = CameraSelector.Builder()
@@ -310,10 +310,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                 controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
                 when (cameraMode) {
                     CameraMode.PORTRAIT -> {
-                        controller.setImageAnalysisAnalyzer(
-                            ContextCompat.getMainExecutor(context),
-                            BokehAnalyzer(context) { mask -> maskBitmap = mask }
-                        )
+                        // Analyzer lifecycle (create/close) managed by DisposableEffect(cameraMode) below.
                     }
                     CameraMode.PANORAMA, CameraMode.PHOTOSPHERE -> {
                         maskBitmap = null
@@ -339,6 +336,23 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                 controller.clearImageAnalysisAnalyzer()
                 viewModel.setQrResult(null)
             }
+        }
+    }
+
+    // Owns the PORTRAIT bokeh segmenter so it is closed (and its mask recycled) on mode change.
+    DisposableEffect(cameraMode) {
+        val analyzer = if (cameraMode == CameraMode.PORTRAIT) {
+            BokehAnalyzer(context) { mask ->
+                maskBitmap?.recycle()
+                maskBitmap = mask
+            }.also {
+                controller.setImageAnalysisAnalyzer(ContextCompat.getMainExecutor(context), it)
+            }
+        } else null
+        onDispose {
+            analyzer?.close()
+            maskBitmap?.recycle()
+            maskBitmap = null
         }
     }
 
@@ -833,10 +847,7 @@ private fun SettingsButtonRow(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .then(
-                        if (isActive) Modifier.background(Color(0xFF3C3C3C), CircleShape)
-                        else Modifier
-                    )
+                    .selectedPill(isActive, CircleShape)
                     .clip(CircleShape)
                     .clickable { onSelect(if (isActive) null else setting) },
                 contentAlignment = Alignment.Center
@@ -871,10 +882,7 @@ private fun ZoomBar(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .then(
-                        if (isSelected) Modifier.background(Color(0xFF3C3C3C), CircleShape)
-                        else Modifier
-                    )
+                    .selectedPill(isSelected, CircleShape)
                     .clip(CircleShape)
                     .clickable { onZoomSelected(ratio) },
                 contentAlignment = Alignment.Center
@@ -1018,10 +1026,7 @@ private fun ModeSelector(
                 fontSize = 14.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                 modifier = Modifier
-                    .then(
-                        if (isSelected) Modifier.background(Color(0xFF3C3C3C), RoundedCornerShape(20.dp))
-                        else Modifier
-                    )
+                    .selectedPill(isSelected, RoundedCornerShape(20.dp))
                     .clickable { if (!isSelected) onModeSelected(mode) }
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
@@ -1068,10 +1073,7 @@ private fun BottomBar(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .then(
-                        if (isPhotoType) Modifier.background(Color(0xFF5C5C5C), CircleShape)
-                        else Modifier
-                    )
+                    .selectedPill(isPhotoType, CircleShape, Color(0xFF5C5C5C))
                     .clickable { if (!isPhotoType) onPickerChanged(true) },
                 contentAlignment = Alignment.Center
             ) {
@@ -1085,10 +1087,7 @@ private fun BottomBar(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .then(
-                        if (!isPhotoType) Modifier.background(Color(0xFF5C5C5C), CircleShape)
-                        else Modifier
-                    )
+                    .selectedPill(!isPhotoType, CircleShape, Color(0xFF5C5C5C))
                     .clickable { if (isPhotoType) onPickerChanged(false) },
                 contentAlignment = Alignment.Center
             ) {

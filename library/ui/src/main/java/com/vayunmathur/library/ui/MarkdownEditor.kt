@@ -475,15 +475,23 @@ fun findCheckboxPositions(text: String): List<Pair<Int, Boolean>> =
 private fun escapeHtml(s: String): String =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+private val htmlLinkRegex = Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)")
+private val htmlBoldStarRegex = Regex("\\*\\*(.+?)\\*\\*")
+private val htmlBoldUnderRegex = Regex("__(.+?)__")
+private val htmlStrikeRegex = Regex("~~(.+?)~~")
+private val htmlItalicStarRegex = Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)")
+private val htmlItalicUnderRegex = Regex("(?<!_)_(?!_)(.+?)(?<!_)_(?!_)")
+private val htmlInlineCodeRegex = Regex("`([^`]+)`")
+
 private fun inlineMarkdownToHtml(s: String): String {
     var t = escapeHtml(s)
-    t = Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)").replace(t) { m -> "<a href=\"${m.groupValues[2]}\">${m.groupValues[1]}</a>" }
-    t = Regex("\\*\\*(.+?)\\*\\*").replace(t) { "<b>${it.groupValues[1]}</b>" }
-    t = Regex("__(.+?)__").replace(t) { "<b>${it.groupValues[1]}</b>" }
-    t = Regex("~~(.+?)~~").replace(t) { "<s>${it.groupValues[1]}</s>" }
-    t = Regex("(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)").replace(t) { "<i>${it.groupValues[1]}</i>" }
-    t = Regex("(?<!_)_(?!_)(.+?)(?<!_)_(?!_)").replace(t) { "<i>${it.groupValues[1]}</i>" }
-    t = Regex("`([^`]+)`").replace(t) { "<code>${it.groupValues[1]}</code>" }
+    t = htmlLinkRegex.replace(t) { m -> "<a href=\"${m.groupValues[2]}\">${m.groupValues[1]}</a>" }
+    t = htmlBoldStarRegex.replace(t) { "<b>${it.groupValues[1]}</b>" }
+    t = htmlBoldUnderRegex.replace(t) { "<b>${it.groupValues[1]}</b>" }
+    t = htmlStrikeRegex.replace(t) { "<s>${it.groupValues[1]}</s>" }
+    t = htmlItalicStarRegex.replace(t) { "<i>${it.groupValues[1]}</i>" }
+    t = htmlItalicUnderRegex.replace(t) { "<i>${it.groupValues[1]}</i>" }
+    t = htmlInlineCodeRegex.replace(t) { "<code>${it.groupValues[1]}</code>" }
     return t
 }
 

@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val alarmManager = getSystemService(AlarmManager::class.java)
-        if (!alarmManager.canScheduleExactAlarms()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
             // Redirect user to system settings to allow exact alarms
             val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                 data = Uri.fromParts("package", packageName, null)

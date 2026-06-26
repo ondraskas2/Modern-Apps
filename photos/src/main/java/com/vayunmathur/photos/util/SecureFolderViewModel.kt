@@ -5,10 +5,12 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.room.migration.Migration
+import androidx.core.net.toUri
 import com.vayunmathur.library.biometric.unlockDatabaseWithBiometrics
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.photos.data.Photo
@@ -64,7 +66,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
     private val thumbCache = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean {
             if (size > 32) {
-                try { eldest.value.recycle() } catch (_: Exception) {}
+                try { eldest.value.recycle() } catch (e: Exception) { Log.w(TAG, "Failed to recycle evicted thumbnail", e) }
                 return true
             }
             return false
@@ -121,7 +123,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
                 synchronized(thumbCache) {
                     val existing = thumbCache[thumbnailPath]
                     if (existing != null) {
-                        try { bmp.recycle() } catch (_: Exception) {}
+                        try { bmp.recycle() } catch (e: Exception) { Log.w(TAG, "Failed to recycle duplicate thumbnail", e) }
                     } else {
                         thumbCache[thumbnailPath] = bmp
                     }
@@ -190,7 +192,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
                 photos.forEach { photo ->
                     try {
                         val (path, thumbPath) = sfm.encryptAndMove(
-                            android.net.Uri.parse(photo.uri),
+                            photo.uri.toUri(),
                             photo.name,
                             password,
                         )
@@ -206,7 +208,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
                                 videoDuration = photo.videoData?.duration,
                             )
                         )
-                        collected.add(android.net.Uri.parse(photo.uri))
+                        collected.add(photo.uri.toUri())
                         sourcePhotoDao.delete(photo)
                     } catch (e: Exception) {
                         Log.e(TAG, "encryptAndMove failed for ${photo.uri}", e)
@@ -224,7 +226,7 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
         super.onCleared()
         synchronized(thumbCache) {
             thumbCache.values.forEach { bmp ->
-                try { if (!bmp.isRecycled) bmp.recycle() } catch (_: Exception) {}
+                try { if (!bmp.isRecycled) bmp.recycle() } catch (e: Exception) { Log.w(TAG, "Failed to recycle thumbnail on clear", e) }
             }
             thumbCache.clear()
         }
@@ -236,12 +238,8 @@ class SecureFolderViewModel(application: Application) : AndroidViewModel(applica
     }
 }
 
-class SecureFolderViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(SecureFolderViewModel::class.java)) {
-            "Unexpected ViewModel class: $modelClass"
-        }
-        return SecureFolderViewModel(application) as T
+@Suppress("FunctionName")
+fun SecureFolderViewModelFactory(application: Application): ViewModelProvider.Factory =
+    viewModelFactory {
+        initializer { SecureFolderViewModel(application) }
     }
-}

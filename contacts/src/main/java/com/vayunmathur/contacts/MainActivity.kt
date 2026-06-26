@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vayunmathur.contacts.data.CDKPhone
 import com.vayunmathur.contacts.ui.*
 import com.vayunmathur.contacts.ui.dialogs.*
@@ -59,7 +60,7 @@ class MainActivity : ComponentActivity() {
                         if (intent.data?.toString()?.contains("phones") == true) {
                             type = CDKPhone.CONTENT_ITEM_TYPE
                         }
-                        val contacts by viewModel.contacts.collectAsState()
+                        val contacts by viewModel.contacts.collectAsStateWithLifecycle()
                         val allowMultiple = intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
                         if (allowMultiple) {
                             val selected = remember { mutableStateListOf<Uri>() }
@@ -113,54 +114,52 @@ class MainActivity : ComponentActivity() {
         finish()
     }
 
-    private fun handleIntent(intent: Intent?) {
-        intent?.let {
-            val type = it.type ?: ""
-            val isVcf = type.contains("vcard") || type.contains("vcf") || it.data?.path?.endsWith(".vcf", ignoreCase = true) == true
-            
-            if (isVcf) {
-                val uris = IntentHelper.getUrisFromIntent(it)
-                if (uris.isNotEmpty()) {
-                    importUris.value = uris
-                }
-            }
+    private fun handleIntent(intent: Intent) {
+        val type = intent.type ?: ""
+        val isVcf = type.contains("vcard") || type.contains("vcf") || intent.data?.path?.endsWith(".vcf", ignoreCase = true) == true
 
-            val action = it.action
-            if (action == Intent.ACTION_VIEW || action == Intent.ACTION_EDIT || action == Intent.ACTION_INSERT
-                || action == ContactsContract.QuickContact.ACTION_QUICK_CONTACT
-                || action == "com.android.contacts.action.QUICK_CONTACT") {
-                externalRoute.value = when (action) {
-                    Intent.ACTION_INSERT -> {
-                        Route.EditContact(
-                            contactId = null,
-                            name = it.getStringExtra(ContactsContract.Intents.Insert.NAME),
-                            phone = it.getStringExtra(ContactsContract.Intents.Insert.PHONE),
-                            email = it.getStringExtra(ContactsContract.Intents.Insert.EMAIL),
-                            company = it.getStringExtra(ContactsContract.Intents.Insert.COMPANY),
-                            jobTitle = it.getStringExtra(ContactsContract.Intents.Insert.JOB_TITLE),
-                            notes = it.getStringExtra(ContactsContract.Intents.Insert.NOTES)
-                        )
-                    }
-                    Intent.ACTION_EDIT -> {
-                        val contactId = resolveContactId(it.data)
-                        Route.EditContact(
-                            contactId = contactId,
-                            name = it.getStringExtra(ContactsContract.Intents.Insert.NAME),
-                            phone = it.getStringExtra(ContactsContract.Intents.Insert.PHONE),
-                            email = it.getStringExtra(ContactsContract.Intents.Insert.EMAIL)
-                        )
-                    }
-                    else -> {
-                        val path = it.data?.path ?: ""
-                        val mimeType = it.type
-                        when {
-                            path.contains("/groups") || mimeType?.contains("group") == true -> {
-                                val groupId = it.data?.lastPathSegment?.toLongOrNull()
-                                Route.GroupsList(groupId)
-                            }
-                            else -> {
-                                resolveContactId(it.data)?.let { id -> Route.ContactDetail(id) }
-                            }
+        if (isVcf) {
+            val uris = IntentHelper.getUrisFromIntent(intent)
+            if (uris.isNotEmpty()) {
+                importUris.value = uris
+            }
+        }
+
+        val action = intent.action
+        if (action == Intent.ACTION_VIEW || action == Intent.ACTION_EDIT || action == Intent.ACTION_INSERT
+            || action == ContactsContract.QuickContact.ACTION_QUICK_CONTACT
+            || action == "com.android.contacts.action.QUICK_CONTACT") {
+            externalRoute.value = when (action) {
+                Intent.ACTION_INSERT -> {
+                    Route.EditContact(
+                        contactId = null,
+                        name = intent.getStringExtra(ContactsContract.Intents.Insert.NAME),
+                        phone = intent.getStringExtra(ContactsContract.Intents.Insert.PHONE),
+                        email = intent.getStringExtra(ContactsContract.Intents.Insert.EMAIL),
+                        company = intent.getStringExtra(ContactsContract.Intents.Insert.COMPANY),
+                        jobTitle = intent.getStringExtra(ContactsContract.Intents.Insert.JOB_TITLE),
+                        notes = intent.getStringExtra(ContactsContract.Intents.Insert.NOTES)
+                    )
+                }
+                Intent.ACTION_EDIT -> {
+                    val contactId = resolveContactId(intent.data)
+                    Route.EditContact(
+                        contactId = contactId,
+                        name = intent.getStringExtra(ContactsContract.Intents.Insert.NAME),
+                        phone = intent.getStringExtra(ContactsContract.Intents.Insert.PHONE),
+                        email = intent.getStringExtra(ContactsContract.Intents.Insert.EMAIL)
+                    )
+                }
+                else -> {
+                    val path = intent.data?.path ?: ""
+                    val mimeType = intent.type
+                    when {
+                        path.contains("/groups") || mimeType?.contains("group") == true -> {
+                            val groupId = intent.data?.lastPathSegment?.toLongOrNull()
+                            Route.GroupsList(groupId)
+                        }
+                        else -> {
+                            resolveContactId(intent.data)?.let { id -> Route.ContactDetail(id) }
                         }
                     }
                 }
@@ -239,7 +238,7 @@ fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
         }
     }
 
-    val isCalendarSyncEnabled by viewModel.isCalendarSyncEnabled.collectAsState()
+    val isCalendarSyncEnabled by viewModel.isCalendarSyncEnabled.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(isCalendarSyncEnabled) {

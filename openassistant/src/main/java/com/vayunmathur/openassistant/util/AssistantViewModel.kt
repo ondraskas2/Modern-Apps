@@ -8,8 +8,6 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.openassistant.data.Conversation
@@ -205,21 +203,5 @@ class AssistantViewModel(
 
     companion object {
         private const val TAG = "AssistantViewModel"
-    }
-}
-
-/** Factory for constructing [AssistantViewModel] with DAOs. */
-class AssistantViewModelFactory(
-    private val application: Application,
-    private val conversationDao: ConversationDao,
-    private val messageDao: MessageDao,
-    private val memoryDao: MemoryDao,
-) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(AssistantViewModel::class.java)) {
-            "Unexpected ViewModel class: $modelClass"
-        }
-        return AssistantViewModel(application, conversationDao, messageDao, memoryDao) as T
     }
 }

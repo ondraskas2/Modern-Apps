@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 
 class WavRecorder(val context: Context, val outputFile: File, val scope: CoroutineScope) {
@@ -61,36 +63,21 @@ class WavRecorder(val context: Context, val outputFile: File, val scope: Corouti
         val byteRate = (16 * sampleRate * 1 / 8).toLong()
 
         FileOutputStream(wavFile).use { out ->
-            val header = ByteArray(44)
-            fun writeString(s: String, offset: Int) {
-                s.forEachIndexed { i, c -> header[offset + i] = c.code.toByte() }
-            }
-            writeString("RIFF", 0)
-            header[4] = (totalDataLen and 0xff).toByte()
-            header[5] = ((totalDataLen shr 8) and 0xff).toByte()
-            header[6] = ((totalDataLen shr 16) and 0xff).toByte()
-            header[7] = ((totalDataLen shr 24) and 0xff).toByte()
-            writeString("WAVE", 8)
-            writeString("fmt ", 12)
-            header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
-            header[20] = 1; header[21] = 0 // PCM
-            header[22] = 1; header[23] = 0 // Mono
-            header[24] = (sampleRate and 0xff).toByte()
-            header[25] = ((sampleRate shr 8) and 0xff).toByte()
-            header[26] = ((sampleRate shr 16) and 0xff).toByte()
-            header[27] = ((sampleRate shr 24) and 0xff).toByte()
-            header[28] = (byteRate and 0xff).toByte()
-            header[29] = ((byteRate shr 8) and 0xff).toByte()
-            header[30] = ((byteRate shr 16) and 0xff).toByte()
-            header[31] = ((byteRate shr 24) and 0xff).toByte()
-            header[32] = 2; header[33] = 0 // block align
-            header[34] = 16; header[35] = 0 // bits per sample
-            writeString("data", 36)
-            header[40] = (totalAudioLen and 0xff).toByte()
-            header[41] = ((totalAudioLen shr 8) and 0xff).toByte()
-            header[42] = ((totalAudioLen shr 16) and 0xff).toByte()
-            header[43] = ((totalAudioLen shr 24) and 0xff).toByte()
-            out.write(header)
+            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            header.put("RIFF".toByteArray(Charsets.US_ASCII))
+            header.putInt(totalDataLen.toInt())
+            header.put("WAVE".toByteArray(Charsets.US_ASCII))
+            header.put("fmt ".toByteArray(Charsets.US_ASCII))
+            header.putInt(16)                 // Subchunk1 size (PCM)
+            header.putShort(1.toShort())      // Audio format = PCM
+            header.putShort(1.toShort())      // Num channels = mono
+            header.putInt(sampleRate)
+            header.putInt(byteRate.toInt())
+            header.putShort(2.toShort())      // Block align
+            header.putShort(16.toShort())     // Bits per sample
+            header.put("data".toByteArray(Charsets.US_ASCII))
+            header.putInt(totalAudioLen.toInt())
+            out.write(header.array())
             out.write(rawData)
         }
     }

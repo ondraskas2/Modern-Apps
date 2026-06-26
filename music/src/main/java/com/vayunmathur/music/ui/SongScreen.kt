@@ -33,6 +33,8 @@ import com.vayunmathur.library.ui.IconPause
 import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.music.util.AlbumArt
 import com.vayunmathur.music.util.MusicViewModel
+import com.vayunmathur.music.util.PlaybackSource
+import com.vayunmathur.music.util.formatDuration
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import org.jaudiotagger.audio.AudioFileIO
@@ -89,12 +91,12 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                 actions = {
                     if (currentSource != null && currentSourceName != null) {
                         TextButton(onClick = {
-                            val source = currentSource ?: return@TextButton
-                            when {
-                                source == "all_songs" -> backStack.reset(Route.Home)
-                                source.startsWith("album_") -> backStack.reset(Route.Home, Route.AlbumDetail(source.removePrefix("album_").toLong()))
-                                source.startsWith("playlist_") -> backStack.reset(Route.Home, Route.PlaylistDetail(source.removePrefix("playlist_").toLong()))
-                                source.startsWith("artist_") -> backStack.reset(Route.Home, Route.ArtistDetail(source.removePrefix("artist_").toLong()))
+                            when (val src = PlaybackSource.parse(currentSource)) {
+                                PlaybackSource.AllSongs -> backStack.reset(Route.Home)
+                                is PlaybackSource.Album -> backStack.reset(Route.Home, Route.AlbumDetail(src.albumId))
+                                is PlaybackSource.Playlist -> backStack.reset(Route.Home, Route.PlaylistDetail(src.playlistId))
+                                is PlaybackSource.Artist -> backStack.reset(Route.Home, Route.ArtistDetail(src.artistId))
+                                null -> {}
                             }
                         }) {
                             Text(
@@ -181,8 +183,8 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                     )
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTime(currentPos), color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                    Text(formatTime(duration), color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    Text(formatDuration(currentPos), color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    Text(formatDuration(duration), color = Color.Gray, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -313,12 +315,6 @@ fun parseLyrics(lrcContent: String): List<LyricLine> {
         }
     }
     return lines.sortedBy { it.timestamp }
-}
-
-private fun formatTime(ms: Long): String {
-    val sec = (ms / 1000) % 60
-    val min = (ms / 1000) / 60
-    return "%d:%02d".format(min, sec)
 }
 
 fun getLyricsFromContentUri(context: Context, contentUri: Uri): String? {

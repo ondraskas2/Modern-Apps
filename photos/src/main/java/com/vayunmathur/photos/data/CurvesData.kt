@@ -70,29 +70,24 @@ fun CurvesAdjustment.toColorMatrix(): ColorMatrix {
 }
 
 fun CurvesAdjustment.applyLutToBitmap(bitmap: Bitmap): Bitmap {
-    val w = bitmap.width
-    val h = bitmap.height
-    val pixels = IntArray(w * h)
-    bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
     val luts = generateLuts()
     val combinedLut = luts[0]
     val rLut = luts[1]
     val gLut = luts[2]
     val bLut = luts[3]
-    for (i in pixels.indices) {
-        val a = (pixels[i] shr 24) and 0xFF
-        var r = (pixels[i] shr 16) and 0xFF
-        var g = (pixels[i] shr 8) and 0xFF
-        var b = pixels[i] and 0xFF
-        r = (combinedLut[r] * 255f).toInt().coerceIn(0, 255)
-        g = (combinedLut[g] * 255f).toInt().coerceIn(0, 255)
-        b = (combinedLut[b] * 255f).toInt().coerceIn(0, 255)
-        r = (rLut[r] * 255f).toInt().coerceIn(0, 255)
-        g = (gLut[g] * 255f).toInt().coerceIn(0, 255)
-        b = (bLut[b] * 255f).toInt().coerceIn(0, 255)
-        pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+    return bitmap.copy(Bitmap.Config.ARGB_8888, true).apply {
+        mapPixels { p ->
+            val a = (p shr 24) and 0xFF
+            var r = (p shr 16) and 0xFF
+            var g = (p shr 8) and 0xFF
+            var b = p and 0xFF
+            r = (combinedLut[r] * 255f).toInt().coerceIn(0, 255)
+            g = (combinedLut[g] * 255f).toInt().coerceIn(0, 255)
+            b = (combinedLut[b] * 255f).toInt().coerceIn(0, 255)
+            r = (rLut[r] * 255f).toInt().coerceIn(0, 255)
+            g = (gLut[g] * 255f).toInt().coerceIn(0, 255)
+            b = (bLut[b] * 255f).toInt().coerceIn(0, 255)
+            (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
     }
-    val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    result.setPixels(pixels, 0, w, 0, 0, w, h)
-    return result
 }

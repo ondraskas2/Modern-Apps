@@ -26,11 +26,12 @@ import com.vayunmathur.contacts.util.ContactViewModel
 import com.vayunmathur.library.ui.IconAdd
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.util.NavBackStack
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expandGroupId: Long? = null) {
-    val groups by viewModel.groups.collectAsState()
+    val groups by viewModel.groups.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf("") }
     var groupToDelete by remember { mutableStateOf<com.vayunmathur.contacts.data.ContactGroup?>(null) }
@@ -70,7 +71,7 @@ fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expa
                 //     the contacts list's expand/collapse without the LazyColumn
                 //     swapping items underneath us mid-animation.
                 item(key = "group-${group.id}") {
-                    val contactsInGroup by viewModel.getContactsForGroup(group.id).collectAsState(initial = emptyList())
+                    val contactsInGroup by viewModel.getContactsForGroup(group.id).collectAsStateWithLifecycle(initialValue = emptyList())
                     val attachContacts = isExpanded && contactsInGroup.isNotEmpty()
 
                     val collapsedColor = MaterialTheme.colorScheme.surfaceVariant

@@ -12,6 +12,6 @@ fun Modifier.invisibleClickable(onClick: () -> Unit) = clickable(null, null) {on
  * Usage: `Modifier.onDoubleTap { /* duplicate item in viewmodel/state */ }`
  */
 fun Modifier.onDoubleTap(onDoubleTap: () -> Unit): Modifier =
-	this.pointerInput(Unit) {
+	this.pointerInput(onDoubleTap) {
 		detectTapGestures(onDoubleTap = { onDoubleTap() })
 	}

@@ -1,6 +1,5 @@
 package com.vayunmathur.weather.util
 
-import com.vayunmathur.weather.intents.parseLocalIsoToEpochSec
 import com.vayunmathur.weather.network.Minutely15
 
 /**

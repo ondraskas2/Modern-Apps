@@ -135,87 +135,85 @@ class LocationTrackingService : Service(), SensorEventListener {
             bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).toFloat()
         )
 
-        withContext(Dispatchers.IO) {
-            locationValueDao.upsert(locationValue)
-            Networking.ensureUserExists()
-            
-            if (currentUsers.none { it.id == Networking.userid }) {
-                userDao.upsert(
-                    User(
-                        getString(R.string.me_label),
-                        null,
-                        "Unnamed Location",
-                        true,
-                        RequestStatus.MUTUAL_CONNECTION,
-                        Clock.System.now(),
-                        null,
-                        Networking.userid
-                    )
+        locationValueDao.upsert(locationValue)
+        Networking.ensureUserExists()
+
+        if (currentUsers.none { it.id == Networking.userid }) {
+            userDao.upsert(
+                User(
+                    getString(R.string.me_label),
+                    null,
+                    "Unnamed Location",
+                    true,
+                    RequestStatus.MUTUAL_CONNECTION,
+                    Clock.System.now(),
+                    null,
+                    Networking.userid
                 )
-            }
+            )
+        }
 
-            currentUsers.filter { it.id != Networking.userid }.forEach { Networking.publishLocation(locationValue, it) }
-            currentLinks.filter { now < it.deleteAt }.forEach { Networking.publishLocation(locationValue, it) }
-            currentLinks.filter { now >= it.deleteAt }.forEach { temporaryLinkDao.delete(it) }
+        currentUsers.filter { it.id != Networking.userid }.forEach { Networking.publishLocation(locationValue, it) }
+        currentLinks.filter { now < it.deleteAt }.forEach { Networking.publishLocation(locationValue, it) }
+        currentLinks.filter { now >= it.deleteAt }.forEach { temporaryLinkDao.delete(it) }
 
-            delay(3000)
-            Networking.receiveLocations()?.let { locations ->
-                val usersRecieved = locations.map { it.userid }.distinct()
-                val newUsers = usersRecieved.filter { it !in userIDs && it != Networking.userid }
-                userDao.insertAllIgnore(newUsers.map {
-                    User(" ", null, "Unknown Location", false, RequestStatus.AWAITING_REQUEST, Clock.System.now(), null, it)
-                })
+        delay(3000)
+        Networking.receiveLocations()?.let { locations ->
+            val usersRecieved = locations.map { it.userid }.distinct()
+            val newUsers = usersRecieved.filter { it !in userIDs && it != Networking.userid }
+            userDao.insertAllIgnore(newUsers.map {
+                User(" ", null, "Unknown Location", false, RequestStatus.AWAITING_REQUEST, Clock.System.now(), null, it)
+            })
 
-                val latestMap = locationValueDao.getLatest().first().associateBy { it.userid }
-                currentUsers.forEach { user ->
-                    val lastLoc = locations.filter { it.userid == user.id }.maxByOrNull { it.timestamp } ?: return@forEach
-                    val lastSavedLoc = latestMap[user.id]
+            val latestMap = locationValueDao.getLatest().first().associateBy { it.userid }
+            currentUsers.forEach { user ->
+                val lastLoc = locations.filter { it.userid == user.id }.maxByOrNull { it.timestamp } ?: return@forEach
+                val lastSavedLoc = latestMap[user.id]
 
-                    if (lastLoc.battery <= 15f && (lastSavedLoc?.battery ?: 100f) > 15f) {
-                        if (user.id != Networking.userid) {
-                            createNotificationWithCategory(user.name, getString(R.string.notification_low_battery, user.name), "BATTERY_LOW", user.id)
-                        }
-                    }
-
-                    val inWaypoint = currentWaypoints.find { havershine(it.coord, lastLoc.coord) < it.range }
-                    val prevId = user.lastWaypointId
-                    val stillInsidePrev = prevId?.let { pid ->
-                        currentWaypoints.find { it.id == pid }?.let {
-                            havershine(it.coord, lastLoc.coord) < it.range * 1.2
-                        }
-                    } ?: false
-                    val currentId: Long? = inWaypoint?.id ?: if (stillInsidePrev) prevId else null
-
-                    // Display name: prefer waypoint name (either entered or sticky-via-hysteresis), then geocoded address.
-                    val displayName = inWaypoint?.name
-                        ?: currentWaypoints.find { it.id == currentId }?.name
-                        ?: fetchAddress(lastLoc.coord.lat, lastLoc.coord.lon)?.let {
-                            it.featureName ?: it.thoroughfare
-                        }
-                        ?: "Unknown Location"
-
-                    if (currentId != prevId || displayName != user.locationName) {
-                        userDao.upsert(user.copy(
-                            locationName = displayName,
-                            lastWaypointId = currentId,
-                            lastLocationChangeTime = lastLoc.timestamp
-                        ))
-                    }
-
-                    if (currentId != prevId && user.id != Networking.userid) {
-                        if (currentId != null) {
-                            val enteredName = inWaypoint?.name
-                                ?: currentWaypoints.find { it.id == currentId }?.name
-                                ?: displayName
-                            createNotificationWithCategory(user.name, getString(R.string.notification_entered_waypoint, user.name, enteredName), "ENTRY_EXIT", user.id)
-                        } else if (prevId != null) {
-                            val exitedName = currentWaypoints.find { it.id == prevId }?.name ?: user.locationName
-                            createNotificationWithCategory(user.name, getString(R.string.notification_exited_waypoint, user.name, exitedName), "ENTRY_EXIT", user.id)
-                        }
+                if (lastLoc.battery <= 15f && (lastSavedLoc?.battery ?: 100f) > 15f) {
+                    if (user.id != Networking.userid) {
+                        createNotificationWithCategory(user.name, getString(R.string.notification_low_battery, user.name), "BATTERY_LOW", user.id)
                     }
                 }
-                locationValueDao.upsertAll(locations)
+
+                val inWaypoint = currentWaypoints.find { havershine(it.coord, lastLoc.coord) < it.range }
+                val prevId = user.lastWaypointId
+                val stillInsidePrev = prevId?.let { pid ->
+                    currentWaypoints.find { it.id == pid }?.let {
+                        havershine(it.coord, lastLoc.coord) < it.range * 1.2
+                    }
+                } ?: false
+                val currentId: Long? = inWaypoint?.id ?: if (stillInsidePrev) prevId else null
+
+                // Display name: prefer waypoint name (either entered or sticky-via-hysteresis), then geocoded address.
+                val displayName = inWaypoint?.name
+                    ?: currentWaypoints.find { it.id == currentId }?.name
+                    ?: fetchAddress(lastLoc.coord.lat, lastLoc.coord.lon)?.let {
+                        it.featureName ?: it.thoroughfare
+                    }
+                    ?: "Unknown Location"
+
+                if (currentId != prevId || displayName != user.locationName) {
+                    userDao.upsert(user.copy(
+                        locationName = displayName,
+                        lastWaypointId = currentId,
+                        lastLocationChangeTime = lastLoc.timestamp
+                    ))
+                }
+
+                if (currentId != prevId && user.id != Networking.userid) {
+                    if (currentId != null) {
+                        val enteredName = inWaypoint?.name
+                            ?: currentWaypoints.find { it.id == currentId }?.name
+                            ?: displayName
+                        createNotificationWithCategory(user.name, getString(R.string.notification_entered_waypoint, user.name, enteredName), "ENTRY_EXIT", user.id)
+                    } else if (prevId != null) {
+                        val exitedName = currentWaypoints.find { it.id == prevId }?.name ?: user.locationName
+                        createNotificationWithCategory(user.name, getString(R.string.notification_exited_waypoint, user.name, exitedName), "ENTRY_EXIT", user.id)
+                    }
+                }
             }
+            locationValueDao.upsertAll(locations)
         }
     }
 
@@ -246,7 +244,6 @@ class LocationTrackingService : Service(), SensorEventListener {
             val y = event.values[1]
             val z = event.values[2]
             val accel = sqrt(x*x + y*y + z*z)
-            println(accel)
             if (accel > 0.5f) {
                 lastMovementTime = System.currentTimeMillis()
                 if (!isMoving) {
@@ -270,6 +267,11 @@ class LocationTrackingService : Service(), SensorEventListener {
 
     override fun onBind(intent: Intent): IBinder? {
         return null
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        setupNotificationChannels()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -422,7 +424,7 @@ class LocationTrackingService : Service(), SensorEventListener {
         private const val NOTIFICATION_ID = 101
     }
 
-    private fun createNotification(): Notification {
+    private fun setupNotificationChannels() {
         // 1. Create the Channel (Required for API 26+)
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -460,11 +462,12 @@ class LocationTrackingService : Service(), SensorEventListener {
         }
 
         // Register all channels
-
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannels(listOf(channel, batteryChannel, arrivalChannel, uwbChannel))
+    }
 
-        // 2. Create an Intent to open the app when the notification is clicked
+    private fun createNotification(): Notification {
+        // Create an Intent to open the app when the notification is clicked
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),

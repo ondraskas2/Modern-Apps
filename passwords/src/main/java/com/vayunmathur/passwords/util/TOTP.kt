@@ -1,34 +1,12 @@
 package com.vayunmathur.passwords.util
+import org.apache.commons.codec.binary.Base32
+import java.nio.ByteBuffer
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 object TOTP {
-    private fun base32Decode(data: String): ByteArray {
-        val base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-        val clean = data.trim().replace("=", "").replace(" ", "").uppercase()
-        val output = mutableListOf<Byte>()
-        var buffer = 0
-        var bitsLeft = 0
-        for (c in clean) {
-            val valC = base32Chars.indexOf(c)
-            if (valC == -1) continue
-            buffer = (buffer shl 5) or valC
-            bitsLeft += 5
-            if (bitsLeft >= 8) {
-                bitsLeft -= 8
-                output.add(((buffer shr bitsLeft) and 0xFF).toByte())
-            }
-        }
-        return output.toByteArray()
-    }
-
     private fun hotp(key: ByteArray, counter: Long): String {
-        val counterBytes = ByteArray(8)
-        var c = counter
-        for (i in 7 downTo 0) {
-            counterBytes[i] = (c and 0xFF).toByte()
-            c = c ushr 8
-        }
+        val counterBytes = ByteBuffer.allocate(8).putLong(counter).array()
         val mac = Mac.getInstance("HmacSHA1")
         mac.init(SecretKeySpec(key, "RAW"))
         val hash = mac.doFinal(counterBytes)
@@ -41,7 +19,8 @@ object TOTP {
     }
 
     fun generate(secret: String, epochSecond: Long): String {
-        val key = base32Decode(secret)
+        val cleaned = secret.trim().replace("=", "").replace(" ", "").uppercase()
+        val key = Base32().decode(cleaned)
         val timeStep = 30L
         val counter = epochSecond / timeStep
         return hotp(key, counter)

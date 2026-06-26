@@ -38,7 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -99,10 +99,10 @@ fun ContactList(
         viewModel.loadAccounts()
     }
 
-    val contacts by viewModel.contacts.collectAsState()
+    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
     val selectedIds = remember { mutableStateListOf<Long>() }
     val isSelectionMode = selectedIds.isNotEmpty()
-    val showAccountLabels by viewModel.showAccountLabels.collectAsState()
+    val showAccountLabels by viewModel.showAccountLabels.collectAsStateWithLifecycle()
 
     val (favorites, otherContacts) = remember(contacts) { contacts.partition { it.isFavorite } }
     val groupedContacts = remember(otherContacts) {
@@ -113,22 +113,6 @@ fun ContactList(
 
     val toggleSelection = { id: Long ->
         if (id in selectedIds) selectedIds.remove(id) else selectedIds.add(id)
-    }
-
-    val exportVcf = { contactsToExport: List<Contact>, filename: String ->
-        scope.launch(Dispatchers.IO) {
-            val vcfFile = context.cacheDir.toOkioPath().resolve(filename)
-            FileSystem.SYSTEM.sink(vcfFile).buffer().use { outputStream ->
-                VcfUtils.exportContacts(contactsToExport, outputStream)
-            }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", vcfFile.toFile())
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/x-vcard"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(intent, resources.getString(R.string.share_contact)))
-        }
     }
 
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -162,7 +146,7 @@ fun ContactList(
         else -> null
     }
 
-    val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
 
     // While the search bar has text, intercept back to clear it instead of
     // popping the screen. Empty search → back propagates normally.
@@ -193,7 +177,7 @@ fun ContactList(
                             Icon(painterResource(R.drawable.baseline_group_24), contentDescription = stringResource(R.string.add_to_group))
                         }
                         IconButton(onClick = {
-                            exportVcf(contacts.filter { it.id in selectedIds }, "selected_contacts.vcf")
+                            shareContactsAsVcf(scope, context, contacts.filter { it.id in selectedIds }, "selected_contacts.vcf", resources.getString(R.string.share_contact))
                         }) {
                             IconShare()
                         }
@@ -213,7 +197,7 @@ fun ContactList(
                         )
                     },
                     actions = {
-                        IconButton(onClick = { exportVcf(contacts, "all_contacts.vcf") }) {
+                        IconButton(onClick = { shareContactsAsVcf(scope, context, contacts, "all_contacts.vcf", resources.getString(R.string.share_contact)) }) {
                             IconShare()
                         }
                     }
@@ -397,25 +381,6 @@ fun FavoritesHeader(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun ProfilesHeader(modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(painterResource(R.drawable.person_24px), stringResource(R.string.profiles),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = stringResource(R.string.user_profile),
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
 fun LetterHeader(letter: Char, modifier: Modifier = Modifier) {
     Text(
         text = letter.toString(),
@@ -437,26 +402,6 @@ fun getAvatarColor(id: Long): Color {
     )
     val index = (id % colors.size).toInt()
     return colors[index]
-}
-
-/**
- * Rounded surface that wraps an entire section's contacts (favorites, or one
- * letter group) into a single visual card with internal dividers. The
- * individual [ContactItem]s rendered inside should be passed
- * `embeddedInCard = true` so they don't draw their own rounded background.
- */
-@Composable
-fun ContactSectionCard(
-    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = containerColor,
-    ) {
-        Column { content() }
-    }
 }
 
 /**
@@ -487,16 +432,6 @@ fun GroupedContactSection(
     }
 }
 
-@Composable
-fun ContactRowDivider() {
-    androidx.compose.material3.HorizontalDivider(
-        modifier = Modifier.padding(start = 72.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        thickness = 0.5.dp
-    )
-}
-
-
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ContactItem(
@@ -520,19 +455,8 @@ fun ContactItem(
         modifier
     }
 
-    val photoBase64 = contact.photo?.photo
-    val avatarBitmap by produceState<Bitmap?>(initialValue = null, photoBase64, viewModel) {
-        value = if (photoBase64 != null) {
-            withContext(Dispatchers.IO) { viewModel?.decodePhoto(photoBase64) }
-        } else {
-            null
-        }
-    }
-
-    val allGroups by (viewModel?.groups ?: flowOf(emptyList())).collectAsState(initial = emptyList())
-    val contactGroups = allGroups.filter { group ->
-        contact.details.groups.any { it.groupId == group.id } && group.name.trim().isNotEmpty()
-    }
+    val allGroups by (viewModel?.groups ?: flowOf(emptyList())).collectAsStateWithLifecycle(initialValue = emptyList())
+    val contactGroups = contactGroupsOf(contact, allGroups)
 
     val trimmedOrg = contact.org.company.trim()
     val showOrg = trimmedOrg.isNotEmpty()
@@ -556,9 +480,8 @@ fun ContactItem(
             ListItem(
                 modifier = itemModifier,
                 headlineContent = {
-                    val nameString = if(contact.nickname.value.isNotBlank()) stringResource(R.string.name_nickname_format, contact.name.value, contact.nickname.value) else contact.name.value
                     Text(
-                        text = nameString,
+                        text = contactDisplayName(contact),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -566,30 +489,7 @@ fun ContactItem(
                     )
                 },
                 leadingContent = {
-                    Box(
-                        modifier = Modifier.size(50.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (avatarBitmap != null) {
-                            Image(
-                                bitmap = avatarBitmap!!.asImageBitmap(),
-                                contentDescription = stringResource(R.string.contact_photo_description, contact.name.value),
-                                modifier = Modifier.fillMaxSize().clip(CircleShape)
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier.fillMaxSize().background(getAvatarColor(contact.id), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = contact.name.value.firstOrNull()?.uppercase() ?: "",
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
+                    ContactAvatar(contact, viewModel, Modifier.size(50.dp))
                 },
 
                 supportingContent = if (showOrg || showGroups) {

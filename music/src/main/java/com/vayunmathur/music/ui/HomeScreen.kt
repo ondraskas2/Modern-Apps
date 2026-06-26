@@ -19,14 +19,12 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -40,7 +38,6 @@ import com.vayunmathur.library.ui.ListPage
 import com.vayunmathur.library.ui.invisibleClickable
 import com.vayunmathur.music.util.AlbumArt
 import com.vayunmathur.music.util.MusicViewModel
-import com.vayunmathur.music.util.SyncWorker
 import com.vayunmathur.music.util.AddToPlaylistButton
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
@@ -53,15 +50,9 @@ import com.vayunmathur.music.data.Music
  */
 @Composable
 fun HomeTabContent(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
-    val context = LocalContext.current
     val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
     val currentSource by musicViewModel.currentSource.collectAsState()
     val music by musicViewModel.music.collectAsState()
-
-    LaunchedEffect(Unit) {
-        SyncWorker.runOnce(context)
-        SyncWorker.enqueue(context)
-    }
 
     ListPage<Music, Route, Route.Song>(backStack, music, stringResource(R.string.page_title_music), { song ->
         val isPlaying = currentMediaItem?.mediaId == song.id.toString() && currentSource == "all_songs"

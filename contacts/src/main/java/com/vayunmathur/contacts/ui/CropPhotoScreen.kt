@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Canvas
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -67,7 +68,7 @@ fun CropPhotoScreen(
     LaunchedEffect(uri) {
         bitmap = withContext(Dispatchers.IO) {
             try {
-                val parsed = Uri.parse(uri)
+                val parsed = uri.toUri()
                 context.contentResolver.openInputStream(parsed)?.use { stream ->
                     BitmapFactory.decodeStream(stream)
                 }

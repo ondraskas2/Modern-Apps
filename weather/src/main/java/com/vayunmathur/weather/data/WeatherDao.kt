@@ -19,17 +19,11 @@ interface WeatherDao {
     @Query("SELECT * FROM SavedLocation ORDER BY displayOrder ASC, id ASC")
     suspend fun getLocations(): List<SavedLocation>
 
-    @Query("SELECT * FROM SavedLocation WHERE id = :id LIMIT 1")
-    suspend fun getLocationById(id: Long): SavedLocation?
-
     @Query("SELECT * FROM SavedLocation WHERE isCurrent = 1 LIMIT 1")
     suspend fun getCurrentDeviceLocation(): SavedLocation?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLocation(location: SavedLocation): Long
-
-    @Upsert
-    suspend fun upsertLocation(location: SavedLocation)
 
     @Delete
     suspend fun deleteLocation(location: SavedLocation)

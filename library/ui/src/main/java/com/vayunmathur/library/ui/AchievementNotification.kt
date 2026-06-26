@@ -1,6 +1,7 @@
 package com.vayunmathur.library.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -18,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,13 +35,22 @@ fun AchievementNotification(
     achievement: Achievement,
     onDismiss: () -> Unit
 ) {
+    val visibleState = remember { MutableTransitionState(initialState = false) }
+    visibleState.targetState = true
+
     LaunchedEffect(achievement) {
         delay(3000)
-        onDismiss()
+        visibleState.targetState = false
+    }
+    // Notify the caller only once the exit transition has fully played out.
+    LaunchedEffect(visibleState.isIdle) {
+        if (visibleState.isIdle && !visibleState.currentState) {
+            onDismiss()
+        }
     }
 
     AnimatedVisibility(
-        visible = true,
+        visibleState = visibleState,
         enter = slideInVertically { -it } + fadeIn(),
         exit = slideOutVertically { -it } + fadeOut(),
         modifier = Modifier.padding(16.dp)

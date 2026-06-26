@@ -16,8 +16,8 @@ import java.util.Locale
  */
 object DateMillisBackfill {
 
-    fun runIfNeeded(context: Context) {
-        CoroutineScope(Dispatchers.IO).launch {
+    fun runIfNeeded(scope: CoroutineScope, context: Context) {
+        scope.launch(Dispatchers.IO) {
             val dao = EmailDatabase.getInstance(context).emailDao()
             // Java's `Date.toString()` format, e.g. "Wed Nov 27 14:30:00 PST 2024".
             val fmt = SimpleDateFormat("EEE MMM dd HH:mm:ss zzz yyyy", Locale.US)

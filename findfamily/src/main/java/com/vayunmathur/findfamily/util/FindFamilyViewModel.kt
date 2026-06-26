@@ -20,12 +20,14 @@ import androidx.lifecycle.viewModelScope
 import com.vayunmathur.findfamily.data.Coord
 import com.vayunmathur.findfamily.data.LocationValue
 import com.vayunmathur.findfamily.data.LocationValueDao
+import com.vayunmathur.findfamily.data.RequestStatus
 import com.vayunmathur.findfamily.data.TemporaryLink
 import com.vayunmathur.findfamily.data.TemporaryLinkDao
 import com.vayunmathur.findfamily.data.User
 import com.vayunmathur.findfamily.data.UserDao
 import com.vayunmathur.findfamily.data.Waypoint
 import com.vayunmathur.findfamily.data.WaypointDao
+import com.vayunmathur.library.util.DatabaseHelper
 import dev.whyoleg.cryptography.algorithms.RSA
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -89,6 +91,31 @@ class FindFamilyViewModel(
         .map { list -> list.associateBy { it.userid } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    /** Connected people (mutual connection or awaiting our response) — the main list. */
+    val connectedUsers: StateFlow<List<User>> = userDao.getAllFlow()
+        .map { list ->
+            list.filter {
+                it.requestStatus == RequestStatus.MUTUAL_CONNECTION ||
+                    it.requestStatus == RequestStatus.AWAITING_RESPONSE
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Inbound requests awaiting the user's acceptance. */
+    val awaitingRequestUsers: StateFlow<List<User>> = userDao.getAllFlow()
+        .map { list -> list.filter { it.requestStatus == RequestStatus.AWAITING_REQUEST } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Users keyed by id, so the UI can do id-based lookups without scanning. */
+    val usersById: StateFlow<Map<Long, User>> = userDao.getAllFlow()
+        .map { list -> list.associateBy { it.id } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Names of the users currently located at each location/waypoint name. */
+    val usersByLocationName: StateFlow<Map<String, List<String>>> = userDao.getAllFlow()
+        .map { list -> list.groupBy({ it.locationName }, { it.name }) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     // ------------------------------------------------------------------
     // Composable single-item accessors
     // ------------------------------------------------------------------
@@ -96,13 +123,13 @@ class FindFamilyViewModel(
     @Composable
     fun userByIdState(id: Long, default: () -> User? = { null }): State<User?> {
         val list by users.collectAsState()
-        return remember { derivedStateOf { list.firstOrNull { it.id == id } ?: default() } }
+        return remember(id) { derivedStateOf { list.firstOrNull { it.id == id } ?: default() } }
     }
 
     @Composable
     fun waypointByIdState(id: Long, default: () -> Waypoint? = { null }): State<Waypoint?> {
         val list by waypoints.collectAsState()
-        return remember { derivedStateOf { list.firstOrNull { it.id == id } ?: default() } }
+        return remember(id) { derivedStateOf { list.firstOrNull { it.id == id } ?: default() } }
     }
 
     // ------------------------------------------------------------------
@@ -323,6 +350,9 @@ class FindFamilyViewModel(
         val isGeocoderPresent = Geocoder.isPresent()
         !isNetworkEnabled || !isGeocoderPresent
     }
+
+    /** SQLCipher passphrase for the DB backup buttons; read once, off the composables. */
+    val backupPassphrase: String by lazy { DatabaseHelper(ctx).getPassphrase() }
 
     // ------------------------------------------------------------------
     // Networking-backed dialog actions

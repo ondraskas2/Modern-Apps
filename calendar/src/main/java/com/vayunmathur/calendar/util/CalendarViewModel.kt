@@ -19,8 +19,10 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
+import kotlin.time.Instant
 import com.vayunmathur.calendar.data.Event
 import com.vayunmathur.calendar.data.Calendar
+import com.vayunmathur.calendar.data.Instance
 
 import com.vayunmathur.library.util.DataStoreUtils
 
@@ -139,7 +141,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun loadData() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
             _events.value = Event.getAllEvents(app)
 
@@ -167,7 +169,22 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun refreshCalendarsAndWidgets() {
+    /**
+     * Loads calendar instances between [start] and [end] off the main thread, filtered to
+     * the currently-loaded events whose calendar is visible. The UI consumes this via
+     * produceState so no ContentResolver query happens during composition.
+     */
+    suspend fun visibleInstances(start: Instant, end: Instant): List<Instance> =
+        withContext(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val eventsById = _events.value.associateBy { it.id }
+            val visibility = _calendarVisibility.value
+            Instance.getInstances(app, start, end)
+                .filter { it.eventID in eventsById }
+                .filter { visibility[eventsById[it.eventID]!!.calendarID] ?: true }
+        }
+
+    private suspend fun refreshCalendarsAndWidgets() {
         val app = getApplication<Application>()
         val loaded = Calendar.getAllCalendars(app)
         _calendars.value = loaded
@@ -192,13 +209,14 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         // write to the provider's Calendars.VISIBLE field for that calendar
         val values = ContentValues().apply { put(CalendarContract.Calendars.VISIBLE, if (visible) 1 else 0) }
         val uri = CalendarContract.Calendars.CONTENT_URI
-        try {
-            app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
-        } catch (e: Exception) {
-            Log.e("CalendarViewModel", "Error setting calendar visibility", e)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
+            } catch (e: Exception) {
+                Log.e("CalendarViewModel", "Error setting calendar visibility", e)
+            }
+            refreshCalendarsAndWidgets()
         }
-
-        refreshCalendarsAndWidgets()
     }
 
     fun deleteEventSeries(eventId: Long) {
@@ -209,11 +227,9 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteEventInstance(eventId: Long, instanceBeginTime: Long) {
         val event = _events.value.find { it.id == eventId } ?: return
-        val instanceDate = kotlinx.datetime.Instant.fromEpochMilliseconds(instanceBeginTime)
-            .toLocalDateTime(kotlinx.datetime.TimeZone.of(event.timezone)).date
-        val exdateStr = (event.exdate + instanceDate).distinct().joinToString(",") { date ->
-            "%04d%02d%02d".format(date.year, date.monthNumber, date.day)
-        }
+        val instanceDate = Instant.fromEpochMilliseconds(instanceBeginTime)
+            .toLocalDateTime(TimeZone.of(event.timezone)).date
+        val exdateStr = (event.exdate + instanceDate).distinct().joinToString(",") { it.toIcalBasic() }
         upsertEvent(eventId, ContentValues().apply {
             put(CalendarContract.Events.EXDATE, exdateStr)
         })
@@ -221,36 +237,27 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
 
     // Insert or update event using ContentValues. If eventId is null -> insert, otherwise update.
     // When [reminders] is non-null, the event's reminders are replaced with the given
-    // minutes-before list (and HAS_ALARM is set accordingly).
-    fun upsertEvent(eventId: Long?, values: ContentValues, reminders: List<Int>? = null): Long? {
+    // minutes-before list (and HAS_ALARM is set accordingly). Runs off the main thread.
+    fun upsertEvent(eventId: Long?, values: ContentValues, reminders: List<Int>? = null) {
         val app = getApplication<Application>()
         val uri = CalendarContract.Events.CONTENT_URI
         if (reminders != null) {
             values.put(CalendarContract.Events.HAS_ALARM, if (reminders.isEmpty()) 0 else 1)
         }
-        return if (eventId == null) {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                val newUri = app.contentResolver.insert(uri, values)
-                val newId = newUri?.lastPathSegment?.toLongOrNull()
-                if (newId != null && reminders != null) writeReminders(newId, reminders)
-                // refresh events
+                if (eventId == null) {
+                    val newUri = app.contentResolver.insert(uri, values)
+                    val newId = newUri?.lastPathSegment?.toLongOrNull()
+                    if (newId != null && reminders != null) writeReminders(newId, reminders)
+                } else {
+                    app.contentResolver.update(uri, values, "${CalendarContract.Events._ID} = ?", arrayOf(eventId.toString()))
+                    if (reminders != null) writeReminders(eventId, reminders)
+                }
                 _events.value = Event.getAllEvents(app)
                 updateWidgets()
-                newId
             } catch (e: Exception) {
-                Log.e("CalendarViewModel", "Error inserting event", e)
-                null
-            }
-        } else {
-            try {
-                app.contentResolver.update(uri, values, "${CalendarContract.Events._ID} = ?", arrayOf(eventId.toString()))
-                if (reminders != null) writeReminders(eventId, reminders)
-                _events.value = Event.getAllEvents(app)
-                updateWidgets()
-                eventId
-            } catch (e: Exception) {
-                Log.e("CalendarViewModel", "Error updating event", e)
-                null
+                Log.e("CalendarViewModel", "Error upserting event", e)
             }
         }
     }
@@ -281,13 +288,14 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         val app = getApplication<Application>()
         val values = ContentValues().apply { put(CalendarContract.Calendars.CALENDAR_COLOR, colorInt) }
         val uri = CalendarContract.Calendars.CONTENT_URI
-        try {
-            app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
-        } catch (e: Exception) {
-            Log.e("CalendarViewModel", "Error setting calendar color", e)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
+            } catch (e: Exception) {
+                Log.e("CalendarViewModel", "Error setting calendar color", e)
+            }
+            refreshCalendarsAndWidgets()
         }
-
-        refreshCalendarsAndWidgets()
     }
 
     // rename
@@ -305,12 +313,14 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
             put(CalendarContract.Calendars.NAME, newDisplayName)
         }
         val uri = CalendarContract.Calendars.CONTENT_URI
-        try {
-            app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
-        } catch (e: Exception) {
-            Log.e("CalendarViewModel", "Error renaming calendar", e)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.update(uri, values, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
+            } catch (e: Exception) {
+                Log.e("CalendarViewModel", "Error renaming calendar", e)
+            }
+            refreshCalendarsAndWidgets()
         }
-        refreshCalendarsAndWidgets()
     }
 
     // delete a calendar and refresh caches
@@ -322,17 +332,19 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
             return
         }
         val uri = CalendarContract.Calendars.CONTENT_URI
-        try {
-            app.contentResolver.delete(uri, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
-        } catch (e: Exception) {
-            Log.e("CalendarViewModel", "Error deleting calendar", e)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.delete(uri, "${CalendarContract.Calendars._ID} = ?", arrayOf(calendarId.toString()))
+            } catch (e: Exception) {
+                Log.e("CalendarViewModel", "Error deleting calendar", e)
+            }
+            refreshCalendarsAndWidgets()
         }
-        refreshCalendarsAndWidgets()
     }
 
     // create a new local/offline calendar in the provider and refresh caches
     fun createLocalCalendar(accountName: String, displayName: String, colorInt: Int, visible: Boolean, accessLevel: Int) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
 
             // To insert calendars with custom account fields we need to use the sync adapter flag
@@ -357,8 +369,8 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
 
             try {
                 app.contentResolver.insert(uri, values)
-            } catch (_: Exception) {
-                // some providers reject inserts
+            } catch (e: Exception) {
+                Log.e("CalendarViewModel", "Error creating local calendar", e)
             }
             refreshCalendarsAndWidgets()
         }

@@ -15,8 +15,6 @@ import kotlinx.coroutines.flow.Flow
 interface MusicDao {
     @Query("SELECT * FROM Music")
     fun getAllFlow(): Flow<List<Music>>
-    @Query("SELECT * FROM Music WHERE id = :id")
-    fun getByIdFlow(id: Long): Flow<Music?>
     @Query("SELECT * FROM Music")
     suspend fun getAll(): List<Music>
     @Upsert
@@ -31,8 +29,6 @@ interface MusicDao {
 interface AlbumDao {
     @Query("SELECT * FROM Album")
     fun getAllFlow(): Flow<List<Album>>
-    @Query("SELECT * FROM Album WHERE id = :id")
-    fun getByIdFlow(id: Long): Flow<Album?>
     @Query("SELECT * FROM Album")
     suspend fun getAll(): List<Album>
     @Upsert
@@ -45,8 +41,6 @@ interface AlbumDao {
 interface ArtistDao {
     @Query("SELECT * FROM Artist")
     fun getAllFlow(): Flow<List<Artist>>
-    @Query("SELECT * FROM Artist WHERE id = :id")
-    fun getByIdFlow(id: Long): Flow<Artist?>
     @Query("SELECT * FROM Artist")
     suspend fun getAll(): List<Artist>
     @Upsert
@@ -59,8 +53,6 @@ interface ArtistDao {
 interface PlaylistDao {
     @Query("SELECT * FROM Playlist")
     fun getAllFlow(): Flow<List<Playlist>>
-    @Query("SELECT * FROM Playlist WHERE id = :id")
-    fun getByIdFlow(id: Long): Flow<Playlist?>
     @Query("SELECT * FROM Playlist")
     suspend fun getAll(): List<Playlist>
     @Upsert
@@ -88,12 +80,8 @@ abstract class MusicDatabase: RoomDatabase() {
 // Playlist=3, and a type code is `min(a,b) + 100*max(a,b)`. The "left" side
 // of a row in `ManyManyMatching` is the entity with the smaller index.
 // ─────────────────────────────────────────────────────────────────────────────
-const val TYPE_MUSIC_ALBUM: Int = 0 + 100 * 1       // 100, left=Music,  right=Album
-const val TYPE_MUSIC_ARTIST: Int = 0 + 100 * 2      // 200, left=Music,  right=Artist
 const val TYPE_MUSIC_PLAYLIST: Int = 0 + 100 * 3    // 300, left=Music,  right=Playlist
 const val TYPE_ALBUM_ARTIST: Int = 1 + 100 * 2      // 201, left=Album,  right=Artist
-const val TYPE_ALBUM_PLAYLIST: Int = 1 + 100 * 3    // 301, left=Album,  right=Playlist
-const val TYPE_ARTIST_PLAYLIST: Int = 2 + 100 * 3   // 302, left=Artist, right=Playlist
 
 val MIGRATION_1_2 = Migration(1, 2) {
     it.execSQL(

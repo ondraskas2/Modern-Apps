@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -24,7 +25,7 @@ fun ImportVcfDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val accounts by viewModel.accounts.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     var selectedAccount by remember { mutableStateOf<com.vayunmathur.contacts.util.ContactAccount?>(null) }
     var showCreateAccount by remember { mutableStateOf(false) }
     var newAccountName by remember { mutableStateOf("") }

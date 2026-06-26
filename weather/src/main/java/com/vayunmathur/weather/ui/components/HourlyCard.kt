@@ -29,17 +29,15 @@ import androidx.compose.ui.unit.dp
 import com.vayunmathur.weather.R
 import com.vayunmathur.weather.network.Hourly
 import com.vayunmathur.weather.util.TemperatureUnit
+import com.vayunmathur.weather.util.formatStripHour
 import com.vayunmathur.weather.util.formatTemperatureCompact
+import com.vayunmathur.weather.util.parseLocalIsoToEpochSec
 import com.vayunmathur.weather.util.weatherConditionForCode
 import androidx.compose.ui.unit.sp
 import kotlin.time.Clock
 import kotlinx.datetime.DateTimeUnit
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
-import kotlinx.datetime.UtcOffset
 import kotlinx.datetime.plus
-import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.datetime.todayIn
 import kotlin.time.Instant
@@ -65,7 +63,7 @@ fun HourlyCard(
     val cells = hourly.time.indices
         .mapNotNull { i ->
             val iso = hourly.time.getOrNull(i) ?: return@mapNotNull null
-            val ts = parseIsoToEpochSec(iso, utcOffsetSeconds) ?: return@mapNotNull null
+            val ts = parseLocalIsoToEpochSec(iso, utcOffsetSeconds) ?: return@mapNotNull null
             if (ts < nowSec - 3600) return@mapNotNull null
             HourCell(
                 iso = iso,
@@ -98,7 +96,7 @@ fun HourlyCard(
                     val cell = cells[index]
                     if (index == 0) Spacer(Modifier.width(10.dp))
                     HourlyItem(
-                        time = if (index == 0) "Now" else formatHour(cell.epochSec, use24Hour),
+                        time = if (index == 0) "Now" else formatStripHour(cell.epochSec, use24Hour),
                         dayLabel = formatDayLabel(cell.epochSec),
                         precipitationProbability = cell.precip,
                         temperature = cell.temperature,
@@ -184,29 +182,6 @@ private data class HourCell(
     val precip: Int,
     val isDay: Boolean,
 )
-
-private fun parseIsoToEpochSec(iso: String?, utcOffsetSeconds: Int = 0): Long? {
-    if (iso == null) return null
-    // Open-Meteo returns local time strings when timezone=auto
-    // We need to parse them as local time and apply the UTC offset
-    return runCatching {
-        // Parse as local datetime, then convert to instant using the offset
-        val localDateTime = kotlinx.datetime.LocalDateTime.parse(iso)
-        val offset = kotlinx.datetime.UtcOffset(seconds = utcOffsetSeconds)
-        localDateTime.toInstant(offset).epochSeconds
-    }.getOrNull()
-        ?: runCatching { Instant.parse("$iso:00Z").epochSeconds }.getOrNull()
-        ?: runCatching { Instant.parse(iso).epochSeconds }.getOrNull()
-}
-
-private fun formatHour(epochSec: Long, use24Hour: Boolean): String {
-    val ldt = Instant.fromEpochSeconds(epochSec).toLocalDateTime(TimeZone.currentSystemDefault())
-    val h = ldt.hour
-    if (use24Hour) return "$h"
-    val ampm = if (h < 12) "AM" else "PM"
-    val display = if (h % 12 == 0) 12 else h % 12
-    return "$display $ampm"
-}
 
 private fun formatDayLabel(epochSec: Long): String {
     val tz = TimeZone.currentSystemDefault()

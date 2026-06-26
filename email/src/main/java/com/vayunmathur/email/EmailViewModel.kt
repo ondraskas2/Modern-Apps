@@ -6,9 +6,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import androidx.core.text.HtmlCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import javax.mail.internet.InternetAddress
 import com.vayunmathur.email.data.EmailDatabase
 import com.vayunmathur.email.data.EmailSyncState
 import com.vayunmathur.email.data.EmailSyncWorker
@@ -28,7 +28,8 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
     private val emailManager = EmailManager()
     private val appContext = application.applicationContext
     
-    val accounts = dao.getAccountsFlow()
+    val accounts: StateFlow<List<EmailAccount>> =
+        dao.getAccountsFlow().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Active sync state — drives the linear progress bar at the top of the inbox. */
     val isSyncing: StateFlow<Boolean> = EmailSyncState.isSyncing
@@ -168,7 +169,7 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            accounts.first().firstOrNull()?.let {
+            dao.getAccounts().firstOrNull()?.let {
                 _selectedAccountEmail.value = it.email
             }
         }
@@ -214,11 +215,8 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
         _aiSummary.value = null
 
         val emailSnippets = messages.take(5).joinToString("\n---\n") { msg ->
-            val plainBody = msg.body?.let { body ->
-                if (msg.isHtml) HtmlCompat.fromHtml(body, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                else body
-            }?.take(150) ?: ""
-            "Subject: ${msg.subject}\nFrom: ${msg.from.substringBefore("<").trim()}\n$plainBody"
+            val plainBody = msg.plainTextBody()?.take(150) ?: ""
+            "Subject: ${msg.subject}\nFrom: ${senderDisplayName(msg.from)}\n$plainBody"
         }
         val prompt = "Summarize these emails in 1-2 sentences:\n\n$emailSnippets"
         val schema = """{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}"""
@@ -475,8 +473,6 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
 }
 
 /** Extract the bare email address from a "Name <addr@x>" header, or "" if none. */
-private fun extractEmailAddress(from: String): String {
-    val angle = Regex("<([^>]+)>").find(from)?.groupValues?.get(1)
-    val candidate = (angle ?: from).trim()
-    return if (candidate.contains("@")) candidate else ""
-}
+private fun extractEmailAddress(from: String): String =
+    runCatching { InternetAddress.parse(from).firstOrNull()?.address }
+        .getOrNull()?.takeIf { it.contains("@") } ?: ""

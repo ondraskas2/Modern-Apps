@@ -5,18 +5,18 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.core.net.toUri
 import com.vayunmathur.library.util.SerializedStroke
-import com.vayunmathur.library.util.deserialize
 import com.vayunmathur.photos.data.AdjustmentLayer
 import com.vayunmathur.photos.data.BasicAdjustment
 import com.vayunmathur.photos.data.BitmapReference
@@ -27,6 +27,7 @@ import com.vayunmathur.photos.data.LayerBlendMode
 import com.vayunmathur.photos.data.LayerMask
 import com.vayunmathur.photos.data.PixelLayer
 import com.vayunmathur.photos.data.Photo
+import com.vayunmathur.photos.data.PhotoDao
 import com.vayunmathur.photos.data.Selection
 import com.vayunmathur.photos.data.TextElement
 import kotlinx.coroutines.Dispatchers
@@ -50,10 +51,33 @@ import kotlin.math.roundToInt
  */
 class PhotoEditViewModel(
     application: Application,
+    private val photoDao: PhotoDao,
 ) : AndroidViewModel(application) {
 
     private val compositor = LayerCompositor()
     private val history = UndoRedoManager<EditDocument>()
+
+    /** The photo being edited, resolved from the DB (or a stand-in built from a raw uri). */
+    private val _photo = MutableStateFlow<Photo?>(null)
+    val photo: StateFlow<Photo?> = _photo.asStateFlow()
+    private var photoJob: Job? = null
+
+    /** Loads the [id]'s photo from the DB, falling back to a stand-in built from [initialUri]. */
+    fun loadPhoto(id: Long, initialUri: String?) {
+        photoJob?.cancel()
+        photoJob = viewModelScope.launch {
+            photoDao.getByIdFlow(id).collect { fromDb ->
+                _photo.value = fromDb ?: initialUri?.let { uri ->
+                    Photo(
+                        id = 0, name = uri.substringAfterLast("/"), uri = uri,
+                        date = System.currentTimeMillis(), width = 0, height = 0,
+                        dateModified = System.currentTimeMillis() / 1000, exifSet = false,
+                        lat = null, long = null, videoData = null,
+                    )
+                }
+            }
+        }
+    }
 
     private val _document = MutableStateFlow(EditDocument())
     val document: StateFlow<EditDocument> = _document.asStateFlow()
@@ -98,6 +122,7 @@ class PhotoEditViewModel(
         val ctx: Context = getApplication()
         viewModelScope.launch(Dispatchers.Default) {
             try {
+                val previousBase = _baseBitmap.value
                 val source = android.graphics.ImageDecoder.createSource(ctx.contentResolver, uri)
                 val bmp = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                     val w = info.size.width
@@ -113,6 +138,7 @@ class PhotoEditViewModel(
                 else bmp.copy(Bitmap.Config.ARGB_8888, true)
                 lastDecodedUri = uriStr
                 _baseBitmap.value = argb
+                previousBase?.recycle()
                 history.clear()
                 _canUndo.value = false
                 _canRedo.value = false
@@ -383,32 +409,9 @@ class PhotoEditViewModel(
         if (strokes.isEmpty() && texts.isEmpty()) return
         val canvas = android.graphics.Canvas(target)
         if (strokes.isNotEmpty() && viewportWidth > 0f && viewportHeight > 0f) {
-            val renderer = androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create()
-            val identity = Matrix()
-            canvas.save()
-            canvas.scale(target.width / viewportWidth, target.height / viewportHeight)
-            strokes.forEach { s ->
-                try { renderer.draw(canvas, s.deserialize(), identity) } catch (_: Exception) {}
-            }
-            canvas.restore()
+            canvas.drawSerializedStrokes(strokes, viewportWidth, viewportHeight, target.width, target.height)
         }
-        if (texts.isNotEmpty()) {
-            val paint = android.graphics.Paint().apply {
-                isAntiAlias = true
-                style = android.graphics.Paint.Style.FILL
-                textAlign = android.graphics.Paint.Align.LEFT
-            }
-            texts.forEach { t ->
-                paint.color = t.color
-                paint.textSize = t.fontSize * (target.width / viewportWidth)
-                val fm = paint.fontMetrics
-                canvas.save()
-                canvas.translate(t.x * target.width, t.y * target.height)
-                canvas.rotate(t.rotation)
-                canvas.drawText(t.text, 0f, -fm.ascent, paint)
-                canvas.restore()
-            }
-        }
+        texts.forEach { canvas.drawTextElement(it, target.width, target.height, viewportWidth) }
     }
 
     fun onWritePermissionGranted() {
@@ -444,6 +447,9 @@ class PhotoEditViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        previewJob?.cancel()
+        _compositedPreview.value?.recycle()
+        _baseBitmap.value?.recycle()
         _compositedPreview.value = null
         _baseBitmap.value = null
         _document.value = EditDocument()
@@ -483,7 +489,7 @@ class PhotoEditViewModel(
                 return WriteResult.Success
             }
 
-            val uri = Uri.parse(photo.uri)
+            val uri = photo.uri.toUri()
             val jpegBytes = ByteArrayOutputStream().also {
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it)
             }.toByteArray()
@@ -507,14 +513,11 @@ class PhotoEditViewModel(
     }
 }
 
-class PhotoEditViewModelFactory(
-    private val application: Application,
-) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(PhotoEditViewModel::class.java)) {
-            "Unexpected ViewModel class: $modelClass"
-        }
-        return PhotoEditViewModel(application) as T
+@Suppress("FunctionName")
+fun PhotoEditViewModelFactory(
+    application: Application,
+    photoDao: PhotoDao,
+): ViewModelProvider.Factory =
+    viewModelFactory {
+        initializer { PhotoEditViewModel(application, photoDao) }
     }
-}

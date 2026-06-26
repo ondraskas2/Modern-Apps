@@ -2,12 +2,8 @@ package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -17,6 +13,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.weather.R
 import com.vayunmathur.weather.network.Current
+import com.vayunmathur.weather.util.metersToMiles
 import kotlin.math.roundToInt
 
 /**
@@ -28,41 +25,35 @@ import kotlin.math.roundToInt
 @Composable
 fun VisibilityBlock(current: Current, useMiles: Boolean = false) {
     val (value, unit) = if (useMiles) {
-        (current.visibility / 1609.34).roundToInt() to "mi"
+        metersToMiles(current.visibility).roundToInt() to "mi"
     } else {
         (current.visibility / 1000).roundToInt() to "km"
     }
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = CircleShape,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Image(
-                painter = painterResource(R.drawable.visibility_block),
-                contentDescription = null,
-                modifier = Modifier.matchParentSize(),
-                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.inversePrimary),
-            )
-            Box(Modifier.align(Alignment.TopCenter)) {
-                BlockHeader(
-                    iconRes = R.drawable.outline_visibility_24,
-                    title = "Visibility",
-                    topPadding = 36.dp,
-                )
-            }
-            Text(
-                text = value.toString(),
-                style = MaterialTheme.typography.displayMedium,
-                modifier = Modifier.align(Alignment.Center).offset(y = 8.dp),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = unit,
-                modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-30).dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    CircularStatBlock {
+        Image(
+            painter = painterResource(R.drawable.visibility_block),
+            contentDescription = null,
+            modifier = Modifier.matchParentSize(),
+            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.inversePrimary),
+        )
+        Box(Modifier.align(Alignment.TopCenter)) {
+            BlockHeader(
+                iconRes = R.drawable.outline_visibility_24,
+                title = "Visibility",
+                topPadding = 36.dp,
             )
         }
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.align(Alignment.Center).offset(y = 8.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = unit,
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-30).dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

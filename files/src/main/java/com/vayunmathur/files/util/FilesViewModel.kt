@@ -251,13 +251,14 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
     private fun moveFiles(sources: List<Path>, target: Path, fileSystem: FileSystem, canMove: (Path) -> Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             var movedAny = false
+            var lastError: Exception? = null
             sources.forEach { source ->
                 if (canMove(source)) {
                     try {
                         fileSystem.atomicMove(source, target.resolve(source.name))
                         movedAny = true
                     } catch (e: Exception) {
-                        emitMoveFailed(e)
+                        lastError = e
                     }
                 }
             }
@@ -265,6 +266,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 clearSelection()
                 loadDirectory()
             }
+            lastError?.let { emitMoveFailed(it) }
         }
     }
 

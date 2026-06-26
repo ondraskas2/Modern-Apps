@@ -60,6 +60,9 @@ interface UserDao {
     @Query("SELECT * FROM User WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<User?>
 
+    @Query("SELECT * FROM User WHERE id = :id")
+    suspend fun getById(id: Long): User?
+
     @Query("SELECT * FROM User")
     suspend fun getAll(): List<User>
 

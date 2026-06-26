@@ -3,6 +3,7 @@ package com.vayunmathur.youpipe.ui
 import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.os.Bundle
+import android.text.format.DateUtils
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -184,6 +185,7 @@ fun VideoPlayer(
 
     LaunchedEffect(controller, isDragging) {
         val player = controller ?: return@LaunchedEffect
+        var lastHistoryUpsert = 0L
         while (true) {
             if (!isDragging) {
                 currentPosition = player.currentPosition.coerceAtLeast(0L)
@@ -198,10 +200,21 @@ fun VideoPlayer(
                 }
 
                 if (player.isPlaying) {
-                    ypvm.upsertHistoryVideo(HistoryVideo.fromVideoData(videoInfo.copy(duration = duration), currentPosition))
+                    val now = System.currentTimeMillis()
+                    if (now - lastHistoryUpsert >= HISTORY_UPSERT_INTERVAL_MS) {
+                        ypvm.upsertHistoryVideo(HistoryVideo.fromVideoData(videoInfo.copy(duration = duration), currentPosition))
+                        lastHistoryUpsert = now
+                    }
                 }
             }
             delay(300)
+        }
+    }
+
+    // Persist the final watch position once when leaving the player.
+    DisposableEffect(videoInfo.videoID) {
+        onDispose {
+            ypvm.upsertHistoryVideo(HistoryVideo.fromVideoData(videoInfo.copy(duration = duration), currentPosition))
         }
     }
 
@@ -328,7 +341,7 @@ fun VideoPlayer(
                                 languages.forEach { stream ->
                                     DropdownMenuItem(
                                         text = { Text(stream) },
-                                        onClick = { language = stream; currentAudioStream = audioStreams.find { it.language == stream && it.bitrate == currentAudioStream?.bitrate } ?: audioStreams.first { it.language == stream }; isAudioMenuExpanded = false }
+                                        onClick = { language = stream; currentAudioStream = audioStreams.find { it.language == stream && it.bitrate == currentAudioStream?.bitrate } ?: audioStreams.first { it.language == stream }; isLanguageMenuExpanded = false }
                                     )
                                 }
                             }
@@ -386,12 +399,12 @@ fun VideoPlayer(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = formatTime(currentPosition),
+                                text = DateUtils.formatElapsedTime(currentPosition / 1000),
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelSmall
                             )
                             Text(
-                                text = formatTime(duration),
+                                text = DateUtils.formatElapsedTime(duration / 1000),
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelSmall
                             )
@@ -485,7 +498,7 @@ fun VideoPlayer(
                                 Spacer(modifier = Modifier.width(16.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = chapter.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2)
-                                    Text(text = formatTime(chapter.time.toLong()), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                                    Text(text = DateUtils.formatElapsedTime(chapter.time.toLong() / 1000), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                                 }
                             }
                         }
@@ -496,11 +509,4 @@ fun VideoPlayer(
     }
 }
 
-private fun formatTime(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val seconds = totalSeconds % 60
-    val minutes = (totalSeconds / 60) % 60
-    val hours = totalSeconds / 3600
-    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
-    else "%02d:%02d".format(minutes, seconds)
-}
+private const val HISTORY_UPSERT_INTERVAL_MS = 5000L

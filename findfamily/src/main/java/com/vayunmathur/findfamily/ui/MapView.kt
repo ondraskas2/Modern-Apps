@@ -127,6 +127,18 @@ fun MapView(
             )
 
             if (initialized) {
+                // The coordinate at the screen centre — i.e. the live position of
+                // the waypoint currently being placed/dragged. Computed outside the
+                // Canvas draw scope so we never invoke callbacks while drawing.
+                val draggedCoord = remember(camera.position, sizeInDp) {
+                    camera.projection?.positionFromScreenLocation(sizeInDp)?.toCoord()
+                }
+                // Report the dragged position back to the parent outside of drawing.
+                if (selectedWaypoint != null && draggedCoord != null) {
+                    LaunchedEffect(draggedCoord) {
+                        selectedWaypoint.onMoveWaypoint(draggedCoord)
+                    }
+                }
                 key(camera.position, sizeInDp) {
                     Canvas(Modifier.fillMaxSize()) {
                         val allWaypoints =
@@ -135,10 +147,7 @@ fun MapView(
                             val radiusMeters =
                                 if (selectedWaypoint?.waypoint == waypoint) selectedWaypoint.range else waypoint.range
                             val coord = if (selectedWaypoint?.waypoint == waypoint) {
-                                val c = camera.projection!!.positionFromScreenLocation(sizeInDp)
-                                    .toCoord()
-                                selectedWaypoint.onMoveWaypoint(c)
-                                c
+                                draggedCoord ?: waypoint.coord
                             } else waypoint.coord
                             val center =
                                 camera.projection!!.screenLocationFromPosition(coord.toPosition())

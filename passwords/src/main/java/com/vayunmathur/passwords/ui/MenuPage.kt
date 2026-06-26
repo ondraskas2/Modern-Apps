@@ -82,7 +82,7 @@ fun MenuPage(
             val currentCode = remember(secret, timeBucket) {
                 tryOrDefault("----") { TOTP.generate(secret, timeBucket * 30) }
             }
-            val progress = 1f - (now / 30000f) % 1f
+            val progress = (30000L - now % 30000L) / 30000f
             Row(Modifier.clickable {
                 viewModel.copyToClipboard("totp", currentCode)
             }.wrapContentHeight(), verticalAlignment = Alignment.CenterVertically) {

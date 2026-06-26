@@ -7,6 +7,7 @@ import com.vayunmathur.clock.data.ClockDatabase
 import com.vayunmathur.library.util.buildDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class BootReceiver : BroadcastReceiver() {
@@ -16,11 +17,16 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             "android.intent.action.QUICKBOOT_POWERON" -> {
                 val db = context.buildDatabase<ClockDatabase>(useDeviceProtectedStorage = true)
-                val scheduler = AlarmScheduler.get()
-                CoroutineScope(Dispatchers.IO).launch {
-                    db.alarmDao().getAll()
-                        .filter { it.enabled }
-                        .forEach { scheduler.schedule(context, it) }
+                val pendingResult = goAsync()
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    try {
+                        db.alarmDao().getAll()
+                            .filter { it.enabled }
+                            .forEach { AlarmScheduler.schedule(context, it) }
+                    } catch (_: Exception) {
+                    } finally {
+                        pendingResult.finish()
+                    }
                 }
             }
         }

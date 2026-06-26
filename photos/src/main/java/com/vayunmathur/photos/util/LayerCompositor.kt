@@ -3,9 +3,7 @@ package com.vayunmathur.photos.util
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
-import android.graphics.Paint
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
-import com.vayunmathur.library.util.deserialize
+import android.util.Log
 import com.vayunmathur.photos.data.AdjustmentLayer
 import com.vayunmathur.photos.data.DrawingLayer
 import com.vayunmathur.photos.data.EditDocument
@@ -155,21 +153,8 @@ class LayerCompositor {
     private fun renderTextPixels(layer: TextLayer, document: EditDocument, w: Int, h: Int): IntArray {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val t = layer.textElement
         val refWidth = document.canvasWidth.takeIf { it > 0 }?.toFloat() ?: w.toFloat()
-        val paint = Paint().apply {
-            isAntiAlias = true
-            style = Paint.Style.FILL
-            textAlign = Paint.Align.LEFT
-            color = t.color
-            textSize = t.fontSize * (w / refWidth)
-        }
-        val fm = paint.fontMetrics
-        canvas.save()
-        canvas.translate(t.x * w, t.y * h)
-        canvas.rotate(t.rotation)
-        canvas.drawText(t.text, 0f, -fm.ascent, paint)
-        canvas.restore()
+        canvas.drawTextElement(layer.textElement, w, h, refWidth)
         val out = IntArray(w * h)
         bmp.getPixels(out, 0, w, 0, 0, w, h)
         bmp.recycleSafely()
@@ -178,20 +163,7 @@ class LayerCompositor {
 
     private fun renderStrokePixels(layer: DrawingLayer, w: Int, h: Int): IntArray {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        if (layer.strokes.isNotEmpty() && layer.sourceWidth > 0f && layer.sourceHeight > 0f) {
-            val canvas = Canvas(bmp)
-            val renderer = CanvasStrokeRenderer.create()
-            val identity = Matrix()
-            canvas.save()
-            canvas.scale(w / layer.sourceWidth, h / layer.sourceHeight)
-            layer.strokes.forEach { serialized ->
-                try {
-                    renderer.draw(canvas, serialized.deserialize(), identity)
-                } catch (_: Exception) {
-                }
-            }
-            canvas.restore()
-        }
+        Canvas(bmp).drawSerializedStrokes(layer.strokes, layer.sourceWidth, layer.sourceHeight, w, h)
         val out = IntArray(w * h)
         bmp.getPixels(out, 0, w, 0, 0, w, h)
         bmp.recycleSafely()
@@ -281,7 +253,8 @@ class LayerCompositor {
     private fun Bitmap.recycleSafely() {
         try {
             if (!isRecycled) recycle()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w("LayerCompositor", "Failed to recycle bitmap", e)
         }
     }
 }

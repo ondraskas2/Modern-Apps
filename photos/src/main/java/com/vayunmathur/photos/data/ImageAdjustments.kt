@@ -167,7 +167,7 @@ fun ImageAdjustments.applyToBitmap(bitmap: Bitmap): Bitmap {
         val paint = Paint().apply {
             colorFilter = ColorMatrixColorFilter(cm)
         }
-        canvas.drawBitmap(result, 0f, 0f, paint)
+        canvas.drawBitmap(bitmap, 0f, 0f, paint)
     }
 
     if (hasPixelEffects()) {
@@ -269,22 +269,14 @@ private fun applyVignette(bitmap: Bitmap, amount: Float) {
 }
 
 private fun applyGrain(bitmap: Bitmap, amount: Float) {
-    val w = bitmap.width
-    val h = bitmap.height
-    val pixels = IntArray(w * h)
-    bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-
     val intensity = (amount * 50f).toInt()
     val rng = Random(42)
-
-    for (i in pixels.indices) {
+    bitmap.mapPixels { pixel ->
         val noise = rng.nextInt(-intensity, intensity + 1)
-        val a = (pixels[i] shr 24) and 0xFF
-        val r = (((pixels[i] shr 16) and 0xFF) + noise).coerceIn(0, 255)
-        val g = (((pixels[i] shr 8) and 0xFF) + noise).coerceIn(0, 255)
-        val b = ((pixels[i] and 0xFF) + noise).coerceIn(0, 255)
-        pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        val a = (pixel shr 24) and 0xFF
+        val r = (((pixel shr 16) and 0xFF) + noise).coerceIn(0, 255)
+        val g = (((pixel shr 8) and 0xFF) + noise).coerceIn(0, 255)
+        val b = ((pixel and 0xFF) + noise).coerceIn(0, 255)
+        (a shl 24) or (r shl 16) or (g shl 8) or b
     }
-
-    bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
 }

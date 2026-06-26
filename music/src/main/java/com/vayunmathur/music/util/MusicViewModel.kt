@@ -99,45 +99,41 @@ class MusicViewModel(
 
     // --- Per-entity "by id" State (replaces viewModel.getState<X>(id)) ---
     @Composable
-    fun musicState(id: Long): State<Music> {
+    fun musicState(id: Long): State<Music?> {
         val list by music.collectAsState()
         return remember(id, list) {
             derivedStateOf {
                 list.firstOrNull { it.id == id }
-                    ?: throw IllegalStateException("Music not found: $id")
             }
         }
     }
 
     @Composable
-    fun albumState(id: Long): State<Album> {
+    fun albumState(id: Long): State<Album?> {
         val list by albums.collectAsState()
         return remember(id, list) {
             derivedStateOf {
                 list.firstOrNull { it.id == id }
-                    ?: throw IllegalStateException("Album not found: $id")
             }
         }
     }
 
     @Composable
-    fun artistState(id: Long): State<Artist> {
+    fun artistState(id: Long): State<Artist?> {
         val list by artists.collectAsState()
         return remember(id, list) {
             derivedStateOf {
                 list.firstOrNull { it.id == id }
-                    ?: throw IllegalStateException("Artist not found: $id")
             }
         }
     }
 
     @Composable
-    fun playlistState(id: Long): State<Playlist> {
+    fun playlistState(id: Long): State<Playlist?> {
         val list by playlists.collectAsState()
         return remember(id, list) {
             derivedStateOf {
                 list.firstOrNull { it.id == id }
-                    ?: throw IllegalStateException("Playlist not found: $id")
             }
         }
     }

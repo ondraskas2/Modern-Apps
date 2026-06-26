@@ -6,9 +6,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.weather.data.SavedLocation
-import com.vayunmathur.weather.data.WeatherCache
 import com.vayunmathur.weather.data.WeatherDao
 import com.vayunmathur.weather.data.WeatherRefreshWorker
+import com.vayunmathur.weather.data.weatherJson
+import com.vayunmathur.weather.data.writeForecastCache
 import com.vayunmathur.weather.network.AirQualityResponse
 import com.vayunmathur.weather.network.ForecastResponse
 import com.vayunmathur.weather.network.WeatherApi
@@ -21,7 +22,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 
 /** Per-location forecast state held in [WeatherViewModel.forecasts]. */
 data class ForecastUiState(
@@ -53,8 +53,6 @@ class WeatherViewModel(
     application: Application,
     private val dao: WeatherDao,
 ) : AndroidViewModel(application) {
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     val savedLocations: StateFlow<List<SavedLocation>> = dao.observeLocations()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -122,7 +120,7 @@ class WeatherViewModel(
             if (existing?.forecast == null) {
                 val cache = dao.getCache(roundCoord(location.latitude), roundCoord(location.longitude))
                 if (cache != null) {
-                    runCatching { json.decodeFromString<ForecastResponse>(cache.forecastJson) }
+                    runCatching { weatherJson.decodeFromString<ForecastResponse>(cache.forecastJson) }
                         .onSuccess { decoded ->
                             _forecasts.update { current ->
                                 current + (location.id to ForecastUiState(
@@ -158,14 +156,7 @@ class WeatherViewModel(
             forecastResult
                 .onSuccess { fresh ->
                     val now = System.currentTimeMillis()
-                    dao.upsertCache(
-                        WeatherCache(
-                            latRounded = roundCoord(location.latitude),
-                            lonRounded = roundCoord(location.longitude),
-                            forecastJson = json.encodeToString(fresh),
-                            fetchedAtEpochMs = now,
-                        )
-                    )
+                    dao.writeForecastCache(location.latitude, location.longitude, fresh, now)
                     _forecasts.update { current ->
                         current + (location.id to ForecastUiState(
                             forecast = fresh,

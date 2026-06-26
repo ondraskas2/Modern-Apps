@@ -8,6 +8,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.vayunmathur.library.util.DatabaseHelper
+import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 
 class BiometricDatabaseHelper(context: Context) : DatabaseHelper(context) {
@@ -40,48 +41,39 @@ fun unlockDatabaseWithBiometrics(
     val helper = BiometricDatabaseHelper(activity)
     val executor = ContextCompat.getMainExecutor(activity)
 
+    fun prompt(title: String, subtitle: String, cipher: Cipher, onCipher: (Cipher) -> String) {
+        val biometricPrompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                onSuccess(onCipher(result.cryptoObject?.cipher!!))
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                onFailure()
+            }
+        })
+
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(title)
+            .setSubtitle(subtitle)
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .setNegativeButtonText("Cancel")
+            .build()
+
+        biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+    }
+
     if (!helper.isKeyGenerated()) {
         helper.generateKey()
-        val biometricPrompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                val cipher = result.cryptoObject?.cipher!!
-                val passphrase = helper.createAndStorePassphrase(cipher)
-                onSuccess(passphrase)
-            }
-
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                onFailure()
-            }
-        })
-
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Setup Secure Database")
-            .setSubtitle("Authenticate to create your secure encryption key")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setNegativeButtonText("Cancel")
-            .build()
-
-        biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(helper.getCipherForEncryption()))
+        prompt(
+            "Setup Secure Database",
+            "Authenticate to create your secure encryption key",
+            helper.getCipherForEncryption()
+        ) { helper.createAndStorePassphrase(it) }
     } else {
-        val biometricPrompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                val cipher = result.cryptoObject?.cipher!!
-                val passphrase = helper.decryptPassphrase(cipher)
-                onSuccess(passphrase)
-            }
-
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                onFailure()
-            }
-        })
-
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock Database")
-            .setSubtitle("Authenticate to access your secure data")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setNegativeButtonText("Cancel")
-            .build()
-
-        biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(helper.getCipherForDecryption()))
+        prompt(
+            "Unlock Database",
+            "Authenticate to access your secure data",
+            helper.getCipherForDecryption()
+        ) { helper.decryptPassphrase(it) }
     }
 }

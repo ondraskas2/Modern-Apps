@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.DateTimeUnit
@@ -34,11 +35,13 @@ import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.minus
 import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.datetime.toKotlinLocalDate
 import java.io.File
 import java.io.FileOutputStream
 import java.time.ZoneId
 import java.util.UUID
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 
 /**
  * ViewModel for the Health app.
@@ -69,116 +72,8 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     fun sumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
         db.healthDao().sumInRange(type, start, end)
 
-    fun sumProteinInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumProteinInRange(type, start, end)
-
-    fun sumCarbsInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumCarbsInRange(type, start, end)
-
-    fun sumFatInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumFatInRange(type, start, end)
-
-    fun sumFiberInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumFiberInRange(type, start, end)
-
-    fun sumSugarInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumSugarInRange(type, start, end)
-
-    fun sumSodiumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumSodiumInRange(type, start, end)
-
-    fun sumBiotinInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumBiotinInRange(type, start, end)
-
-    fun sumCaffeineInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumCaffeineInRange(type, start, end)
-
-    fun sumCalciumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumCalciumInRange(type, start, end)
-
-    fun sumChlorideInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumChlorideInRange(type, start, end)
-
-    fun sumCholesterolInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumCholesterolInRange(type, start, end)
-
-    fun sumChromiumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumChromiumInRange(type, start, end)
-
-    fun sumCopperInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumCopperInRange(type, start, end)
-
-    fun sumFolateInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumFolateInRange(type, start, end)
-
-    fun sumFolicAcidInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumFolicAcidInRange(type, start, end)
-
-    fun sumIodineInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumIodineInRange(type, start, end)
-
-    fun sumIronInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumIronInRange(type, start, end)
-
-    fun sumMagnesiumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumMagnesiumInRange(type, start, end)
-
-    fun sumManganeseInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumManganeseInRange(type, start, end)
-
-    fun sumMolybdenumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumMolybdenumInRange(type, start, end)
-
-    fun sumNiacinInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumNiacinInRange(type, start, end)
-
-    fun sumPantothenicAcidInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumPantothenicAcidInRange(type, start, end)
-
-    fun sumPhosphorusInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumPhosphorusInRange(type, start, end)
-
-    fun sumPotassiumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumPotassiumInRange(type, start, end)
-
-    fun sumRiboflavinInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumRiboflavinInRange(type, start, end)
-
-    fun sumSaturatedFatInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumSaturatedFatInRange(type, start, end)
-
-    fun sumSeleniumInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumSeleniumInRange(type, start, end)
-
-    fun sumThiaminInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumThiaminInRange(type, start, end)
-
-    fun sumTransFatInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumTransFatInRange(type, start, end)
-
-    fun sumVitaminAInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminAInRange(type, start, end)
-
-    fun sumVitaminB12InRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminB12InRange(type, start, end)
-
-    fun sumVitaminB6InRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminB6InRange(type, start, end)
-
-    fun sumVitaminCInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminCInRange(type, start, end)
-
-    fun sumVitaminDInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminDInRange(type, start, end)
-
-    fun sumVitaminEInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminEInRange(type, start, end)
-
-    fun sumVitaminKInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumVitaminKInRange(type, start, end)
-
-    fun sumZincInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double> =
-        db.healthDao().sumZincInRange(type, start, end)
+    fun sumNutritionInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<NutritionData> =
+        db.healthDao().sumNutritionInRange(type, start, end)
 
     fun maxInRange(type: RecordType, start: kotlin.time.Instant, end: kotlin.time.Instant): Flow<Double?> =
         db.healthDao().maxInRange(type, start, end)
@@ -191,6 +86,23 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
 
     fun getAllRecordsOfType(type: RecordType): Flow<List<Record>> =
         db.healthDao().getRecordsFlow(type)
+
+    /**
+     * Selects the sleep session to show for [day]: searches the window from 12h before the day's
+     * start through the day's end and returns the latest-ending session whose end falls on [day].
+     * Record-selection business logic lives here, not in the composable.
+     */
+    fun sleepRecordForDay(day: LocalDate): Flow<Record?> {
+        val tz = TimeZone.currentSystemDefault()
+        val searchStart = day.atStartOfDayIn(tz).minus(12.hours)
+        val searchEnd = day.atStartOfDayIn(tz).plus(24.hours)
+        return db.healthDao().getAllInRange(RecordType.Sleep, searchStart, searchEnd).map { records ->
+            records.filter {
+                val endLocal = it.endTime.atZone(ZoneId.systemDefault()).toLocalDate().toKotlinLocalDate()
+                endLocal == day
+            }.maxByOrNull { it.endTime }
+        }
+    }
 
     // ============================================================================================
     //  Recipe / Ingredient flows.
@@ -316,10 +228,10 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val mappedChart = rawPairs.map { p ->
-                labelFor(selectedTab, p.first, resources) to p.second
+                labelFor(selectedTab, p.first) to p.second
             }
             val mappedSecondaryChart = if (config.isDualSeries) {
-                rawPairs.map { p -> labelFor(selectedTab, p.first, resources) to p.third }
+                rawPairs.map { p -> labelFor(selectedTab, p.first) to p.third }
             } else null
 
             val history = if (selectedTab != 0) rawPairsHistory.mapIndexed { index, triple ->
@@ -386,15 +298,10 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
     private fun labelFor(
         selectedTab: Int,
         firstKey: Long,
-        resources: android.content.res.Resources,
     ): String = when (selectedTab) {
         0 -> {
             val hour = (firstKey % 24).toInt()
-            if (hour % 6 == 0) {
-                val amPm = if (hour < 12) "AM" else "PM"
-                val h = if (hour % 12 == 0) 12 else hour % 12
-                resources.getString(R.string.hour_am_pm_format, h, amPm)
-            } else ""
+            if (hour % 6 == 0) formatHourAmPm(hour) else ""
         }
         1 -> {
             val date = LocalDate.fromEpochDays(firstKey.toInt())
@@ -519,7 +426,8 @@ class HealthViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 db.healthDao().deleteIngredient(ingredient)
             } catch (e: Exception) {
-                // SQLiteConstraintException if used in a recipe — swallow as before.
+                // SQLiteConstraintException if used in a recipe.
+                Log.w(TAG, "Failed to delete ingredient ${ingredient.id}: ${e.message}")
             }
         }
     }

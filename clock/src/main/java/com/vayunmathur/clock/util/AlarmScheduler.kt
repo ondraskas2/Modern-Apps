@@ -13,7 +13,7 @@ import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 
-class AlarmScheduler {
+object AlarmScheduler {
 
     fun schedule(context: Context, alarm: Alarm) {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
@@ -49,15 +49,6 @@ class AlarmScheduler {
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
         pendingIntent?.let { alarmManager.cancel(it) }
-    }
-
-    companion object {
-        private var INSTANCE: AlarmScheduler? = null
-        fun get(): AlarmScheduler {
-            return INSTANCE ?: synchronized(this) {
-                AlarmScheduler().also { INSTANCE = it }
-            }
-        }
     }
 
     fun calculateNextTriggerMillis(alarm: Alarm): Long {

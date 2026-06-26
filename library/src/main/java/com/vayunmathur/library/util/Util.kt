@@ -12,31 +12,14 @@ import kotlin.math.pow
 import kotlin.math.round
 import kotlin.time.Clock
 
-fun <T> tryOrDefault(default: T, block: () -> T): T {
-    return try {
-        block()
-    } catch (_: Exception) {
-        default
-    }
-}
+fun <T> tryOrDefault(default: T, block: () -> T): T = runCatching(block).getOrDefault(default)
 
 fun Double.round(decimals: Int): Double {
     return round(this * 10.0.pow(decimals)) / (10.0.pow(decimals))
 }
 
-fun Source.readLines(): List<String> {
-    val lines = mutableListOf<String>()
-    val bufferedSource = buffer()
-
-    // Read until there is no more data
-    while (!bufferedSource.exhausted()) {
-        val line = bufferedSource.readUtf8Line()
-        if (line != null) {
-            lines.add(line)
-        }
-    }
-    return lines
-}
+fun Source.readLines(): List<String> =
+    buffer().run { generateSequence { readUtf8Line() }.toList() }
 
 inline fun <reified T: ComponentActivity> Context.findActivity(): T? {
     var context = this
@@ -47,7 +30,7 @@ inline fun <reified T: ComponentActivity> Context.findActivity(): T? {
     return null
 }
 
-data class Tuple3<A, B, C>(val first: A, val second: B, val third: C)
+typealias Tuple3<A, B, C> = Triple<A, B, C>
 data class Tuple4<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
 @Composable

@@ -4,14 +4,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,54 +31,48 @@ import com.vayunmathur.weather.util.formatWind
 @Composable
 fun WindBlock(current: Current, unit: WindUnit) {
     val degrees = current.windDirection.toFloat()
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = CircleShape,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Image(
-                painter = painterResource(R.drawable.weather_wind_arrow_dominant),
-                contentDescription = null,
-                modifier = Modifier.matchParentSize().rotate(degrees),
-                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.inversePrimary),
-            )
-            Box(Modifier.align(Alignment.TopCenter)) {
-                BlockHeader(
-                    iconRes = R.drawable.outline_wind_24,
-                    title = "Wind",
-                    topPadding = 36.dp,
-                )
-            }
-            val windText = formatWind(current.windSpeed, unit)
-            Row(
-                modifier = Modifier.align(Alignment.Center).offset(y = 10.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Text(
-                    text = windText.substringBefore(' '),
-                    style = MaterialTheme.typography.displayMedium,
-                    modifier = Modifier.alignByBaseline(),
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.width(2.dp))
-                Text(
-                    text = windText.substringAfter(' '),
-                    modifier = Modifier.alignByBaseline(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            Text(
-                text = "From ${compassDirection(current.windDirection)} · Gusts ${formatWind(current.windGusts, unit)}",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 16.dp)
-                    .padding(horizontal = 16.dp),
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    CircularStatBlock {
+        Image(
+            painter = painterResource(R.drawable.weather_wind_arrow_dominant),
+            contentDescription = null,
+            modifier = Modifier.matchParentSize().rotate(degrees),
+            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.inversePrimary),
+        )
+        Box(Modifier.align(Alignment.TopCenter)) {
+            BlockHeader(
+                iconRes = R.drawable.outline_wind_24,
+                title = "Wind",
+                topPadding = 36.dp,
             )
         }
+        val windText = formatWind(current.windSpeed, unit)
+        Row(
+            modifier = Modifier.align(Alignment.Center).offset(y = 10.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                text = windText.substringBefore(' '),
+                style = MaterialTheme.typography.displayMedium,
+                modifier = Modifier.alignByBaseline(),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(2.dp))
+            Text(
+                text = windText.substringAfter(' '),
+                modifier = Modifier.alignByBaseline(),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Text(
+            text = "From ${compassDirection(current.windDirection)} · Gusts ${formatWind(current.windGusts, unit)}",
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp)
+                .padding(horizontal = 16.dp),
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

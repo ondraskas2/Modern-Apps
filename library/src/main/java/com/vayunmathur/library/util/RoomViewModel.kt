@@ -74,7 +74,9 @@ val databases: MutableMap<KClass<*>, RoomDatabase> = mutableMapOf()
 inline fun <reified T : RoomDatabase> closeCachedDatabase() {
     synchronized(databases) {
         val db = databases.remove(T::class)
-        try { db?.close() } catch (_: Exception) {}
+        // Closing can race with in-flight queries; ignore the resulting failure
+        // since we are discarding the instance anyway.
+        try { db?.close() } catch (_: RuntimeException) {}
     }
 }
 

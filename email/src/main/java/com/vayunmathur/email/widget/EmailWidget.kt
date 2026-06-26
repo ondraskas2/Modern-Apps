@@ -21,7 +21,9 @@ import androidx.glance.text.*
 import androidx.glance.unit.ColorProvider
 import com.vayunmathur.email.MainActivity
 import com.vayunmathur.email.EmailMessage
-import com.vayunmathur.email.EmailAccount
+import com.vayunmathur.email.accountColor
+import com.vayunmathur.email.plainTextBody
+import com.vayunmathur.email.senderDisplayName
 import com.vayunmathur.email.data.EmailDatabase
 import com.vayunmathur.library.widgets.DynamicThemeGlance
 import kotlinx.coroutines.Dispatchers
@@ -90,7 +92,7 @@ class EmailWidget : GlanceAppWidget() {
     @SuppressLint("RestrictedApi")
     @Composable
     private fun EmailItem(msg: EmailMessage) {
-        val accountColor = EmailAccount(msg.accountEmail, "", "").getColor()
+        val barColor = accountColor(msg.accountEmail)
         
         Row(
             modifier = GlanceModifier
@@ -109,7 +111,7 @@ class EmailWidget : GlanceAppWidget() {
                 modifier = GlanceModifier
                     .width(6.dp)
                     .fillMaxHeight()
-                    .background(ColorProvider(Color(accountColor)))
+                    .background(ColorProvider(Color(barColor)))
             ) {}
             Column(
                 modifier = GlanceModifier
@@ -136,7 +138,7 @@ class EmailWidget : GlanceAppWidget() {
                     )
                 }
                 Text(
-                    text = msg.from.substringBefore("<").trim(),
+                    text = senderDisplayName(msg.from),
                     style = TextStyle(
                         fontWeight = FontWeight.Normal,
                         fontSize = 13.sp,
@@ -145,11 +147,7 @@ class EmailWidget : GlanceAppWidget() {
                     maxLines = 1
                 )
                 Text(
-                    text = (if (msg.isHtml && msg.body != null) {
-                        androidx.core.text.HtmlCompat.fromHtml(msg.body, androidx.core.text.HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                    } else {
-                        msg.body ?: ""
-                    }).take(50),
+                    text = (msg.plainTextBody() ?: "").take(50),
                     style = TextStyle(
                         fontSize = 12.sp,
                         color = GlanceTheme.colors.onSurfaceVariant

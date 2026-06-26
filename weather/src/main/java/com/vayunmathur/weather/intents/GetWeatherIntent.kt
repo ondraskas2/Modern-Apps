@@ -5,11 +5,11 @@ import com.vayunmathur.library.util.AssistantIntent
 import com.vayunmathur.weather.network.ForecastResponse
 import com.vayunmathur.weather.network.WeatherApi
 import com.vayunmathur.weather.util.compassDirection
+import com.vayunmathur.weather.util.parseLocalIsoToEpochSec
 import com.vayunmathur.weather.util.weatherConditionForCode
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.serializer
-import kotlin.time.Instant
 
 /** Input payload for [GetWeatherIntent]: a single coordinate pair. */
 @Serializable
@@ -34,16 +34,6 @@ class GetWeatherIntent : AssistantIntent<LatLonInput, WeatherData>(
             errorWeatherData(null, e.message ?: "Failed to fetch forecast")
         }
     }
-}
-
-/**
- * Open-Meteo returns sunrise/sunset as local-time ISO strings with no offset
- * (`2024-05-30T05:42`). Combine with `utc_offset_seconds` from the response
- * to get a real epoch.
- */
-internal fun parseLocalIsoToEpochSec(iso: String, utcOffsetSec: Int): Long? {
-    val padded = if (iso.length == 16) "$iso:00" else iso
-    return runCatching { Instant.parse("${padded}Z").epochSeconds - utcOffsetSec }.getOrNull()
 }
 
 internal fun errorWeatherData(locationName: String?, error: String) = WeatherData(

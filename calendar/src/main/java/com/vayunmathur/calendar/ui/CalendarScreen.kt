@@ -45,9 +45,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -115,19 +116,15 @@ private fun firstDayOfWeekOffset(date: LocalDate, locale: Locale): Int {
 fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>) {
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) {
-        viewModel.loadData()
-    }
-
-    val events by viewModel.events.collectAsState()
-    val calendarsList by viewModel.calendars.collectAsState()
-    val calendars = calendarsList.associateBy { it.id }
-    val calendarVisibility by viewModel.calendarVisibility.collectAsState()
-    val currentLayout by viewModel.currentLayout.collectAsState()
+    val events by viewModel.events.collectAsStateWithLifecycle()
+    val calendarsList by viewModel.calendars.collectAsStateWithLifecycle()
+    val calendars = remember(calendarsList) { calendarsList.associateBy { it.id } }
+    val calendarVisibility by viewModel.calendarVisibility.collectAsStateWithLifecycle()
+    val currentLayout by viewModel.currentLayout.collectAsStateWithLifecycle()
 
     // currently-viewed date is owned by the VM (initialized from persisted
     // last_viewed_date in DataStore, or today when absent).
-    val dateViewing by viewModel.selectedDate.collectAsState()
+    val dateViewing by viewModel.selectedDate.collectAsStateWithLifecycle()
 
     // Stable anchor for pagers/scrollers — always use today so the initial
     // page offset is correct regardless of any stale persisted date.
@@ -194,11 +191,11 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
     ) { innerPadding ->
         Column(Modifier.padding(innerPadding).fillMaxSize()) {
             when (currentLayout) {
-                CalendarViewModel.CalendarLayout.Agenda -> AgendaView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, onEventClick = {
+                CalendarViewModel.CalendarLayout.Agenda -> AgendaView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, viewModel::visibleInstances, onEventClick = {
                     viewModel.setLastViewedDate(dateViewing)
                     backStack.add(Route.Event(it))
                 }, onDateViewingChanged = { viewModel.setSelectedDate(it) })
-                CalendarViewModel.CalendarLayout.Month -> MonthView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, onEventClick = {
+                CalendarViewModel.CalendarLayout.Month -> MonthView(context, events, calendars, calendarVisibility, anchorDate, dateViewing, viewModel::visibleInstances, onEventClick = {
                     viewModel.setLastViewedDate(dateViewing)
                     backStack.add(Route.Event(it))
                 }, onDayClick = {
@@ -214,6 +211,7 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                         calendars,
                         calendarVisibility,
                         verticalState,
+                        viewModel::visibleInstances,
                         onEventClick = {
                             viewModel.setLastViewedDate(dateViewing)
                             backStack.add(Route.Event(it))
@@ -236,6 +234,7 @@ fun CalendarPagerView(
     calendars: Map<Long, Calendar>,
     calendarVisibility: Map<Long, Boolean>,
     verticalState: ScrollState,
+    loadInstances: suspend (Instant, Instant) -> List<Instance>,
     onEventClick: (Instance) -> Unit,
     onDateViewingChanged: (LocalDate) -> Unit
 ) {
@@ -339,14 +338,11 @@ fun CalendarPagerView(
             val weekDays = (0 until daysToShow).map { startDay.plus(DatePeriod(days = it)) }
             val vEventsByID = remember(events) { events.associateBy { it.id!! } }
 
-            val weekInstances = remember(events, calendarVisibility, startDay, daysToShow) {
-                Instance.getInstances(
-                    context,
+            val weekInstances by produceState(emptyList<Instance>(), events, calendarVisibility, startDay, daysToShow) {
+                value = loadInstances(
                     weekDays.first().atStartOfDayIn(TimeZone.currentSystemDefault()),
                     weekDays.last().atEndOfDayIn(TimeZone.currentSystemDefault())
                 )
-                    .filter { it.eventID in vEventsByID }
-                    .filter { calendarVisibility[vEventsByID[it.eventID]!!.calendarID] ?: true }
             }
 
             Column(Modifier.fillMaxSize()) {
@@ -463,6 +459,7 @@ fun MonthView(
     calendarVisibility: Map<Long, Boolean>,
     anchorDate: LocalDate,
     dateViewing: LocalDate,
+    loadInstances: suspend (Instant, Instant) -> List<Instance>,
     onEventClick: (Instance) -> Unit,
     onDayClick: (LocalDate) -> Unit,
     onDateViewingChanged: (LocalDate) -> Unit
@@ -500,22 +497,22 @@ fun MonthView(
         val startDay = firstOfMonth.minus(DatePeriod(days = firstDayOfWeekOffset(firstOfMonth, locale)))
         val endDay = lastOfMonth.plus(DatePeriod(days = (lastDayOfWeek - lastOfMonth.dayOfWeek.isoDayNumber + 7) % 7))
         
-        val weeks = mutableListOf<LocalDate>()
-        var curr = startDay
-        while (curr <= endDay) {
-            weeks.add(curr)
-            curr = curr.plus(DatePeriod(days = 7))
+        val weeks = remember(startDay, endDay) {
+            buildList {
+                var curr = startDay
+                while (curr <= endDay) {
+                    add(curr)
+                    curr = curr.plus(DatePeriod(days = 7))
+                }
+            }
         }
 
         val vEventsByID = remember(events) { events.associateBy { it.id!! } }
-        val monthInstances = remember(events, calendarVisibility, startDay, endDay) {
-            Instance.getInstances(
-                context,
+        val monthInstances by produceState(emptyList<Instance>(), events, calendarVisibility, startDay, endDay) {
+            value = loadInstances(
                 startDay.atStartOfDayIn(TimeZone.currentSystemDefault()),
                 endDay.atEndOfDayIn(TimeZone.currentSystemDefault())
             )
-                .filter { it.eventID in vEventsByID }
-                .filter { calendarVisibility[vEventsByID[it.eventID]!!.calendarID] ?: true }
         }
 
         Column(Modifier.fillMaxSize()) {
@@ -525,7 +522,6 @@ fun MonthView(
                     weekSunday,
                     vEventsByID,
                     calendars,
-                    calendarVisibility,
                     onEventClick,
                     onDayClick,
                     context,
@@ -543,7 +539,6 @@ fun MonthWeekRow(
     weekSunday: LocalDate,
     vEventsByID: Map<Long, Event>,
     calendars: Map<Long, Calendar>,
-    calendarVisibility: Map<Long, Boolean>,
     onEventClick: (Instance) -> Unit,
     onDayClick: (LocalDate) -> Unit,
     context: android.content.Context,
@@ -555,7 +550,6 @@ fun MonthWeekRow(
     Row(modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
         weekDays.forEach { date ->
             val dayInstances = allInstances.filter { date in it.spanDays }
-                .filter { calendarVisibility[vEventsByID[it.eventID]!!.calendarID] ?: true }
                 .sortedBy { it.startDateTime }
             val isToday = date == Clock.System.todayIn(TimeZone.currentSystemDefault())
             val isPartOfViewingMonth = date.month.number == viewingMonth
@@ -592,6 +586,7 @@ fun AgendaView(
     calendarVisibility: Map<Long, Boolean>,
     anchorDate: LocalDate,
     dateViewing: LocalDate,
+    loadInstances: suspend (Instant, Instant) -> List<Instance>,
     onEventClick: (Instance) -> Unit,
     onDateViewingChanged: (LocalDate) -> Unit
 ) {
@@ -620,15 +615,11 @@ fun AgendaView(
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         items(100000) { index ->
             val date = anchorDate.plus(DatePeriod(days = index - initialIndex))
-            val dayInstances = remember(date, events, calendarVisibility) {
-                Instance.getInstances(
-                    context,
+            val dayInstances by produceState(emptyList<Instance>(), date, events, calendarVisibility) {
+                value = loadInstances(
                     date.atStartOfDayIn(TimeZone.currentSystemDefault()),
                     date.plus(DatePeriod(days = 1)).atStartOfDayIn(TimeZone.currentSystemDefault())
-                )
-                    .filter { it.eventID in vEventsByID }
-                    .filter { calendarVisibility[vEventsByID[it.eventID]!!.calendarID] ?: true }
-                    .sortedBy { it.startDateTime }
+                ).sortedBy { it.startDateTime }
             }
 
             val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
@@ -804,13 +795,14 @@ private fun HourlyGrid(
 
                 // compute positioned events using the helper that assigns columns for overlaps
                 val positioned = computePositionedEventsForDay(eventsForDay, d)
+                val instancesById = remember(eventsForDay) { eventsForDay.associateBy { it.id } }
 
                 // overlay event segments positioned by their time within the day and column
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                     val columnWidth = this.maxWidth
 
                     positioned.forEach { ev ->
-                        val instance = eventsForDay.find { it.id == ev.instanceID }!!
+                        val instance = instancesById.getValue(ev.instanceID)
                         // compute vertical position and height
                         val startHours = ev.startMinutes.toFloat() / 60f
                         val lengthHours = (ev.endMinutes - ev.startMinutes).toFloat() / 60f

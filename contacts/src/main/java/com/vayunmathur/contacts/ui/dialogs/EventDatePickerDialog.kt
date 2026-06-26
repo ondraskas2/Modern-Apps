@@ -21,8 +21,6 @@ import androidx.compose.ui.unit.sp
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.data.hasYear
 import com.vayunmathur.library.util.LocalNavResultRegistry
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.datetime.*
 import kotlinx.datetime.format.MonthNames
@@ -32,6 +30,7 @@ import kotlin.time.Clock
 @Composable
 fun EventDatePickerDialog(id: String, initialDate: LocalDate?, onDismiss: () -> Unit) {
     val registry = LocalNavResultRegistry.current
+    val resultScope = rememberCoroutineScope()
     val today = remember { Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date }
     val baseDate = initialDate ?: today
     
@@ -61,7 +60,7 @@ fun EventDatePickerDialog(id: String, initialDate: LocalDate?, onDismiss: () -> 
         confirmButton = {
             TextButton(onClick = {
                 val result = LocalDate(if (includeYear) selectedYear else 1604, selectedMonth, selectedDay)
-                CoroutineScope(Dispatchers.Main).launch {
+                resultScope.launch {
                     registry.dispatchResult(id, result)
                 }
                 onDismiss()

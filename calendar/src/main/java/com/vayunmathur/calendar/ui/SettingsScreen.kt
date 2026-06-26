@@ -32,7 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,8 +56,8 @@ import com.vayunmathur.library.ui.IconNavigation
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>) {
-    val calendars by viewModel.calendars.collectAsState()
-    val visibility by viewModel.calendarVisibility.collectAsState()
+    val calendars by viewModel.calendars.collectAsStateWithLifecycle()
+    val visibility by viewModel.calendarVisibility.collectAsStateWithLifecycle()
 
     // state for selection
     var selectedCalendarId by remember { mutableStateOf<Long?>(null) }
@@ -107,7 +107,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = paddingValues + PaddingValues(8.dp)) {
                 item {
-                    val currentLayout by viewModel.currentLayout.collectAsState()
+                    val currentLayout by viewModel.currentLayout.collectAsStateWithLifecycle()
                     var showDefaultLayoutMenu by remember { mutableStateOf(false) }
 
                     ListItem(

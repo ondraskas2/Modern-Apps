@@ -1,11 +1,8 @@
 package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -43,27 +40,21 @@ fun PollenBlock(air: AirQualityCurrent?) {
         3 -> "High"
         else -> "Severe"
     }
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.extraLarge,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Box(Modifier.align(Alignment.TopStart)) {
-                BlockHeader(iconRes = R.drawable.outline_grass_24, title = "Pollen")
-            }
-            Text(
-                text = "$level/4",
-                style = MaterialTheme.typography.displayMedium,
-                modifier = Modifier.align(Alignment.Center).offset(y = 4.dp),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = label,
-                modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-20).dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    SquareBlock {
+        Box(Modifier.align(Alignment.TopStart)) {
+            BlockHeader(iconRes = R.drawable.outline_grass_24, title = "Pollen")
         }
+        Text(
+            text = "$level/4",
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.align(Alignment.Center).offset(y = 4.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = label,
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-20).dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

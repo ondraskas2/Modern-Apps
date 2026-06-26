@@ -18,7 +18,6 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.reflect.KClass
 import kotlin.time.Instant
-import kotlinx.coroutines.flow.Flow
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
@@ -38,14 +37,6 @@ object HealthAPI {
 
     suspend inline fun lastRecord(recordType: RecordType): Record? {
         return db.healthDao().getLastRecord(recordType)
-    }
-
-    fun getAllRecordsInRange(
-            recordType: RecordType,
-            startTime: Instant,
-            endTime: Instant
-    ): Flow<List<Record>> {
-        return db.healthDao().getAllInRange(recordType, startTime, endTime)
     }
 
     suspend fun deleteRecord(record: Record) {

@@ -92,11 +92,7 @@ suspend fun syncMusic(context: Context, database: MusicDatabase, uris: List<Uri>
         )?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             while (cursor.moveToNext()) {
-                try {
-                    allMediaStoreIds.add(cursor.getLong(idCol))
-                } catch (e: Exception) {
-                    Log.e("MusicSyncWorker", "Error reading music ID from cursor", e)
-                }
+                allMediaStoreIds.add(cursor.getLong(idCol))
             }
         }
     } catch (e: Exception) {
@@ -163,33 +159,29 @@ suspend fun syncMusic(context: Context, database: MusicDatabase, uris: List<Uri>
             val yearColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
 
             while (cursor.moveToNext()) {
-                try {
-                    val id = cursor.getLong(idColumn)
-                    val title = cursor.getString(titleColumn)
-                    val artist = cursor.getString(artistColumn)
-                    val album = cursor.getString(albumColumn)
-                    val artistID = cursor.getLong(artistIDColumn)
-                    val albumID = cursor.getLong(albumIDColumn)
-                    val contentUriObject = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                    val contentUri = contentUriObject.toString()
+                val id = cursor.getLong(idColumn)
+                val title = cursor.getString(titleColumn)
+                val artist = cursor.getString(artistColumn)
+                val album = cursor.getString(albumColumn)
+                val artistID = cursor.getLong(artistIDColumn)
+                val albumID = cursor.getLong(albumIDColumn)
+                val contentUriObject = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                val contentUri = contentUriObject.toString()
 
-                    var duration = cursor.getLong(durationColumn)
+                var duration = cursor.getLong(durationColumn)
 
-                    if (duration == 0L) {
-                        duration = getRealAudioDuration(context, contentUriObject)
-                    }
-
-                    val rawTrack = cursor.getInt(trackColumn)
-                    val trackNumber = if (rawTrack >= 1000) rawTrack % 1000 else rawTrack
-                    // Read the year straight from MediaStore. Only fall back to the
-                    // (expensive, per-file) metadata retriever when it's missing.
-                    val year = cursor.getInt(yearColumn).takeIf { it > 0 }
-                        ?: getAudioYear(context, contentUriObject)
-
-                    musicList.add(Music(id, title, artist, artistID, album, albumID, contentUri, duration, trackNumber, year))
-                } catch (e: Exception) {
-                    Log.e("MusicSyncWorker", "Error constructing music from cursor", e)
+                if (duration == 0L) {
+                    duration = getRealAudioDuration(context, contentUriObject)
                 }
+
+                val rawTrack = cursor.getInt(trackColumn)
+                val trackNumber = if (rawTrack >= 1000) rawTrack % 1000 else rawTrack
+                // Read the year straight from MediaStore. Only fall back to the
+                // (expensive, per-file) metadata retriever when it's missing.
+                val year = cursor.getInt(yearColumn).takeIf { it > 0 }
+                    ?: getAudioYear(context, contentUriObject)
+
+                musicList.add(Music(id, title, artist, artistID, album, albumID, contentUri, duration, trackNumber, year))
             }
         }
     } catch (e: Exception) {

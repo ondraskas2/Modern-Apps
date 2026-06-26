@@ -18,12 +18,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import com.vayunmathur.music.util.MusicViewModel
+import com.vayunmathur.music.util.SyncWorker
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -49,6 +51,14 @@ fun MusicTabsScreen(
 ) {
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 4 })
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Single sync kickoff for all four tabs (the pager composes them lazily, so
+    // doing this per-tab would fire the sync multiple times).
+    LaunchedEffect(Unit) {
+        SyncWorker.runOnce(context)
+        SyncWorker.enqueue(context)
+    }
 
     val tabs = listOf(
         Triple(stringResource(R.string.nav_home), R.drawable.baseline_library_music_24, 0),

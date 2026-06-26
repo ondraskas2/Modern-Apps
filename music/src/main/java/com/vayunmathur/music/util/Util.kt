@@ -4,10 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import androidx.collection.LruCache
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
@@ -35,9 +37,7 @@ import java.util.Locale
 
 // Process-scope LRU for album thumbnails. Bounded so we don't retain decoded
 // bitmaps for the entire library; 64 entries covers a typical visible list.
-private val albumArtCache = object : LinkedHashMap<Uri, Bitmap>(64, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Uri, Bitmap>): Boolean = size > 64
-}
+private val albumArtCache = LruCache<Uri, Bitmap>(64)
 
 fun getThumbnail(context: Context, uri: Uri): Bitmap? {
     return try {
@@ -92,20 +92,13 @@ suspend fun getAlbums(context: Context): List<Album> = withContext(Dispatchers.I
             val titleColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Albums.ALBUM)
 
             while (cursor.moveToNext()) {
-                try {
-                    val id = cursor.getLong(idColumn)
-                    val title = cursor.getString(titleColumn)
-
-                    // Construct the actual File URI
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
-                        id
-                    ).toString()
-
-                    musicList.add(Album(id, title, contentUri))
-                } catch (e: Exception) {
-                    Log.e("MusicUtil", "Error constructing album from cursor", e)
-                }
+                val id = cursor.getLong(idColumn)
+                val title = cursor.getString(titleColumn)
+                val contentUri = ContentUris.withAppendedId(
+                    MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
+                    id
+                ).toString()
+                musicList.add(Album(id, title, contentUri))
             }
         }
     } catch (e: Exception) {
@@ -136,20 +129,13 @@ suspend fun getArtists(context: Context): List<Artist> = withContext(Dispatchers
             val titleColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Artists.ARTIST)
 
             while (cursor.moveToNext()) {
-                try {
-                    val id = cursor.getLong(idColumn)
-                    val title = cursor.getString(titleColumn)
-
-                    // Construct the actual File URI
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Artists.EXTERNAL_CONTENT_URI,
-                        id
-                    ).toString()
-
-                    artistList.add(Artist(id, title, contentUri))
-                } catch (e: Exception) {
-                    Log.e("MusicUtil", "Error constructing artist from cursor", e)
-                }
+                val id = cursor.getLong(idColumn)
+                val title = cursor.getString(titleColumn)
+                val contentUri = ContentUris.withAppendedId(
+                    MediaStore.Audio.Artists.EXTERNAL_CONTENT_URI,
+                    id
+                ).toString()
+                artistList.add(Artist(id, title, contentUri))
             }
         }
     } catch (e: Exception) {
@@ -165,11 +151,11 @@ fun AlbumArt(artUri: Uri, modifier: Modifier) {
     // resolve to the underlying album art) where Coil's default fetcher
     // doesn't. Cache the decoded bitmap in a process-scope LRU keyed by URI so
     // the same album doesn't re-decode each time it scrolls in/out.
-    var bitmap: Bitmap? by remember(artUri) { mutableStateOf(albumArtCache[artUri]) }
+    var bitmap: Bitmap? by remember(artUri) { mutableStateOf(albumArtCache.get(artUri)) }
     LaunchedEffect(artUri) {
         if (bitmap == null) {
             val loaded = withContext(Dispatchers.IO) { getThumbnail(context, artUri) }
-            if (loaded != null) albumArtCache[artUri] = loaded
+            if (loaded != null) albumArtCache.put(artUri, loaded)
             bitmap = loaded
         }
     }
@@ -233,18 +219,24 @@ fun AddToPlaylistButton(backStack: NavBackStack<Route>, music: Music) {
     }
 }
 
-fun getRealAudioDuration(context: Context, uri: Uri): Long {
-    val retriever = android.media.MediaMetadataRetriever()
-    return try {
+private inline fun <T> withAudioMetadata(
+    context: Context,
+    uri: Uri,
+    default: T,
+    extract: (MediaMetadataRetriever) -> T
+): T = try {
+    MediaMetadataRetriever().use { retriever ->
         retriever.setDataSource(context, uri)
-        val timeString = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-        timeString?.toLong() ?: 0L
-    } catch (e: Exception) {
-        0L
-    } finally {
-        retriever.release()
+        extract(retriever)
     }
+} catch (e: Exception) {
+    default
 }
+
+fun getRealAudioDuration(context: Context, uri: Uri): Long =
+    withAudioMetadata(context, uri, 0L) {
+        it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+    }
 
 fun formatDuration(durationMs: Long): String {
     val totalSeconds = durationMs / 1000
@@ -259,15 +251,7 @@ fun formatDuration(durationMs: Long): String {
     }
 }
 
-fun getAudioYear(context: Context, uri: Uri): Int {
-    val retriever = android.media.MediaMetadataRetriever()
-    return try {
-        retriever.setDataSource(context, uri)
-        val yearString = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_YEAR)
-        yearString?.take(4)?.toIntOrNull() ?: 0
-    } catch (e: Exception) {
-        0
-    } finally {
-        retriever.release()
+fun getAudioYear(context: Context, uri: Uri): Int =
+    withAudioMetadata(context, uri, 0) {
+        it.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)?.take(4)?.toIntOrNull() ?: 0
     }
-}

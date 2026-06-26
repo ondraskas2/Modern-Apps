@@ -38,8 +38,7 @@ fun AddPersonDialog(
     platform: Platform,
     id: Long?,
 ) {
-    val users by ffViewModel.users.collectAsState()
-    val usersByID = users.associateBy { it.id }
+    val usersByID by ffViewModel.usersById.collectAsState()
 
     var userid: String by remember { mutableStateOf(id?.encodeBase26() ?: "") }
     var contactName: String? by remember { mutableStateOf(null) }

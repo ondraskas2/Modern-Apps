@@ -3,47 +3,33 @@ package com.vayunmathur.library.util
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import org.json.JSONArray
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+
+private val achievementsJson = Json { ignoreUnknownKeys = true }
 
 abstract class AchievementsManager(val context: Context, jsonContent: String) {
     protected val ds = DataStoreUtils.getInstance(context)
-    val achievements: List<Achievement> = parseJson(jsonContent)
-    
+    val achievements: List<Achievement> =
+        achievementsJson.decodeFromString(ListSerializer(Achievement.serializer()), jsonContent)
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val _newAchievement = MutableStateFlow<Achievement?>(null)
     val newAchievement = _newAchievement.asStateFlow()
-
-    private fun parseJson(json: String): List<Achievement> {
-        val list = mutableListOf<Achievement>()
-        val array = JSONArray(json)
-        for (i in 0 until array.length()) {
-            val obj = array.getJSONObject(i)
-            list.add(
-                Achievement(
-                    id = obj.getString("id"),
-                    name = obj.getString("name"),
-                    description = obj.getString("description"),
-                    targetProgress = obj.optInt("targetProgress", 1),
-                    isSecret = obj.optBoolean("isSecret", false)
-                )
-            )
-        }
-        return list
-    }
 
     abstract fun checkExistingAchievements()
 
     fun onAchievementUnlocked(id: String) {
         val achievement = achievements.find { it.id == id } ?: return
-        CoroutineScope(Dispatchers.IO).launch {
-            val unlocked = ds.stringSetFlow("achievements_unlocked").first()
-            if (!unlocked.contains(id)) {
-                ds.addStringToSet("achievements_unlocked", id)
+        scope.launch {
+            if (ds.addStringToSetIfAbsent("achievements_unlocked", id)) {
                 _newAchievement.value = achievement
             }
         }
@@ -51,24 +37,23 @@ abstract class AchievementsManager(val context: Context, jsonContent: String) {
 
     fun onProgressUpdated(id: String, progress: Int) {
         val achievement = achievements.find { it.id == id } ?: return
-        CoroutineScope(Dispatchers.IO).launch {
-            val currentProgress = ds.getLong("achievement_progress_$id") ?: 0L
-            if (progress > currentProgress) {
-                ds.setLong("achievement_progress_$id", progress.toLong())
-                if (progress >= achievement.targetProgress) {
-                    onAchievementUnlocked(id)
-                }
+        scope.launch {
+            if (ds.setLongIfGreater("achievement_progress_$id", progress.toLong()) &&
+                progress >= achievement.targetProgress
+            ) {
+                onAchievementUnlocked(id)
             }
         }
     }
 
     fun getAchievementStatuses(): Flow<List<AchievementStatus>> {
-        return ds.stringSetFlow("achievements_unlocked").map { unlocked ->
-            achievements.map { achievement ->
-                val progress = ds.getLong("achievement_progress_${achievement.id}")?.toInt() ?: 0
+        val unlockedFlow = ds.stringSetFlow("achievements_unlocked")
+        val progressFlows = achievements.map { ds.longFlow("achievement_progress_${it.id}", 0L) }
+        return combine(unlockedFlow, combine(progressFlows) { it }) { unlocked, progresses ->
+            achievements.mapIndexed { index, achievement ->
                 AchievementStatus(
                     achievement = achievement,
-                    progress = progress,
+                    progress = progresses[index].toInt(),
                     isUnlocked = unlocked.contains(achievement.id)
                 )
             }

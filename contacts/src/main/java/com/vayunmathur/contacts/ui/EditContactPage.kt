@@ -46,7 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,8 +106,8 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
             prefillNotes = editRoute.notes,
         )
     }
-    val draft by viewModel.editDraft.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
+    val draft by viewModel.editDraft.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val isNewContact = contactId == null
 
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -238,7 +238,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
             Spacer(Modifier.height(16.dp))
 
             // Group memberships (placed near identity fields)
-            val allGroups by viewModel.groups.collectAsState()
+            val allGroups by viewModel.groups.collectAsStateWithLifecycle()
             val draftGroupIds = currentDraft.groupMemberships.map { it.groupId }.toSet()
             val memberGroups = allGroups.filter { it.id in draftGroupIds && it.name.trim().isNotEmpty() }
             val availableGroups = allGroups.filter { it.id !in draftGroupIds && it.name.trim().isNotEmpty() }

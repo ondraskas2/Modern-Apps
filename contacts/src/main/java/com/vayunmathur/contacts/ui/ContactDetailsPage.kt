@@ -1,6 +1,7 @@
 package com.vayunmathur.contacts.ui
 
 import android.Manifest
+import android.content.ClipData
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -47,9 +48,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -58,7 +60,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -86,6 +89,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.format
 import kotlinx.datetime.format.MonthNames
@@ -103,7 +107,7 @@ fun ContactDetailsPage(
     onDelete: () -> Unit,
     showBackButton: Boolean = true
 ) {
-    val contact by remember { viewModel.getContactFlow(contactId).filterNotNull() }.collectAsState(initial = viewModel.getContact(contactId))
+    val contact by remember { viewModel.getContactFlow(contactId).filterNotNull() }.collectAsStateWithLifecycle(initialValue = viewModel.getContact(contactId))
     val details = contact?.details
 
     if (contact == null) {
@@ -113,10 +117,12 @@ fun ContactDetailsPage(
         return
     }
     val context = LocalContext.current
-    val platforms = remember(contactId, details) {
-        PackageUtils.getContactPlatforms(context, contactId)
+    val platforms by produceState(ContactPlatforms(), contactId, details) {
+        value = withContext(Dispatchers.IO) { PackageUtils.getContactPlatforms(context, contactId) }
     }
-    val isGoogleMeetInstalled = remember { PackageUtils.isGoogleMeetInstalled(context) }
+    val isGoogleMeetInstalled by produceState(false) {
+        value = withContext(Dispatchers.IO) { PackageUtils.isGoogleMeetInstalled(context) }
+    }
 
     val scope = rememberCoroutineScope()
     val shareContactLabel = stringResource(R.string.share_contact)
@@ -141,18 +147,7 @@ fun ContactDetailsPage(
                         IconEdit()
                     }
                     IconButton(onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            val vcfFile = context.cacheDir.toOkioPath().resolve("${contact!!.name.value.replace(' ', '_')}.vcf")
-                            FileSystem.SYSTEM.sink(vcfFile).buffer().use { outputStream ->
-                                VcfUtils.exportContacts(listOf(contact!!), outputStream)
-                            }
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", vcfFile.toFile())
-                            val intent = Intent(Intent.ACTION_SEND)
-                            intent.type = "text/x-vcard"
-                            intent.putExtra(Intent.EXTRA_STREAM, uri)
-                            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            context.startActivity(Intent.createChooser(intent, shareContactLabel))
-                        }
+                        shareContactsAsVcf(scope, context, listOf(contact!!), "${contact!!.name.value.replace(' ', '_')}.vcf", shareContactLabel)
                     }) {
                         IconShare()
                     }
@@ -288,7 +283,7 @@ fun ContactDetailsPage(
 
             if(details.dates.isNotEmpty()) {
                 item {
-                    val clipboardManager = LocalClipboardManager.current
+                    val clipboard = LocalClipboard.current
                     GroupedSection(title = stringResource(R.string.about_name, contact!!.name.firstName)) {
                         contact!!.birthday?.let { birthday ->
                             val birthdayText = birthday.startDate.formatDisplay()
@@ -300,7 +295,7 @@ fun ContactDetailsPage(
                                 modifier = Modifier.combinedClickable(
                                     onClick = { },
                                     onLongClick = {
-                                        clipboardManager.setText(AnnotatedString(birthdayText))
+                                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("date", birthdayText))) }
                                     }
                                 )
                             )
@@ -315,7 +310,7 @@ fun ContactDetailsPage(
                                 modifier = Modifier.combinedClickable(
                                     onClick = { },
                                     onLongClick = {
-                                        clipboardManager.setText(AnnotatedString(eventText))
+                                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("date", eventText))) }
                                     }
                                 )
                             )
@@ -326,7 +321,7 @@ fun ContactDetailsPage(
             
             if (contact?.note?.content?.isNotEmpty() == true) {
                 item {
-                    val clipboardManager = LocalClipboardManager.current
+                    val clipboard = LocalClipboard.current
                     GroupedSection(title = stringResource(R.string.note)) {
                         Box(
                             modifier = Modifier
@@ -334,13 +329,16 @@ fun ContactDetailsPage(
                                 .combinedClickable(
                                     onClick = { },
                                     onLongClick = {
-                                        clipboardManager.setText(AnnotatedString(contact!!.note.content))
+                                        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("note", contact!!.note.content))) }
                                     }
                                 )
                                 .padding(16.dp)
                         ) {
                             Text(
-                                text = contact!!.note.content,
+                                text = com.vayunmathur.library.util.parseMarkdown(
+                                    contact!!.note.content,
+                                    showMarkers = false,
+                                ),
                                 style = MaterialTheme.typography.bodyLarge
                             )
                         }
@@ -350,10 +348,8 @@ fun ContactDetailsPage(
 
             if (details.groups.isNotEmpty()) {
                 item {
-                    val allGroups by viewModel.groups.collectAsState()
-                    val contactGroups = allGroups.filter { group ->
-                        details.groups.any { it.groupId == group.id } && group.name.trim().isNotEmpty()
-                    }
+                    val allGroups by viewModel.groups.collectAsStateWithLifecycle()
+                    val contactGroups = contactGroupsOf(contact!!, allGroups)
                     if (contactGroups.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             contactGroups.forEachIndexed { index, group ->
@@ -378,42 +374,17 @@ fun ProfileHeader(contact: Contact, viewModel: ContactViewModel) {
         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
         modifier = Modifier.padding(vertical = 16.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(100.dp)
-                .clip(CircleShape),
-            contentAlignment = androidx.compose.ui.Alignment.Center
-        ) {
-            val bitmap = contact.photo?.let { remember(it.photo) { viewModel.decodePhoto(it.photo) } }
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = stringResource(R.string.contact_photo_description, contact.name.value),
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(getAvatarColor(contact.id)),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
-                    Text(
-                        text = contact.name.value.firstOrNull()?.uppercase() ?: "",
-                        color = Color.White,
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
+        ContactAvatar(
+            contact = contact,
+            viewModel = viewModel,
+            modifier = Modifier.size(100.dp),
+            initialsStyle = MaterialTheme.typography.headlineLarge,
+        )
 
         Spacer(modifier = Modifier.size(16.dp))
 
-        val nameString = if(contact.nickname.value.isNotBlank()) stringResource(R.string.name_nickname_format, contact.name.value, contact.nickname.value) else contact.name.value
-
         Text(
-            text = nameString,
+            text = contactDisplayName(contact),
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold
         )
@@ -646,7 +617,8 @@ fun DetailItem(
      */
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(16.dp),
 ) {
-    val clipboardManager = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
 
     Surface(
         shape = shape,
@@ -655,7 +627,7 @@ fun DetailItem(
             .fillMaxWidth()
             .combinedClickable(
                 onClick = onClick ?: { },
-                onLongClick = { clipboardManager.setText(AnnotatedString(data)) }
+                onLongClick = { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("detail", data))) } }
             )
     ) {
         ListItem(
@@ -764,10 +736,10 @@ private fun handleCommunication(
         return
     }
     val intent = when (packageName) {
-        PackageUtils.SIGNAL_PACKAGE -> Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply { setPackage(PackageUtils.SIGNAL_PACKAGE) }
-        PackageUtils.WHATSAPP_PACKAGE -> Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/${number.filter { it.isDigit() }}"))
-        PackageUtils.TELEGRAM_PACKAGE -> Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/+${number.filter { it.isDigit() || it == '+' }}"))
-        else -> Intent(Intent.ACTION_SENDTO, Uri.parse("sms:$number"))
+        PackageUtils.SIGNAL_PACKAGE -> Intent(Intent.ACTION_SENDTO, "smsto:$number".toUri()).apply { setPackage(PackageUtils.SIGNAL_PACKAGE) }
+        PackageUtils.WHATSAPP_PACKAGE -> Intent(Intent.ACTION_VIEW, "https://wa.me/${number.filter { it.isDigit() }}".toUri())
+        PackageUtils.TELEGRAM_PACKAGE -> Intent(Intent.ACTION_VIEW, "https://t.me/+${number.filter { it.isDigit() || it == '+' }}".toUri())
+        else -> Intent(Intent.ACTION_SENDTO, "sms:$number".toUri())
     }
     try {
         context.startActivity(intent)
@@ -845,7 +817,7 @@ private fun launchPlatformAction(context: android.content.Context, dataRowId: Lo
 private fun launchGoogleMeet(context: android.content.Context, number: String) {
     try {
         val intent = Intent("com.google.android.apps.tachyon.action.CALL").apply {
-            data = Uri.parse("tel:$number")
+            data = "tel:$number".toUri()
             setPackage(PackageUtils.GOOGLE_MEET_PACKAGE)
         }
         context.startActivity(intent)
@@ -891,7 +863,6 @@ fun formatPhoneNumber(numberString: String, defaultRegion: String = "US"): Strin
         phoneUtil.format(phoneNumber, formatType)
 
     } catch (e: NumberParseException) {
-        println("Error parsing number: ${e.message}")
         numberString
     }
 }

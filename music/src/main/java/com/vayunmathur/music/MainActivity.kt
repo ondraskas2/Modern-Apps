@@ -8,7 +8,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
-import androidx.media3.session.MediaController
 import com.vayunmathur.library.util.NavKey
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.PermissionsChecker
@@ -30,7 +29,6 @@ import com.vayunmathur.music.util.MusicViewModelFactory
 import com.vayunmathur.music.util.PlaybackManager
 
 class MainActivity : ComponentActivity() {
-    var controller: MediaController? = null
     private lateinit var db: MusicDatabase
     private val musicViewModel: MusicViewModel by viewModels {
         MusicViewModelFactory(application, db, PlaybackManager.getInstance(this))
@@ -42,7 +40,7 @@ class MainActivity : ComponentActivity() {
         db = buildDatabase<MusicDatabase>()
         setContent {
             DynamicTheme {
-                val (permissions, message) = if (Build.VERSION.SDK_INT >= 33)
+                val (permissions, message) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                     arrayOf(Manifest.permission.READ_MEDIA_AUDIO) to getString(R.string.grant_audio_permissions)
                 else
                     arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE) to getString(R.string.grant_storage_permissions)

@@ -1,12 +1,8 @@
 package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,31 +26,25 @@ fun CloudCoverBlock(current: Current) {
         pct < 90 -> "Mostly cloudy"
         else -> "Overcast"
     }
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = CircleShape,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Box(Modifier.align(Alignment.TopCenter)) {
-                BlockHeader(
-                    iconRes = R.drawable.outline_cloudy_24,
-                    title = "Cloud cover",
-                    topPadding = 36.dp,
-                )
-            }
-            Text(
-                text = "$pct%",
-                style = MaterialTheme.typography.displayMedium,
-                modifier = Modifier.align(Alignment.Center).offset(y = 8.dp),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = label,
-                modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-26).dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    CircularStatBlock {
+        Box(Modifier.align(Alignment.TopCenter)) {
+            BlockHeader(
+                iconRes = R.drawable.outline_cloudy_24,
+                title = "Cloud cover",
+                topPadding = 36.dp,
             )
         }
+        Text(
+            text = "$pct%",
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.align(Alignment.Center).offset(y = 8.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = label,
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-26).dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

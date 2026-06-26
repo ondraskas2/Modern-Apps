@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import java.util.UUID
-import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.io.encoding.Base64
 import kotlin.random.Random
@@ -47,7 +47,7 @@ class UwbController(context: Context) {
 
     private val manager: RangingManager? =
         context.getSystemService(RangingManager::class.java)
-    private val executor: Executor = Executors.newSingleThreadExecutor()
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     private var session: RangingSession? = null
     private val _state: MutableStateFlow<State> = MutableStateFlow(State.Idle)
@@ -436,6 +436,7 @@ class UwbController(context: Context) {
         runCatching { session?.stop() }
         runCatching { session?.close() }
         session = null
+        executor.shutdown()
         _state.value = State.Idle
     }
 

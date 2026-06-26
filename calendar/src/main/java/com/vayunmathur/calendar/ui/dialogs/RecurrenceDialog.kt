@@ -79,7 +79,7 @@ fun RecurrenceDialog(backStack: NavBackStack<Route>, resultKey: String, startDat
         onDismissRequest = { backStack.pop() },
         confirmButton = {
             Button(onClick = {
-                val params = if (freq == "NONE") null else RecurrenceParams(
+                val params = RecurrenceParams(
                     freq = freq,
                     interval = intervalStr.toIntOrNull() ?: 1,
                     daysOfWeek = daysOfWeek,
@@ -93,7 +93,7 @@ fun RecurrenceDialog(backStack: NavBackStack<Route>, resultKey: String, startDat
                     wkst = wkst
                 )
 
-                val rrule = params?.let { p ->
+                val rrule = params.let { p ->
                     when (p.freq) {
                         "days" -> RRule.EveryXDays(
                             p.interval, p.endCondition,
@@ -177,7 +177,7 @@ fun RecurrenceDialog(backStack: NavBackStack<Route>, resultKey: String, startDat
                         }, color = if(d in daysOfWeek) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
                             shape = CircleShape) {
                             Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) {
-                                Text(d.name.take(3).capitalcase())
+                                Text(d.name.take(3).lowercase().replaceFirstChar { it.titlecase() })
                             }
                         }
                     }
@@ -202,7 +202,7 @@ fun RecurrenceDialog(backStack: NavBackStack<Route>, resultKey: String, startDat
                             Text(ordinal(startDate.day))
                         }
                         SegmentedButton(monthlyType == 1, {monthlyType = 1}, shape = SegmentedButtonDefaults.itemShape(1, 2)) {
-                            Text(stringResource(R.string.monthly_nth_day_format, ordinal((startDate.day-1)/7+1), startDate.dayOfWeek.name.take(3).capitalcase()))
+                            Text(stringResource(R.string.monthly_nth_day_format, ordinal((startDate.day-1)/7+1), startDate.dayOfWeek.name.take(3).lowercase().replaceFirstChar { it.titlecase() }))
                         }
                     }
                 }
@@ -358,8 +358,4 @@ private fun ordinal(int: Int): String {
         3 -> "rd"
         else -> "th"
     })
-}
-
-fun String.capitalcase(): String {
-    return take(1).uppercase() + drop(1).lowercase()
 }

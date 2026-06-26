@@ -3,14 +3,11 @@ package com.vayunmathur.weather.ui.components.blocks
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,42 +29,36 @@ fun AirQualityBlock(air: AirQualityCurrent?) {
     val level = aqiLevel(aqi)
     val progress = ((aqi ?: 0) / 500f).coerceIn(0f, 1f)
 
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.extraLarge,
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Box(Modifier.align(Alignment.TopStart)) {
-                BlockHeader(iconRes = R.drawable.outline_air_24, title = "Air quality")
-            }
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-            ) {
-                Text(
-                    text = aqi?.toString() ?: "—",
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.End,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.displayMedium,
-                )
-                LinearProgressIndicator(
-                    progress = { progress },
-                    color = aqiColor(aqi),
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    modifier = Modifier.height(8.dp),
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = level,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.End,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            }
+    SquareBlock {
+        Box(Modifier.align(Alignment.TopStart)) {
+            BlockHeader(iconRes = R.drawable.outline_air_24, title = "Air quality")
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        ) {
+            Text(
+                text = aqi?.toString() ?: "—",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.displayMedium,
+            )
+            LinearProgressIndicator(
+                progress = { progress },
+                color = aqiColor(aqi),
+                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                modifier = Modifier.height(8.dp),
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = level,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyLarge,
+            )
         }
     }
 }

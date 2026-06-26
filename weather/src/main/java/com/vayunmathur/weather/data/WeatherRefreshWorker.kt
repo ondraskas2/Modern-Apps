@@ -11,16 +11,12 @@ import androidx.work.WorkerParameters
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.weather.glance.WeatherGlanceWidget
 import com.vayunmathur.weather.network.WeatherApi
-import com.vayunmathur.weather.util.roundCoord
-import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
 
 class WeatherRefreshWorker(
     private val context: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(context, workerParams) {
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun doWork(): Result {
         return try {
@@ -31,14 +27,7 @@ class WeatherRefreshWorker(
             for (location in locations) {
                 try {
                     val forecast = WeatherApi.forecast(location.latitude, location.longitude)
-                    dao.upsertCache(
-                        WeatherCache(
-                            latRounded = roundCoord(location.latitude),
-                            lonRounded = roundCoord(location.longitude),
-                            forecastJson = json.encodeToString(forecast),
-                            fetchedAtEpochMs = System.currentTimeMillis(),
-                        )
-                    )
+                    dao.writeForecastCache(location.latitude, location.longitude, forecast)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to refresh weather for ${location.name}: ${e.message}")
                 }

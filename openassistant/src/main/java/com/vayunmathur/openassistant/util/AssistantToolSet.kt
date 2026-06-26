@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.serializer
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 
 object JsonSchemaValidator {
@@ -160,6 +161,7 @@ class AssistantToolSet(
 
     private fun runTool(block: suspend () -> String): String = runBlocking {
         try { block() }
+        catch (e: CancellationException) { throw e }
         catch (e: MissingAppException) { handleMissingApp(e.packageName) }
         catch (e: Exception) { "Error: ${e.message}" }
     }

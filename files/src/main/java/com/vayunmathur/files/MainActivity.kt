@@ -82,8 +82,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import android.text.format.Formatter
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.content.IntentCompat
 import com.vayunmathur.files.util.FilesViewModel
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.ui.IconArchive
@@ -93,7 +95,6 @@ import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconUnarchive
-import kotlin.math.roundToLong
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toOkioPath
@@ -122,9 +123,9 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         intent?.takeIf { it.type != null } ?: return
         when (intent.action) {
-            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
                 ?.let { viewModel.setIncomingUris(listOf(it)) }
-            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
                 ?.let { viewModel.setIncomingUris(it) }
         }
     }
@@ -208,11 +209,8 @@ fun HomeDirectoryPage(viewModel: FilesViewModel) {
 
 val fs = FileSystem.SYSTEM
 
-fun Path.listFiles(fileSystem: FileSystem = fs): List<Path> = try {
-    fileSystem.list(this).toList()
-} catch (e: Exception) {
-    emptyList()
-}
+fun Path.listFiles(fileSystem: FileSystem = fs): List<Path> =
+    fileSystem.listOrNull(this) ?: emptyList()
 
 fun Path.isDirectory(fileSystem: FileSystem = fs): Boolean =
     fileSystem.metadataOrNull(this)?.isDirectory ?: false
@@ -220,10 +218,7 @@ fun Path.isDirectory(fileSystem: FileSystem = fs): Boolean =
 fun Path.size(fileSystem: FileSystem = fs): Long? = fileSystem.metadataOrNull(this)?.size
 
 fun Path.deleteRecursively(fileSystem: FileSystem = fs) {
-    if (isDirectory(fileSystem)) {
-        listFiles(fileSystem).forEach { it.deleteRecursively(fileSystem) }
-    }
-    fileSystem.delete(this)
+    fileSystem.deleteRecursively(this)
 }
 
 fun pathAncestors(from: Path?, upTo: Path?): List<Path> = buildList {
@@ -629,21 +624,9 @@ fun DirectoryItem(
                 )
             }, supportingContent = {
                 if (!file.isDirectory(fileSystem)) {
-                    file.size(fileSystem)?.let { size -> Text(byteSizeString(size)) }
+                    file.size(fileSystem)?.let { size -> Text(Formatter.formatShortFileSize(context, size)) }
                 }
             }, colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
     }
-}
-
-fun byteSizeString(bytes: Long): String {
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    var unitIdx = 0
-    var bytesS = bytes.toDouble()
-    while (bytesS >= 1024) {
-        bytesS /= 1024
-        unitIdx++
-    }
-    bytesS = (bytesS * 100).roundToLong() / 100.0
-    return "$bytesS ${units[unitIdx]}"
 }

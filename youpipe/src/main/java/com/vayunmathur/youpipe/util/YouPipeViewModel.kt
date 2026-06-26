@@ -9,7 +9,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.core.text.HtmlCompat
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.youpipe.data.CachedRelatedVideo
 import com.vayunmathur.youpipe.data.CachedRelatedVideoDao
@@ -41,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -104,6 +104,54 @@ class YouPipeViewModel(
     val downloadedVideos: StateFlow<List<DownloadedVideo>> = downloadedVideoDao.getAllFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // ===================== Derived, ready-to-render state =====================
+
+    /** History sorted most-recent-first, as shown by the History screen. */
+    val historyVideosByRecency: StateFlow<List<HistoryVideo>> = historyVideoDao.getAllFlow()
+        .map { list -> list.sortedByDescending { it.timestamp } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Downloaded videos sorted most-recent-first, as shown by the Downloads screen. */
+    val downloadedVideosByRecency: StateFlow<List<DownloadedVideo>> = downloadedVideoDao.getAllFlow()
+        .map { list -> list.sortedByDescending { it.timestamp } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Distinct subscription-category names, as listed by the Subscriptions screen. */
+    val categoryNames: StateFlow<List<String>> = subscriptionCategoryDao.getAllFlow()
+        .map { cats -> cats.map { it.category }.distinct() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The videos to display on the subscription-videos screen for [category]
+     * (all subscriptions when null), already filtered, mapped to [VideoInfo],
+     * and sorted newest-first. Subscriptions referenced by a dangling category
+     * row are skipped rather than crashing.
+     */
+    fun subscriptionVideosFor(category: String?): Flow<List<VideoInfo>> =
+        combine(subscriptionVideos, subscriptions, subscriptionCategories) { videos, subs, cats ->
+            val visible = if (category == null) {
+                videos
+            } else {
+                val subIds = cats.filter { it.category == category }
+                    .mapNotNull { pair -> subs.firstOrNull { it.id == pair.subscriptionID }?.id }
+                    .toSet()
+                videos.filter { it.channelID in subIds }
+            }
+            visible
+                .map { VideoInfo(it.name, it.id, it.duration, it.views, it.uploadDate, it.thumbnailURL, it.author) }
+                .sortedByDescending { it.uploadDate }
+        }
+
+    /**
+     * The subscriptions currently assigned to [category]. A category row that
+     * references a missing subscription is skipped rather than crashing.
+     */
+    fun subscriptionsInCategory(category: String): Flow<List<Subscription>> =
+        combine(subscriptionCategories, subscriptions) { cats, subs ->
+            cats.filter { it.category == category }
+                .mapNotNull { pair -> subs.firstOrNull { it.id == pair.subscriptionID } }
+        }
+
     // ===================== By-id flows =====================
 
     fun historyById(id: Long): Flow<HistoryVideo?> = historyVideoDao.getByIdFlow(id)
@@ -153,7 +201,7 @@ class YouPipeViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _recommendationsLoading.value = true
             try {
-                val cached = cachedRelatedVideoDao.getAllFlow().stateIn(viewModelScope).value
+                val cached = cachedRelatedVideoDao.getAll()
                 val history = historyVideos.value
                 val subs = subscriptions.value
                 val subNames = subs.map { it.name.lowercase() }.toSet()
@@ -242,7 +290,7 @@ class YouPipeViewModel(
                 _suggestions.value = if (query.isNotBlank()) {
                     ServiceList.YouTube.suggestionExtractor
                         .suggestionList(query)
-                        .map { HtmlCompat.fromHtml(it, HtmlCompat.FROM_HTML_MODE_LEGACY).toString() }
+                        .map { it.decodeHtml() }
                 } else {
                     emptyList()
                 }
@@ -267,20 +315,9 @@ class YouPipeViewModel(
                 ex.fetchPage()
                 val results = ex.initialPage.items.mapNotNull { item ->
                     when (item) {
-                        is StreamInfoItem -> {
-                            val date = item.uploadDate ?: return@mapNotNull null
-                            VideoInfo(
-                                HtmlCompat.fromHtml(item.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                                videoURLtoID(item.url),
-                                item.duration,
-                                item.viewCount,
-                                date.instant.toKotlinInstant(),
-                                item.thumbnails.first().url,
-                                HtmlCompat.fromHtml(item.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                            )
-                        }
+                        is StreamInfoItem -> item.toVideoInfo()
                         is ChannelInfoItem -> ChannelInfo(
-                            HtmlCompat.fromHtml(item.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                            item.name.decodeHtml(),
                             channelURLtoID(item.url),
                             item.subscriberCount,
                             0,
@@ -400,28 +437,18 @@ class YouPipeViewModel(
                     }
 
                     val data = VideoData(
-                        HtmlCompat.fromHtml(ex.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                        ex.name.decodeHtml(),
                         ex.viewCount,
                         ex.length,
                         ex.uploadDate!!.instant.toKotlinInstant(),
                         ex.thumbnails.first().url,
-                        HtmlCompat.fromHtml(ex.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                        ex.uploaderName.decodeHtml(),
                         channelURLtoID(ex.uploaderUrl),
                         ex.uploaderAvatars.first().url,
                         ex.description.content.fromHTML()
                     )
-                    val related = ex.relatedItems?.items?.filterIsInstance<StreamInfoItem>()?.mapNotNull {
-                        val date = it.uploadDate ?: return@mapNotNull null
-                        VideoInfo(
-                            HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                            videoURLtoID(it.url),
-                            it.duration,
-                            it.viewCount,
-                            date.instant.toKotlinInstant(),
-                            it.thumbnails.firstOrNull()?.url ?: "",
-                            HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                        )
-                    } ?: emptyList()
+                    val related = ex.relatedItems?.items?.filterIsInstance<StreamInfoItem>()
+                        ?.mapNotNull { it.toVideoInfo() } ?: emptyList()
 
                     _videoState.update {
                         it.copy(
@@ -452,9 +479,9 @@ class YouPipeViewModel(
                         val content = if (c.commentText.type == Description.HTML) {
                             c.commentText.content.fromHTML()
                         } else {
-                            HtmlCompat.fromHtml(c.commentText.content, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                            c.commentText.content.decodeHtml()
                         }
-                        Comment(content, HtmlCompat.fromHtml(c.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), c.likeCount, 0)
+                        Comment(content, c.uploaderName.decodeHtml(), c.likeCount, 0)
                     }
                     _videoState.update { it.copy(comments = comments) }
                 }
@@ -644,13 +671,13 @@ class YouPipeViewModel(
                                                 id = videoID,
                                                 progress = 0,
                                                 videoItem = VideoInfo(
-                                                    HtmlCompat.fromHtml(title, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                                                    title.decodeHtml(),
                                                     videoID,
                                                     0,
                                                     0,
                                                     time,
                                                     "",
-                                                    HtmlCompat.fromHtml(author, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                                                    author.decodeHtml()
                                                 ),
                                                 timestamp = time
                                             )
@@ -681,13 +708,13 @@ class YouPipeViewModel(
                                                 id = videoID,
                                                 progress = 0,
                                                 videoItem = VideoInfo(
-                                                    HtmlCompat.fromHtml(title, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+                                                    title.decodeHtml(),
                                                     videoID,
                                                     0,
                                                     0,
                                                     Clock.System.now(),
                                                     "",
-                                                    HtmlCompat.fromHtml(author, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+                                                    author.decodeHtml()
                                                 ),
                                                 timestamp = Clock.System.now()
                                             )

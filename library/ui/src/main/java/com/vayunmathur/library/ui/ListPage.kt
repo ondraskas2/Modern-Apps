@@ -19,7 +19,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,12 +54,10 @@ inline fun <reified T : DatabaseItem, Route : NavKey, reified EditPage : Route> 
     noinline fab: (@Composable () -> Unit)? = null,
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val displayed by remember(data, searchQuery, sortOrder) {
-        derivedStateOf {
-            val filtered = if (searchQuery.isBlank()) data
-            else data.filter { searchString(it).contains(searchQuery, true) }
-            if (sortOrder != null) filtered.sortedWith(sortOrder) else filtered
-        }
+    val displayed = remember(data, searchQuery, sortOrder) {
+        val filtered = if (searchQuery.isBlank()) data
+        else data.filter { searchString(it).contains(searchQuery, true) }
+        if (sortOrder != null) filtered.sortedWith(sortOrder) else filtered
     }
 
     BackHandler(enabled = searchEnabled && searchQuery.isNotEmpty()) {

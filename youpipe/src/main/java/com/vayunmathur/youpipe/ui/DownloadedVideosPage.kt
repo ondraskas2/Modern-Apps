@@ -47,7 +47,7 @@ import androidx.compose.ui.draw.clip
 fun DownloadedVideosPage(backStack: NavBackStack<Route>, youPipeViewModel: YouPipeViewModel) {
     val downloadedVideos by youPipeViewModel.downloadedVideos.collectAsState()
     val activeDownloads by DownloadManager.activeDownloads.collectAsState()
-    val downloads = downloadedVideos.sortedByDescending { it.timestamp }
+    val downloads by youPipeViewModel.downloadedVideosByRecency.collectAsState()
 
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
     var selectedActiveIds by remember { mutableStateOf(setOf<Long>()) }

@@ -14,7 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,7 +34,7 @@ fun CalendarPickerDialog(backStack: NavBackStack<Route>, resultKey: String) {
     val registry = LocalNavResultRegistry.current
     val scope = rememberCoroutineScope()
     val vm: CalendarViewModel = viewModel()
-    val calendars = vm.calendars.collectAsState().value
+    val calendars = vm.calendars.collectAsStateWithLifecycle().value
 
     // group calendars by accountName and filter editable ones (canModify)
     val editable = calendars.filter { it.canModify }

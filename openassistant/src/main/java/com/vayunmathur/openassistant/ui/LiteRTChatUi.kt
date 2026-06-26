@@ -3,6 +3,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -182,6 +183,13 @@ fun LiteRTChatUi(
                         onCancelMedia = {
                             selectedImageUris.clear(); selectedImageFiles.clear()
                             assistantViewModel.cancelRecording()
+                        },
+                        onRemoveImage = { uri ->
+                            val idx = selectedImageUris.indexOf(uri)
+                            if (idx != -1) {
+                                selectedImageUris.removeAt(idx)
+                                if (idx < selectedImageFiles.size) selectedImageFiles.removeAt(idx)
+                            }
                         }
                     )
                 }
@@ -206,7 +214,8 @@ fun ChatInput(
     onAddImage: () -> Unit,
     onRecord: () -> Unit,
     onSend: () -> Unit,
-    onCancelMedia: () -> Unit
+    onCancelMedia: () -> Unit,
+    onRemoveImage: (Uri) -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier.fillMaxWidth().padding(16.dp, 8.dp)) {
@@ -225,7 +234,7 @@ fun ChatInput(
                                     Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
                                     contentScale = ContentScale.Crop
                                 )
-                                IconButton(onCancelMedia) { IconClose() }
+                                IconButton({ onRemoveImage(uri) }) { IconClose() }
                             }
                         }
                     }
@@ -327,7 +336,9 @@ fun ChatBubble(message: Message) {
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
                                     context.startActivity(intent)
-                                } catch (e: Exception) {}
+                                } catch (e: Exception) {
+                                    Log.w("LiteRTChatUi", "Failed to open link: $url", e)
+                                }
                             },
                             modifier = Modifier.align(Alignment.End)
                         ) {

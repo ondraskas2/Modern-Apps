@@ -7,9 +7,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.ui.MapCluster
 import kotlinx.coroutines.Dispatchers
@@ -139,12 +140,8 @@ class PhotoMapViewModel(application: Application) : AndroidViewModel(application
     }
 }
 
-class PhotoMapViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(PhotoMapViewModel::class.java)) {
-            "Unexpected ViewModel class: $modelClass"
-        }
-        return PhotoMapViewModel(application) as T
+@Suppress("FunctionName")
+fun PhotoMapViewModelFactory(application: Application): ViewModelProvider.Factory =
+    viewModelFactory {
+        initializer { PhotoMapViewModel(application) }
     }
-}

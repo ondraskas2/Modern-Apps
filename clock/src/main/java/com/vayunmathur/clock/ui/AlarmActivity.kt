@@ -77,7 +77,7 @@ class AlarmActivity : ComponentActivity() {
 
             DynamicTheme {
                 AlarmRingingScreen(
-                    alarmTime = alarm?.time?.toString() ?: "--:--",
+                    alarmTime = alarm?.let { formatAlarmTime(this@AlarmActivity, it.time) } ?: "--:--",
                     alarmName = alarm?.name ?: getString(R.string.label_alarm),
                     onDismiss = { dismissAlarm() },
                     onSnooze = { snoozeAlarm() }

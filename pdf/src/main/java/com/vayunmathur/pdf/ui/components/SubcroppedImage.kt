@@ -2,12 +2,12 @@ package com.vayunmathur.pdf.ui.components
 
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
-import android.graphics.Matrix
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +26,7 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import com.vayunmathur.pdf.model.CapturedImage
 import com.vayunmathur.pdf.model.Quadrilateral
+import com.vayunmathur.pdf.util.warpQuadToBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -65,30 +66,15 @@ private fun PerspectiveCroppedImage(
                 val targetWidth = (bounds.width * bitmap.width).roundToInt().coerceAtLeast(1)
                 val targetHeight = (bounds.height * bitmap.height).roundToInt().coerceAtLeast(1)
 
-                val srcPoints = quad.toSrcPoints(bitmap.width, bitmap.height)
-                val dstPoints = floatArrayOf(
-                    0f, 0f,
-                    targetWidth.toFloat(), 0f,
-                    targetWidth.toFloat(), targetHeight.toFloat(),
-                    0f, targetHeight.toFloat()
-                )
-                val matrix = Matrix()
-                val result = if (matrix.setPolyToPoly(srcPoints, 0, dstPoints, 0, 4)) {
-                    val out = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-                    android.graphics.Canvas(out).drawBitmap(bitmap, matrix, null)
-                    out
-                } else {
-                    // Fallback: bounding box crop
-                    val left = (bounds.left * bitmap.width).roundToInt().coerceIn(0, bitmap.width - 1)
-                    val top = (bounds.top * bitmap.height).roundToInt().coerceIn(0, bitmap.height - 1)
-                    val w = targetWidth.coerceAtMost(bitmap.width - left)
-                    val h = targetHeight.coerceAtMost(bitmap.height - top)
-                    Bitmap.createBitmap(bitmap, left, top, w, h)
-                }
+                val result = warpQuadToBitmap(bitmap, quad, targetWidth, targetHeight)
                 bitmap.recycle()
                 croppedBitmap = result
             } catch (_: Exception) {}
         }
+    }
+
+    DisposableEffect(croppedBitmap) {
+        onDispose { croppedBitmap?.recycle() }
     }
 
     croppedBitmap?.let { bmp ->

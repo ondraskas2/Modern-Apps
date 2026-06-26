@@ -4,9 +4,10 @@ import android.app.Application
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.photos.data.Photo
@@ -75,7 +76,7 @@ class GalleryViewModel(
         .stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5_000),
-            dataStore.getBoolean("image_understanding_enabled", false),
+            false,
         )
 
     init {
@@ -158,15 +159,10 @@ class GalleryViewModel(
     }
 }
 
-class GalleryViewModelFactory(
-    private val application: Application,
-    private val photoDao: PhotoDao,
-) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        require(modelClass.isAssignableFrom(GalleryViewModel::class.java)) {
-            "Unexpected ViewModel class: $modelClass"
-        }
-        return GalleryViewModel(application, photoDao) as T
-    }
+@Suppress("FunctionName")
+fun GalleryViewModelFactory(
+    application: Application,
+    photoDao: PhotoDao,
+): ViewModelProvider.Factory = viewModelFactory {
+    initializer { GalleryViewModel(application, photoDao) }
 }

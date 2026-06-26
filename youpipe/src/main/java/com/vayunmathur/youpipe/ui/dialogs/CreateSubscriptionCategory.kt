@@ -43,8 +43,10 @@ fun CreateSubscriptionCategory(backStack: NavBackStack<Route>, youPipeViewModel:
     val categories by youPipeViewModel.subscriptionCategories.collectAsState()
     val categoryNames = categories.map { it.category }
     var categoryName by remember { mutableStateOf(id?:"") }
-    val subscriptionsAlreadyInCategory = categories.filter { it.category == categoryName }.map { it.subscriptionID }.map { id -> subscriptions.first { it.id == id } }
-    var selectedSubscriptions by remember { mutableStateOf(subscriptionsAlreadyInCategory) }
+    val subscriptionsAlreadyInCategory by remember(categoryName) {
+        youPipeViewModel.subscriptionsInCategory(categoryName)
+    }.collectAsState(initial = emptyList())
+    var selectedSubscriptions by remember(subscriptionsAlreadyInCategory) { mutableStateOf(subscriptionsAlreadyInCategory) }
     val coroutineScope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     Dialog({backStack.pop()}) {

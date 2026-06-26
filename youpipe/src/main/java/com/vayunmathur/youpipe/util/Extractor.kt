@@ -22,6 +22,24 @@ data class SponsorSegment(
     val end: Long get() = (segment[1] * 1000).toLong()
 }
 
+/** Decodes HTML entities/markup to plain text. */
+fun String.decodeHtml(): String =
+    HtmlCompat.fromHtml(this, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+
+/** Maps a NewPipe [StreamInfoItem] to a [VideoInfo], or null if it has no upload date. */
+fun StreamInfoItem.toVideoInfo(): VideoInfo? {
+    val date = uploadDate ?: return null
+    return VideoInfo(
+        name.decodeHtml(),
+        videoURLtoID(url),
+        duration,
+        viewCount,
+        date.instant.toKotlinInstant(),
+        thumbnails.firstOrNull()?.url ?: "",
+        uploaderName.decodeHtml()
+    )
+}
+
 fun videoURLtoID(url: String): Long {
     return ByteBuffer.wrap(Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT).decode(url.toUri().getQueryParameter("v")!!)).long
 }
@@ -55,13 +73,13 @@ suspend fun getVideoInfo(videoId: Long): VideoInfo = coroutineScope {
     val ex = ServiceList.YouTube.getStreamExtractor("https://www.youtube.com/watch?v=$idString")
     ex.fetchPage()
     VideoInfo(
-        HtmlCompat.fromHtml(ex.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+        ex.name.decodeHtml(),
         videoId,
         ex.length,
         ex.viewCount,
         ex.uploadDate!!.instant.toKotlinInstant(),
         ex.thumbnails.first().url,
-        HtmlCompat.fromHtml(ex.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+        ex.uploaderName.decodeHtml()
     )
 }
 
@@ -70,19 +88,8 @@ fun getChannelVideos(channelId: String): Sequence<VideoInfo> = sequence {
     ex.fetchPage()
     var page = ex.initialPage
     while(true) {
-        page.items.filterIsInstance<StreamInfoItem>().forEach {
-            val date = it.uploadDate ?: return@forEach
-            yield(
-                VideoInfo(
-                    HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
-                    videoURLtoID(it.url),
-                    it.duration,
-                    it.viewCount,
-                    date.instant.toKotlinInstant(),
-                    it.thumbnails.firstOrNull()?.url ?: "",
-                    HtmlCompat.fromHtml(it.uploaderName, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
-                )
-            )
+        page.items.filterIsInstance<StreamInfoItem>().forEach { item ->
+            item.toVideoInfo()?.let { yield(it) }
         }
         if(page.hasNextPage()) {
             val next = page.nextPage ?: break
@@ -99,7 +106,7 @@ suspend fun getChannelInfoFromURL(url: String): ChannelInfo = coroutineScope {
     val ex = ServiceList.YouTube.getChannelExtractor(url)
     ex.fetchPage()
     ChannelInfo(
-        HtmlCompat.fromHtml(ex.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(),
+        ex.name.decodeHtml(),
         ex.id,
         ex.subscriberCount,
         0,

@@ -23,18 +23,17 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import com.vayunmathur.health.R
 import com.vayunmathur.health.Route
 import com.vayunmathur.health.data.Record
-import com.vayunmathur.health.data.RecordType
 import com.vayunmathur.health.data.SleepData
 import com.vayunmathur.health.data.SleepStage
 import com.vayunmathur.health.ui.components.GroupedSection
 import com.vayunmathur.health.ui.components.hypnogramColors
 import com.vayunmathur.health.util.HealthViewModel
 import com.vayunmathur.health.util.displayString
+import com.vayunmathur.health.util.formatHourAmPm
+import com.vayunmathur.health.util.formatTime24
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.util.NavBackStack
 import kotlin.time.Clock
-import kotlin.time.Instant
-import kotlin.time.Duration.Companion.hours
 import kotlinx.coroutines.launch
 import kotlinx.datetime.*
 import kotlinx.serialization.json.Json
@@ -113,21 +112,8 @@ fun SleepDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel)
                     .fillMaxSize()
             ) { page ->
                 val day = today.minus(initialPage - page, DateTimeUnit.DAY)
-                val searchStart = day.atStartOfDayIn(tz).minus(12.hours)
-                val searchEnd = day.atStartOfDayIn(tz).plus(24.hours)
-
-                // Fetch records that ended during this day (most likely the sleep that ended this
-                // morning)
-                val records by remember(searchStart, searchEnd) { viewModel.getAllRecordsInRange(RecordType.Sleep, searchStart, searchEnd) }
-                    .collectAsState(emptyList())
-                val record = remember(records, day) {
-                    records.filter {
-                        val endLocal = it.endTime.atZone(java.time.ZoneId.systemDefault()).toLocalDate()
-                        endLocal.year == day.year && 
-                        endLocal.monthValue == day.monthNumber && 
-                        endLocal.dayOfMonth == day.dayOfMonth
-                    }.maxByOrNull { it.endTime }
-                }
+                val record by remember(day) { viewModel.sleepRecordForDay(day) }
+                    .collectAsState(null)
 
                 LazyColumn(
                     modifier = Modifier
@@ -174,9 +160,7 @@ fun SleepSummaryHeader(record: Record) {
             color = HealthColors.Sleep,
         )
         Text(
-            text = "${startT.hour}:${
-                startT.minute.toString().padStart(2, '0')
-            } - ${endT.hour}:${endT.minute.toString().padStart(2, '0')}",
+            text = "${formatTime24(LocalTime(startT.hour, startT.minute))} - ${formatTime24(LocalTime(endT.hour, endT.minute))}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.outline
         )
@@ -287,19 +271,13 @@ fun SleepStageGraph(record: Record) {
             val startT = record.startTime.atZone(java.time.ZoneId.systemDefault())
             val endT = record.endTime.atZone(java.time.ZoneId.systemDefault())
 
-            fun formatHour(hour: Int): String {
-                val h = if (hour % 12 == 0) 12 else hour % 12
-                val ampm = if (hour < 12) "AM" else "PM"
-                return "$h $ampm"
-            }
-
             Text(
-                formatHour(startT.hour),
+                formatHourAmPm(startT.hour),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
             Text(
-                formatHour(endT.hour),
+                formatHourAmPm(endT.hour),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )

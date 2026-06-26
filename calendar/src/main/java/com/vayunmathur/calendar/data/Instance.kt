@@ -12,7 +12,6 @@ import kotlinx.datetime.minus
 import kotlinx.datetime.toLocalDateTime
 import com.vayunmathur.calendar.util.RRule
 import kotlinx.serialization.Serializable
-import java.time.DateTimeException
 import kotlin.time.Instant
 
 
@@ -74,29 +73,31 @@ data class Instance(
                     endTime.toEpochMilliseconds()
                 )
                 cursor?.use {
+                    val idIdx = it.getColumnIndexOrThrow(CalendarContract.Instances._ID)
+                    val eventIdIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID)
+                    val beginIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)
+                    val endIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.END)
+                    val tzIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_TIMEZONE)
+                    val allDayIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)
+                    val titleIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)
+                    val colorIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.DISPLAY_COLOR)
+                    val rruleIdx = it.getColumnIndexOrThrow(CalendarContract.Instances.RRULE)
+
                     while (it.moveToNext()) {
                         try {
-                            val id = it.getLong(it.getColumnIndexOrThrow(CalendarContract.Instances._ID))
-                            val eventID =
-                                it.getLong(it.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_ID))
-                            val start =
-                                it.getLong(it.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN))
-                            val end = it.getLong(it.getColumnIndexOrThrow(CalendarContract.Instances.END))
-                            var timezone =
-                                it.getStringOrNull(it.getColumnIndexOrThrow(CalendarContract.Instances.EVENT_TIMEZONE)) ?: TimeZone.currentSystemDefault().id
-                            try {
-                                TimeZone.of(timezone)
-                            } catch(_: DateTimeException) {
-                                timezone = TimeZone.currentSystemDefault().id
-                            }
-                            val allDay =
-                                it.getInt(it.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)) > 0
-                            val eventTitle = it.getString(it.getColumnIndexOrThrow(CalendarContract.Instances.TITLE))
-                            val color = it.getInt(it.getColumnIndexOrThrow(CalendarContract.Instances.DISPLAY_COLOR))
-                            val rrule = RRule.parse(it.getStringOrNull(it.getColumnIndexOrThrow(CalendarContract.Instances.RRULE)) ?: "",
-                                TimeZone.of(timezone))
+                            val id = it.getLong(idIdx)
+                            val eventID = it.getLong(eventIdIdx)
+                            val start = it.getLong(beginIdx)
+                            val end = it.getLong(endIdx)
+                            val tz = runCatching {
+                                TimeZone.of(it.getStringOrNull(tzIdx) ?: TimeZone.currentSystemDefault().id)
+                            }.getOrDefault(TimeZone.currentSystemDefault())
+                            val timezone = tz.id
+                            val allDay = it.getInt(allDayIdx) > 0
+                            val eventTitle = it.getString(titleIdx)
+                            val color = it.getInt(colorIdx)
+                            val rrule = RRule.parse(it.getStringOrNull(rruleIdx) ?: "", tz)
 
-                            //if (end < start) continue
                             instances.add(Instance(id, eventID, start, end, timezone, allDay, eventTitle, color, rrule))
                         } catch (e: Exception) {
                             Log.e("Instance", "Error constructing instance from cursor", e)

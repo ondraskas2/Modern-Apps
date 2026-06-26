@@ -420,17 +420,13 @@ data class Contact(
                     val accountTypeIdx = cursor.getColumnIndexOrThrow(ContactsContract.RawContacts.ACCOUNT_TYPE)
 
                     while (cursor.moveToNext()) {
-                        try {
-                            rawContacts += RawContactInfo(
-                                id = cursor.getLong(idIdx),
-                                displayName = cursor.getStringOrNull(nameIdx),
-                                isFavorite = cursor.getInt(starredIdx) == 1,
-                                accountName = cursor.getStringOrNull(accountNameIdx),
-                                accountType = cursor.getStringOrNull(accountTypeIdx)
-                            )
-                        } catch (e: Exception) {
-                            Log.e("Contact", "Error constructing raw contact info from cursor", e)
-                        }
+                        rawContacts += RawContactInfo(
+                            id = cursor.getLong(idIdx),
+                            displayName = cursor.getStringOrNull(nameIdx),
+                            isFavorite = cursor.getInt(starredIdx) == 1,
+                            accountName = cursor.getStringOrNull(accountNameIdx),
+                            accountType = cursor.getStringOrNull(accountTypeIdx)
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -523,7 +519,6 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
             val d15Idx = cursor.getColumnIndexOrThrow(ContactsContract.Data.DATA15)
 
             while (cursor.moveToNext()) {
-                try {
                     val rawId = cursor.getLong(rawIdIdx)
                     rawContactIds.add(rawId)
                     val dataId = cursor.getLong(idIdx)
@@ -556,21 +551,15 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
                         CDKEvent.CONTENT_ITEM_TYPE -> {
                             val date = cursor.getStringOrNull(d1Idx) ?: ""
                             val type = cursor.getInt(d2Idx)
-                            val localDate = if (date.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
-                                LocalDate.parse(date, LocalDate.Formats.ISO)
-                            } else if (date.matches(Regex("\\d{8}"))) {
-                                LocalDate.parse(date, LocalDate.Format { year(); monthNumber(); day() })
-                            } else if (date.startsWith("--")) {
-                                try {
-                                    LocalDate.parse("1604" + date.substring(2))
-                                } catch (_: Exception) { null }
-                            } else null
+                            val localDate = runCatching { LocalDate.parse(date, LocalDate.Formats.ISO) }.getOrNull()
+                                ?: runCatching { LocalDate.parse(date, LocalDate.Format { year(); monthNumber(); day() }) }.getOrNull()
+                                ?: if (date.startsWith("--")) runCatching { LocalDate.parse("1604" + date.substring(2)) }.getOrNull() else null
 
                             if (localDate != null) {
                                 datesMap.getOrPut(rawId) { mutableListOf() }.add(Event(dataId, localDate, type))
                             }
                         }
-                        CDKPhoto.CONTENT_ITEM_TYPE -> {
+                        CDKPhoto.CONTENT_ITEM_TYPE -> runCatching {
                             val contactId = cursor.getLong(contactIdIdx)
                             val contactUri = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, contactId)
                             val fullSizeStream = ContactsContract.Contacts.openContactPhotoInputStream(contentResolver, contactUri, true)
@@ -582,7 +571,7 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
                             if (photoBytes != null) {
                                 photosMap.getOrPut(rawId) { mutableListOf() }.add(Photo(dataId, Base64.encode(photoBytes)))
                             }
-                        }
+                        }.onFailure { Log.e("Contact", "Error reading contact photo", it) }
                         CDKSName.CONTENT_ITEM_TYPE -> {
                             val prefix = cursor.getStringOrNull(d4Idx) ?: ""
                             val given = cursor.getStringOrNull(d2Idx) ?: ""
@@ -609,9 +598,6 @@ fun getDetailsInternal(context: Context, id: Long? = null, isProfile: Boolean = 
                             groupsMap.getOrPut(rawId) { mutableListOf() }.add(GroupMembership(dataId, groupId))
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e("Contact", "Error constructing contact detail from cursor", e)
-                }
             }
         }
     } catch (e: Exception) {

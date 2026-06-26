@@ -16,8 +16,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.weather.network.ForecastResponse
 import com.vayunmathur.weather.util.SelectedDateOrTime
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.LocalDateTime
+import com.vayunmathur.weather.util.formatDayMonthLabel
+import com.vayunmathur.weather.util.formatSelectedHourLabel
 import com.vayunmathur.library.R as LibraryR
 
 /**
@@ -33,8 +33,8 @@ fun SelectedDateTimeHeader(
     onClear: () -> Unit,
 ) {
     val label = when (selection) {
-        is SelectedDateOrTime.Time -> formatHourLabel(selection.isoTime, use24Hour)
-        is SelectedDateOrTime.Day -> formatDayLabel(selection.isoDate)
+        is SelectedDateOrTime.Time -> formatSelectedHourLabel(selection.isoTime, use24Hour)
+        is SelectedDateOrTime.Day -> formatDayMonthLabel(selection.isoDate)
     }
 
     Surface(
@@ -64,32 +64,4 @@ fun SelectedDateTimeHeader(
             }
         }
     }
-}
-
-private val WEEKDAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-private val MONTHS = listOf(
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-)
-
-/** "Wed 25 Jun" for an ISO date like 2026-06-25. */
-private fun formatDayLabel(isoDate: String): String {
-    val date = runCatching { LocalDate.parse(isoDate) }.getOrNull() ?: return isoDate
-    val weekday = WEEKDAYS[date.dayOfWeek.ordinal]
-    val month = MONTHS[date.month.ordinal]
-    return "$weekday ${date.day} $month"
-}
-
-/** "3 PM · Wed" (or "15:00 · Wed") for an ISO time like 2026-06-25T15:00. */
-private fun formatHourLabel(isoTime: String, use24Hour: Boolean): String {
-    val ldt = runCatching { LocalDateTime.parse(isoTime) }.getOrNull() ?: return isoTime
-    val weekday = WEEKDAYS[ldt.date.dayOfWeek.ordinal]
-    val hourText = if (use24Hour) {
-        "%02d:00".format(ldt.hour)
-    } else {
-        val ampm = if (ldt.hour < 12) "AM" else "PM"
-        val display = if (ldt.hour % 12 == 0) 12 else ldt.hour % 12
-        "$display $ampm"
-    }
-    return "$hourText · $weekday"
 }

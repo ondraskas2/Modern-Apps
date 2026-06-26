@@ -11,8 +11,9 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import com.vayunmathur.calendar.util.RRule
+import com.vayunmathur.calendar.util.parseIcalBasicDate
+import com.vayunmathur.calendar.util.toIcalBasic
 import kotlinx.serialization.Serializable
-import java.time.DateTimeException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.milliseconds
@@ -67,9 +68,7 @@ data class Event(
             put(CalendarContract.Events.ALL_DAY, if (allDay) 1 else 0)
             put(CalendarContract.Events.EVENT_TIMEZONE, tz)
             if (exdate.isNotEmpty()) {
-                put(CalendarContract.Events.EXDATE, exdate.joinToString(",") { d ->
-                    "%04d%02d%02d".format(d.year, d.monthNumber, d.day)
-                })
+                put(CalendarContract.Events.EXDATE, exdate.joinToString(",") { it.toIcalBasic() })
             }
         }
     }
@@ -126,13 +125,10 @@ data class Event(
                             val start = it.getLong(startIdx)
                             var end = it.getLong(endIdx)
                             val allDay = it.getInt(allDayIdx) == 1
-                            var timezone =
-                                it.getStringOrNull(tzIdx) ?: TimeZone.currentSystemDefault().id
-                            try {
-                                TimeZone.of(timezone)
-                            } catch(_: DateTimeException) {
-                                timezone = TimeZone.currentSystemDefault().id
-                            }
+                            val tz = runCatching {
+                                TimeZone.of(it.getStringOrNull(tzIdx) ?: TimeZone.currentSystemDefault().id)
+                            }.getOrDefault(TimeZone.currentSystemDefault())
+                            val timezone = tz.id
                             val deleted = it.getInt(deletedIdx) == 1
                             val rrule = it.getStringOrNull(rruleIdx) ?: ""
                             val duration = it.getStringOrNull(durationIdx)
@@ -146,19 +142,8 @@ data class Event(
                             }
 
                             // Parse EXDATE field - comma-separated RFC 5545 dates (YYYYMMDD or YYYYMMDDTHHMMSSZ)
-                            val exdate = exdateStr?.split(",")?.mapNotNull { dateStr ->
-                                try {
-                                    val cleanDate = dateStr.trim()
-                                    if (cleanDate.length >= 8) {
-                                        val year = cleanDate.substring(0, 4).toInt()
-                                        val month = cleanDate.substring(4, 6).toInt()
-                                        val day = cleanDate.substring(6, 8).toInt()
-                                        LocalDate(year, month, day)
-                                    } else null
-                                } catch (_: Exception) {
-                                    null
-                                }
-                            } ?: emptyList()
+                            val exdate = exdateStr?.split(",")?.mapNotNull { parseIcalBasicDate(it.trim()) }
+                                ?: emptyList()
 
                             if (deleted) continue
 
@@ -174,7 +159,7 @@ data class Event(
                                 end,
                                 timezone,
                                 allDay,
-                                RRule.parse(rrule, TimeZone.of(timezone)),
+                                RRule.parse(rrule, tz),
                                 exdate,
                                 remindersByEvent[id]?.sorted() ?: emptyList(),
                             )

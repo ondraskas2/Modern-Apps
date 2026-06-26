@@ -1,15 +1,15 @@
 package com.vayunmathur.camera.util
 
 import android.app.Application
-import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
 import android.location.Location
 import android.location.LocationManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -32,15 +32,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.library.util.DataStoreUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.camera.lifecycle.awaitInstance
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.roundToInt
 
 enum class CameraMode { PHOTO, PORTRAIT, PANORAMA, PHOTOSPHERE, VIDEO, SLOW_MO, TIMELAPSE }
 enum class FlashMode { ON, OFF, AUTO }
@@ -116,6 +114,9 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _lastCaptureUri = MutableStateFlow<Uri?>(null)
     val lastCaptureUri = _lastCaptureUri.asStateFlow()
 
+    private val _galleryThumbnail = MutableStateFlow<Bitmap?>(null)
+    val galleryThumbnail = _galleryThumbnail.asStateFlow()
+
     private val _gridEnabled = MutableStateFlow(false)
     val gridEnabled = _gridEnabled.asStateFlow()
 
@@ -161,6 +162,20 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     init {
         loadSettings()
+        viewModelScope.launch {
+            _lastCaptureUri.collect { uri -> _galleryThumbnail.value = loadThumbnail(uri) }
+        }
+    }
+
+    private suspend fun loadThumbnail(uri: Uri?): Bitmap? = uri?.let {
+        withContext(Dispatchers.IO) {
+            try {
+                app.contentResolver.loadThumbnail(it, Size(96, 96), null)
+            } catch (e: Exception) {
+                Log.w("CameraViewModel", "Failed to load gallery thumbnail", e)
+                null
+            }
+        }
     }
 
     private fun loadSettings() {
@@ -236,21 +251,11 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         highSpeedCamera?.cameraControl?.setZoomRatio(ratio)
     }
 
-    suspend fun updateZoomLevels(lensFacing: Int) {
+    fun updateZoomLevels(lensFacing: Int) {
         _availableZoomLevels.value = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             listOf(".5" to 0.5f, "1x" to 1f, "2x" to 2f, "5x" to 5f)
         } else {
             listOf(".7" to 0.7f, "1x" to 1f)
-        }
-    }
-
-    private fun formatZoomLabel(ratio: Float): String {
-        val tenths = (ratio * 10f).roundToInt()
-        return when {
-            tenths < 10 -> ".${tenths}"
-            tenths == 10 -> "1x"
-            tenths % 10 == 0 -> "${tenths / 10}"
-            else -> "${tenths / 10}.${tenths % 10}"
         }
     }
 
@@ -261,10 +266,10 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             val lm = app.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             lastLocation = lm.getLastKnownLocation(LocationManager.FUSED_PROVIDER)
                 ?: lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            Log.w("CameraViewModel", "Failed to read last known location", e)
+        }
     }
-
-    // --- High-speed session management ---
 
     suspend fun setupHighSpeedSession(
         surfaceProvider: Preview.SurfaceProvider
@@ -385,12 +390,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "SLOMO_$timestamp")
-            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
-        }
+        val contentValues = MediaStoreSaver.videoValues("SLOMO_${MediaStoreSaver.timestamp()}")
 
         val outputOptions = MediaStoreOutputOptions.Builder(
             app.contentResolver,
@@ -436,12 +436,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun capturePhoto(controller: LifecycleCameraController) {
         _isCapturing.value = true
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "IMG_$timestamp.jpg")
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
-        }
+        val contentValues = MediaStoreSaver.imageValues("IMG_${MediaStoreSaver.timestamp()}.jpg")
 
         val metadata = ImageCapture.Metadata().apply {
             if (_locationEnabled.value) location = lastLocation
@@ -458,7 +453,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             controller.cameraControl?.let {
                 androidx.camera.camera2.interop.Camera2CameraControl.from(it)
             }
-        } catch (_: Exception) { null }
+        } catch (e: Exception) { Log.w("CameraViewModel", "Camera2 control unavailable", e); null }
 
         fun restoreAutoExposure() {
             if (stop.nanos != null && cam2Control != null) {
@@ -469,7 +464,9 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                             .clearCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE)
                             .build()
                     )
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    Log.w("CameraViewModel", "Failed to restore auto exposure", e)
+                }
             }
         }
 
@@ -510,7 +507,8 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                         )
                         .build()
                 ).addListener({ doCapture() }, ContextCompat.getMainExecutor(app))
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.w("CameraViewModel", "Failed to set manual exposure", e)
                 doCapture()
             }
         } else {
@@ -557,19 +555,14 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
 
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val timestamp = MediaStoreSaver.timestamp()
         val prefix = when (_cameraMode.value) {
             CameraMode.SLOW_MO -> "SLOMO"
             CameraMode.TIMELAPSE -> "TL"
             else -> "VID"
         }
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "${prefix}_$timestamp")
-            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
-        }
+        val contentValues = MediaStoreSaver.videoValues("${prefix}_$timestamp")
 
-        val mediaStoreOutput = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val cacheFile = java.io.File(app.cacheDir, "VID_$timestamp.mp4")
         val outputOptions = FileOutputOptions.Builder(cacheFile).build()
         val recordingMode = _cameraMode.value
@@ -619,11 +612,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                         }
                         else -> cacheFile
                     }
-                    val uri = app.contentResolver.insert(mediaStoreOutput, contentValues)
-                    uri?.let {
-                        app.contentResolver.openOutputStream(it)?.use { os ->
-                            fileToSave.inputStream().use { input -> input.copyTo(os) }
-                        }
+                    MediaStoreSaver.saveVideoFile(app.contentResolver, contentValues, fileToSave)?.let {
                         setLastCaptureUri(it)
                     }
                     fileToSave.delete()

@@ -35,7 +35,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.text.HtmlCompat
 import com.vayunmathur.library.util.NavBackStack
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -44,6 +43,7 @@ import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
 import com.vayunmathur.youpipe.data.Subscription
 import com.vayunmathur.youpipe.util.YouPipeViewModel
+import com.vayunmathur.youpipe.util.decodeHtml
 import kotlinx.serialization.Serializable
 import kotlin.time.Instant
 
@@ -119,7 +119,7 @@ fun VideoItem(
     val historyFlow = remember(videoInfo.videoID) { youPipeViewModel.historyById(videoInfo.videoID) }
     val historyItem by historyFlow.collectAsState(initial = null)
     val timeWatched = historyItem?.progress ?: 0
-    val percentWatched = timeWatched.toDouble() / videoInfo.duration.toDouble()
+    val percentWatched = if (videoInfo.duration > 0) timeWatched.toDouble() / videoInfo.duration.toDouble() else 0.0
 
     val deArrowEnabled by youPipeViewModel.deArrowEnabled.collectAsState()
     val deArrowCache by youPipeViewModel.deArrowCache.collectAsState()
@@ -158,13 +158,13 @@ fun VideoItem(
         }
         Box(Modifier.weight(1.5f)) {
             ListItem({
-                Text(HtmlCompat.fromHtml(displayTitle, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), style = MaterialTheme.typography.titleMedium)
+                Text(displayTitle.decodeHtml(), style = MaterialTheme.typography.titleMedium)
             }, Modifier, {
 
             }, {
                 Column {
                     if(showAuthor) {
-                        Text(HtmlCompat.fromHtml(videoInfo.author, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), style = MaterialTheme.typography.bodySmall)
+                        Text(videoInfo.author.decodeHtml(), style = MaterialTheme.typography.bodySmall)
                     }
                     Text(
                         stringResource(R.string.video_stat_format, countString(context, videoInfo.views), uploadTimeAgo(context, videoInfo.uploadDate)),
@@ -180,7 +180,7 @@ fun VideoItem(
 fun ChannelHeader(channelInfo: ChannelInfo) {
     val context = LocalContext.current
     ListItem({
-        Text(HtmlCompat.fromHtml(channelInfo.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString(), style = MaterialTheme.typography.titleLarge)
+        Text(channelInfo.name.decodeHtml(), style = MaterialTheme.typography.titleLarge)
     }, Modifier, {
 
     }, {

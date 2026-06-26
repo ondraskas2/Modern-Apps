@@ -11,15 +11,6 @@ data class Quadrilateral(
     val bottomLeft: Offset
 ) {
     companion object {
-        fun fromRect(rect: Rect): Quadrilateral {
-            return Quadrilateral(
-                topLeft = Offset(rect.left, rect.top),
-                topRight = Offset(rect.right, rect.top),
-                bottomRight = Offset(rect.right, rect.bottom),
-                bottomLeft = Offset(rect.left, rect.bottom)
-            )
-        }
-        
         fun default() = Quadrilateral(
                 topLeft = Offset(0f, 0f),
                 topRight = Offset(1f, 0f),

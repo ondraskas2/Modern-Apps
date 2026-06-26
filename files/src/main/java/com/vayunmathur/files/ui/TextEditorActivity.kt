@@ -88,12 +88,12 @@ private fun TextEditorLoaded(uri: Uri, initialContent: String, viewModel: TextEd
                 title = { Text(uri.lastPathSegment ?: stringResource(R.string.file_fallback)) },
                 actions = {
                     IconButton(onClick = {
-                        if (isEditing && state.text != initialContent) {
+                        if (isEditing && state.text.toString() != initialContent) {
                             viewModel.save(uri, state.text.toString())
                         }
                         isEditing = !isEditing
                     }) {
-                        if (isEditing) if (initialContent == state.text) IconVisible() else IconSave() else IconEdit()
+                        if (isEditing) if (initialContent == state.text.toString()) IconVisible() else IconSave() else IconEdit()
                     }
                 }
             )

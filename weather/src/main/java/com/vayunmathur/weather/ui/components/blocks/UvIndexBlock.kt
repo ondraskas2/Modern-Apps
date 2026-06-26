@@ -2,13 +2,10 @@ package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
@@ -67,44 +64,38 @@ fun UvIndexBlock(uvIndex: Double?) {
     )
     val dotRadii = listOf(8f, 6f, 6f, 6f, 6f)
 
-    Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialShapes.Cookie12Sided.toShape(),
-        shadowElevation = 2.dp,
-    ) {
-        Box(modifier = Modifier.fillMaxSize().aspectRatio(1f)) {
-            Canvas(modifier = Modifier.matchParentSize()) {
-                val sx = size.width / 176f
-                val sy = size.height / 176f
-                dotColors.forEachIndexed { i, color ->
-                    val o = dotOffsets[i]
-                    drawCircle(
-                        color = color,
-                        radius = dotRadii[i] * sx,
-                        center = Offset(o.x * sx, o.y * sy),
-                        alpha = if (i == activeLevel) 1f else 0.15f,
-                    )
-                }
-            }
-            Box(Modifier.align(Alignment.TopCenter)) {
-                BlockHeader(
-                    iconRes = R.drawable.outline_clear_day_24,
-                    title = "UV index",
-                    topPadding = 32.dp,
+    StatBlock(shape = MaterialShapes.Cookie12Sided.toShape()) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val sx = size.width / 176f
+            val sy = size.height / 176f
+            dotColors.forEachIndexed { i, color ->
+                val o = dotOffsets[i]
+                drawCircle(
+                    color = color,
+                    radius = dotRadii[i] * sx,
+                    center = Offset(o.x * sx, o.y * sy),
+                    alpha = if (i == activeLevel) 1f else 0.15f,
                 )
             }
-            Text(
-                text = v?.toString() ?: "—",
-                style = MaterialTheme.typography.displayMedium,
-                modifier = Modifier.align(Alignment.Center).offset(y = 4.dp),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = label,
-                modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-35).dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        }
+        Box(Modifier.align(Alignment.TopCenter)) {
+            BlockHeader(
+                iconRes = R.drawable.outline_clear_day_24,
+                title = "UV index",
+                topPadding = 32.dp,
             )
         }
+        Text(
+            text = v?.toString() ?: "—",
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.align(Alignment.Center).offset(y = 4.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = label,
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-35).dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

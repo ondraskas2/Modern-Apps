@@ -138,7 +138,7 @@ object UwbSessionManager {
 
         scope.launch {
             Log.i(TAG, "startAsInitiator: launched coroutine, loading peer from DB")
-            val peerUser = userDao.getAll().firstOrNull { it.id == peerUserId }
+            val peerUser = userDao.getById(peerUserId)
             Log.i(TAG, "startAsInitiator: peerUser=${peerUser?.name} platform=${peerUser?.platform}")
             if (peerUser == null) {
                 _state.value = UwbSessionState.Failed("Unknown peer")
@@ -173,12 +173,7 @@ object UwbSessionManager {
                     sessionId = info.sessionId
                 )
             )
-            val ok = try {
-                Networking.publishUwbMessage(envelope, peerUserId, peerUser)
-            } catch (e: Exception) {
-                Log.e(TAG, "startAsInitiator: publishUwbMessage threw exception", e)
-                false
-            }
+            val ok = publish(envelope, peerUserId)
             Log.i(TAG, "startAsInitiator: publishUwbMessage returned $ok")
             if (!ok) {
                 _state.value = UwbSessionState.Failed("Could not reach peer")
@@ -228,7 +223,6 @@ object UwbSessionManager {
      * iOS's shareableConfigurationData reply.
      */
     private suspend fun beginCrossPlatformInitiateToIos(peerUserId: Long, sessionId: String) {
-        val peerUser = userDao.getAll().firstOrNull { it.id == peerUserId }
         val ctrl = UwbController(appContext)
         controller = ctrl
         val localAddress = ctrl.openControlee().getOrElse {
@@ -243,12 +237,7 @@ object UwbSessionManager {
             kind = UwbEnvelopeKind.REQUEST,
             payload = UwbHandshake(accessoryConfigDataB64 = UwbBytes.b64(accessoryData))
         )
-        val ok = try {
-            Networking.publishUwbMessage(envelope, peerUserId, peerUser)
-        } catch (e: Exception) {
-            Log.e(TAG, "publishUwbMessage threw exception", e)
-            false
-        }
+        val ok = publish(envelope, peerUserId)
         if (!ok) {
             _state.value = UwbSessionState.Failed("Could not reach peer")
             stopLocal()
@@ -324,18 +313,7 @@ object UwbSessionManager {
                 kind = UwbEnvelopeKind.ACK,
                 payload = UwbHandshake(addressB64 = UwbBytes.b64(localAddress))
             )
-            val peer = try {
-                userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to lookup peer user", e)
-                null
-            }
-            val ok = try {
-                Networking.publishUwbMessage(ack, request.sender.toLong(), peer)
-            } catch (e: Exception) {
-                Log.e(TAG, "publishUwbMessage for ACK threw exception", e)
-                false
-            }
+            val ok = publish(ack, request.sender.toLong())
             if (!ok) {
                 _state.value = UwbSessionState.Failed("Could not reach peer")
                 stopLocal()
@@ -370,18 +348,7 @@ object UwbSessionManager {
             kind = UwbEnvelopeKind.CONFIG,
             payload = UwbHandshake(accessoryConfigDataB64 = UwbBytes.b64(accessoryData))
         )
-        val peer = try {
-            userDao.getAll().firstOrNull { it.id == request.sender.toLong() }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to lookup peer user for CONFIG", e)
-            null
-        }
-        val ok = try {
-            Networking.publishUwbMessage(configEnvelope, request.sender.toLong(), peer)
-        } catch (e: Exception) {
-            Log.e(TAG, "publishUwbMessage for CONFIG threw exception", e)
-            false
-        }
+        val ok = publish(configEnvelope, request.sender.toLong())
         if (!ok) {
             _state.value = UwbSessionState.Failed("Could not reach peer")
             stopLocal()
@@ -468,20 +435,38 @@ object UwbSessionManager {
         val peerId = _peerUserId.value
         if (sessionId != null && peerId != null) {
             scope.launch {
-                val peer = userDao.getAll().firstOrNull { it.id == peerId }
-                Networking.publishUwbMessage(
+                publish(
                     UwbEnvelope(
                         sessionId = sessionId,
                         sender = Networking.userid.toULong(),
                         senderPlatform = "android",
                         kind = UwbEnvelopeKind.CANCEL
                     ),
-                    peerId,
-                    peer
+                    peerId
                 )
             }
         }
         stopLocal()
+    }
+
+    /**
+     * Look up the peer (best-effort) and publish a UWB envelope to it,
+     * swallowing and logging any failure. Returns true iff the server
+     * accepted the message.
+     */
+    private suspend fun publish(envelope: UwbEnvelope, peerId: Long): Boolean {
+        val peer = try {
+            userDao.getById(peerId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to lookup peer user", e)
+            null
+        }
+        return try {
+            Networking.publishUwbMessage(envelope, peerId, peer)
+        } catch (e: Exception) {
+            Log.e(TAG, "publishUwbMessage threw exception", e)
+            false
+        }
     }
 
     private fun stopLocal() {

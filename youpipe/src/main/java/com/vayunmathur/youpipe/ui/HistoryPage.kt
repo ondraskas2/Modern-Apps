@@ -33,8 +33,7 @@ import com.vayunmathur.youpipe.util.YouPipeViewModel
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryPage(backStack: NavBackStack<Route>, youPipeViewModel: YouPipeViewModel) {
-    val historyVideos by youPipeViewModel.historyVideos.collectAsState()
-    val history = historyVideos.sortedByDescending { it.timestamp }
+    val history by youPipeViewModel.historyVideosByRecency.collectAsState()
 
     var selectedIds by remember { mutableStateOf(emptySet<Long>()) }
     val inSelectionMode = selectedIds.isNotEmpty()

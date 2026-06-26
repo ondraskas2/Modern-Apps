@@ -1,5 +1,6 @@
 package com.vayunmathur.health.util
 import android.content.Context
+import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.changes.DeletionChange
 import androidx.health.connect.client.changes.UpsertionChange
@@ -12,6 +13,7 @@ import androidx.health.connect.client.records.BodyWaterMassRecord
 import androidx.health.connect.client.records.BoneMassRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ElevationGainedRecord
+import androidx.health.connect.client.records.ExerciseSegment
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
@@ -65,6 +67,16 @@ class HealthSyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
+        return try {
+            sync()
+            Result.success()
+        } catch (e: Exception) {
+            Log.e(TAG, "Health sync failed", e)
+            Result.retry()
+        }
+    }
+
+    private suspend fun sync() {
         val healthConnectClient = HealthConnectClient.getOrCreate(applicationContext)
         val db = applicationContext.buildDatabase<HealthDatabase>()
         val ds = DataStoreUtils.getInstance(applicationContext)
@@ -110,10 +122,11 @@ class HealthSyncWorker(
             println("Deleted ${deletedIds.size} records")
 
         } while (response.hasMore)
-        return Result.success()
     }
 
     companion object {
+        private const val TAG = "HealthSyncWorker"
+
         fun enqueue(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
@@ -341,71 +354,72 @@ fun exerciseTypeName(type: Int): String = when (type) {
 }
 
 fun exerciseSegmentTypeName(type: Int): String = when (type) {
-    1 -> "Arm Curl"
-    2 -> "Back Extension"
-    3 -> "Ball Throw"
-    4 -> "Barbell Shoulder Press"
-    5 -> "Bench Press"
-    6 -> "Bench Sit-Up"
-    7 -> "Biking"
-    8 -> "Biking (Stationary)"
-    9 -> "Burpee"
-    10 -> "Crunch"
-    11 -> "Deadlift"
-    12 -> "Double Arm Triceps Extension"
-    13 -> "Dumbbell Curl (Left)"
-    14 -> "Dumbbell Curl (Right)"
-    15 -> "Dumbbell Front Raise"
-    16 -> "Dumbbell Lateral Raise"
-    17 -> "Dumbbell Row"
-    18 -> "Dumbbell Triceps Extension (Left)"
-    19 -> "Dumbbell Triceps Extension (Right)"
-    20 -> "Elliptical"
-    21 -> "Forward Twist"
-    22 -> "Front Raise"
-    23 -> "High Intensity Interval Training"
-    24 -> "Hip Thrust"
-    25 -> "Hula Hoop"
-    26 -> "Jumping Jack"
-    27 -> "Jump Rope"
-    28 -> "Kettlebell Swing"
-    29 -> "Lat Pull-Down"
-    30 -> "Lateral Raise"
-    31 -> "Leg Curl"
-    32 -> "Leg Extension"
-    33 -> "Leg Press"
-    34 -> "Leg Raise"
-    35 -> "Lunge"
-    36 -> "Mountain Climber"
-    37 -> "Other"
-    38 -> "Pause"
-    39 -> "Pilates"
-    40 -> "Plank"
-    41 -> "Pull-Up"
-    42 -> "Punch"
-    43 -> "Rest"
-    44 -> "Rowing Machine"
-    45 -> "Running"
-    46 -> "Running (Treadmill)"
-    47 -> "Shoulder Press"
-    48 -> "Single Arm Triceps Extension"
-    49 -> "Sit-Up"
-    50 -> "Squat"
-    51 -> "Stair Climbing"
-    52 -> "Stair Climbing Machine"
-    53 -> "Stretching"
-    54 -> "Swimming (Backstroke)"
-    55 -> "Swimming (Breaststroke)"
-    56 -> "Swimming (Butterfly)"
-    57 -> "Swimming (Freestyle)"
-    58 -> "Swimming (Mixed)"
-    59 -> "Swimming (Other)"
-    60 -> "Swimming (Open Water)"
-    61 -> "Swimming (Pool)"
-    62 -> "Upper Twist"
-    63 -> "Walking"
-    64 -> "Weightlifting"
-    65 -> "Wheelchair"
-    66 -> "Yoga"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_ARM_CURL -> "Arm Curl"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BACK_EXTENSION -> "Back Extension"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BALL_SLAM -> "Ball Slam"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BARBELL_SHOULDER_PRESS -> "Barbell Shoulder Press"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BENCH_PRESS -> "Bench Press"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BENCH_SIT_UP -> "Bench Sit-Up"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BIKING -> "Biking"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BIKING_STATIONARY -> "Biking (Stationary)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_BURPEE -> "Burpee"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_CRUNCH -> "Crunch"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DEADLIFT -> "Deadlift"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DOUBLE_ARM_TRICEPS_EXTENSION -> "Double Arm Triceps Extension"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_CURL_LEFT_ARM -> "Dumbbell Curl (Left)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_CURL_RIGHT_ARM -> "Dumbbell Curl (Right)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_FRONT_RAISE -> "Dumbbell Front Raise"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_LATERAL_RAISE -> "Dumbbell Lateral Raise"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_ROW -> "Dumbbell Row"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_TRICEPS_EXTENSION_LEFT_ARM -> "Dumbbell Triceps Extension (Left)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_TRICEPS_EXTENSION_RIGHT_ARM -> "Dumbbell Triceps Extension (Right)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_DUMBBELL_TRICEPS_EXTENSION_TWO_ARM -> "Dumbbell Triceps Extension (Two Arm)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_ELLIPTICAL -> "Elliptical"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_FORWARD_TWIST -> "Forward Twist"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_FRONT_RAISE -> "Front Raise"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING -> "High Intensity Interval Training"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_HIP_THRUST -> "Hip Thrust"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_HULA_HOOP -> "Hula Hoop"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_JUMPING_JACK -> "Jumping Jack"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_JUMP_ROPE -> "Jump Rope"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_KETTLEBELL_SWING -> "Kettlebell Swing"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LATERAL_RAISE -> "Lateral Raise"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LAT_PULL_DOWN -> "Lat Pull-Down"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LEG_CURL -> "Leg Curl"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LEG_EXTENSION -> "Leg Extension"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LEG_PRESS -> "Leg Press"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LEG_RAISE -> "Leg Raise"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_LUNGE -> "Lunge"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_MOUNTAIN_CLIMBER -> "Mountain Climber"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_OTHER_WORKOUT -> "Other"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE -> "Pause"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_PILATES -> "Pilates"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_PLANK -> "Plank"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_PULL_UP -> "Pull-Up"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_PUNCH -> "Punch"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_REST -> "Rest"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_ROWING_MACHINE -> "Rowing Machine"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_RUNNING -> "Running"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_RUNNING_TREADMILL -> "Running (Treadmill)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SHOULDER_PRESS -> "Shoulder Press"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SINGLE_ARM_TRICEPS_EXTENSION -> "Single Arm Triceps Extension"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SIT_UP -> "Sit-Up"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SQUAT -> "Squat"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_STAIR_CLIMBING -> "Stair Climbing"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_STAIR_CLIMBING_MACHINE -> "Stair Climbing Machine"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_STRETCHING -> "Stretching"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_BACKSTROKE -> "Swimming (Backstroke)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_BREASTSTROKE -> "Swimming (Breaststroke)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_BUTTERFLY -> "Swimming (Butterfly)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_FREESTYLE -> "Swimming (Freestyle)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_MIXED -> "Swimming (Mixed)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_OPEN_WATER -> "Swimming (Open Water)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_OTHER -> "Swimming (Other)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_SWIMMING_POOL -> "Swimming (Pool)"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_UPPER_TWIST -> "Upper Twist"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_WALKING -> "Walking"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_WEIGHTLIFTING -> "Weightlifting"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_WHEELCHAIR -> "Wheelchair"
+    ExerciseSegment.EXERCISE_SEGMENT_TYPE_YOGA -> "Yoga"
     else -> "Activity"
 }

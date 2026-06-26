@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.vayunmathur.library.ui.IconAdd
@@ -32,6 +31,7 @@ import com.vayunmathur.youpipe.MAIN_BOTTOM_BAR_ITEMS
 import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
 import com.vayunmathur.youpipe.util.YouPipeViewModel
+import com.vayunmathur.youpipe.util.decodeHtml
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,8 +40,7 @@ fun SubscriptionsPage(
     youPipeViewModel: YouPipeViewModel,
 ) {
     val subscriptions by youPipeViewModel.subscriptions.collectAsState()
-    val subscriptionCategoryPairs by youPipeViewModel.subscriptionCategories.collectAsState()
-    val categories = subscriptionCategoryPairs.map { it.category }.distinct()
+    val categories by youPipeViewModel.categoryNames.collectAsState()
     val fetchProgress by youPipeViewModel.fetchProgress.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -99,7 +98,7 @@ fun SubscriptionsPage(
             }
             items(subscriptions, key = { it.id }) {
                 ListItem({
-                    Text(HtmlCompat.fromHtml(it.name, HtmlCompat.FROM_HTML_MODE_LEGACY).toString())
+                    Text(it.name.decodeHtml())
                 }, Modifier.clickable {
                     backStack.add(Route.ChannelPage(it.channelID))
                 }, {}, {}, {

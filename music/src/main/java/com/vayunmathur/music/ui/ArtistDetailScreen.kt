@@ -56,7 +56,8 @@ import com.vayunmathur.music.util.formatDuration
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArtistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel, artistId: Long) {
-    val artist by musicViewModel.artistState(artistId)
+    val artistValue by musicViewModel.artistState(artistId)
+    val artist = artistValue ?: return
     val allMusic by musicViewModel.music.collectAsState()
     val artistsMusic = remember(allMusic, artistId) {
         allMusic.filter { it.artistId == artistId }
@@ -67,7 +68,7 @@ fun ArtistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicView
     val albumIds by musicViewModel.matchedAlbumsForArtist(artistId)
     val allAlbums by musicViewModel.albums.collectAsState()
     val albums by remember { derivedStateOf {
-        albumIds.map { id -> allAlbums.find { it.id == id }!! }
+        albumIds.mapNotNull { id -> allAlbums.find { it.id == id } }
     } }
 
     val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
@@ -113,40 +114,14 @@ fun ArtistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicView
 
             // Action Buttons
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            musicViewModel.playSong(artistsMusic, 0, sourceId = "artist_$artistId", sourceName = artist.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        IconPlay(tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_play), color = Color.White)
-                    }
-
-                    Button(
-                        onClick = {
-                            musicViewModel.playShuffled(artistsMusic, sourceId = "artist_$artistId", sourceName = artist.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        Icon(painterResource(com.vayunmathur.music.R.drawable.ic_shuffle), contentDescription = null, tint = Color.Black)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_shuffle), color = Color.Black)
-                    }
-                }
+                PlayShuffleRow(
+                    onPlay = {
+                        musicViewModel.playSong(artistsMusic, 0, sourceId = "artist_$artistId", sourceName = artist.name)
+                    },
+                    onShuffle = {
+                        musicViewModel.playShuffled(artistsMusic, sourceId = "artist_$artistId", sourceName = artist.name)
+                    },
+                )
             }
 
             // Track List Header
@@ -188,39 +163,29 @@ fun ArtistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicView
             // Track Items
             itemsIndexed(artistsMusic) { idx, music ->
                 val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "artist_$artistId"
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            text = music.title,
-                            color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                            fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal
-                        )
+                TrackListItem(
+                    title = music.title,
+                    isPlaying = isPlaying,
+                    artUri = music.uri.toUri(),
+                    onClick = {
+                        musicViewModel.playSong(artistsMusic, idx, sourceId = "artist_$artistId", sourceName = artist.name)
                     },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isPlaying) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                        .clickable {
-                            musicViewModel.playSong(artistsMusic, idx, sourceId = "artist_$artistId", sourceName = artist.name)
-                        },
-                    trailingContent = {
+                    leading = if (isPlaying) {
+                        {
+                            Icon(
+                                painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
+                                contentDescription = "Playing",
+                                modifier = Modifier.size(24.dp).padding(end = 8.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else null,
+                    trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(formatDuration(music.duration))
                             AddToPlaylistButton(backStack, music)
                         }
                     },
-                    leadingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (isPlaying) {
-                                Icon(
-                                    painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
-                                    contentDescription = "Playing",
-                                    modifier = Modifier.size(24.dp).padding(end = 8.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            AlbumArt(music.uri.toUri(), Modifier.size(48.dp))
-                        }
-                    }
                 )
             }
         }

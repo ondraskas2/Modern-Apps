@@ -12,8 +12,12 @@ import androidx.glance.GlanceTheme
 import androidx.glance.ImageProvider
 import androidx.glance.Image
 import androidx.glance.LocalContext
+import androidx.glance.action.ActionParameters
+import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.action.ActionCallback
+import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -38,6 +42,7 @@ import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.library.widgets.DynamicThemeGlance
 import com.vayunmathur.weather.MainActivity
 import com.vayunmathur.weather.data.WeatherDatabase
+import com.vayunmathur.weather.data.weatherJson
 import com.vayunmathur.weather.network.ForecastResponse
 import com.vayunmathur.weather.util.roundCoord
 import com.vayunmathur.weather.util.weatherConditionForCode
@@ -48,7 +53,6 @@ import kotlinx.datetime.format.MonthNames
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.format.char
 import kotlinx.datetime.toLocalDateTime
-import kotlinx.serialization.json.Json
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 
@@ -88,9 +92,8 @@ class WeatherGlanceWidget : GlanceAppWidget() {
                 roundCoord(location.latitude),
                 roundCoord(location.longitude),
             ) ?: return null
-            val json = Json { ignoreUnknownKeys = true }
             val forecast = runCatching {
-                json.decodeFromString<ForecastResponse>(cache.forecastJson)
+                weatherJson.decodeFromString<ForecastResponse>(cache.forecastJson)
             }.getOrNull() ?: return null
             val current = forecast.current ?: return null
             WidgetWeather(
@@ -105,22 +108,40 @@ class WeatherGlanceWidget : GlanceAppWidget() {
 
 }
 
-private fun resolveOrFallback(context: Context, pkg: String, cls: String, fallback: () -> Intent): Intent {
-    val explicit = Intent().apply {
-        setClassName(pkg, cls)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+private val PARAM_PACKAGE = ActionParameters.Key<String>("package")
+private val PARAM_CLASS = ActionParameters.Key<String>("class")
+private val PARAM_FALLBACK = ActionParameters.Key<String>("fallback")
+
+/**
+ * Launches the preferred sibling app ([PARAM_PACKAGE]/[PARAM_CLASS]) and, if it
+ * isn't installed/visible, falls back to a system intent ([PARAM_FALLBACK]).
+ * Using a try/catch around `startActivity` here is robust without a `<queries>`
+ * manifest entry, which `Intent.resolveActivity` would otherwise require on
+ * modern Android (it returns null for unqueryable packages).
+ */
+class LaunchAppAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters,
+    ) {
+        val pkg = parameters[PARAM_PACKAGE]
+        val cls = parameters[PARAM_CLASS]
+        val explicit = Intent().apply {
+            if (pkg != null && cls != null) setClassName(pkg, cls)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val fallback = when (parameters[PARAM_FALLBACK]) {
+            "calendar" -> Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CALENDAR) }
+            else -> Intent(AlarmClock.ACTION_SHOW_ALARMS)
+        }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        try {
+            context.startActivity(explicit)
+        } catch (e: Exception) {
+            runCatching { context.startActivity(fallback) }
+        }
     }
-    return if (explicit.resolveActivity(context.packageManager) != null) explicit
-    else fallback().apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
 }
-
-private fun clockIntent(context: Context) = resolveOrFallback(
-    context, "com.vayunmathur.clock", "com.vayunmathur.clock.MainActivity",
-) { Intent(AlarmClock.ACTION_SHOW_ALARMS) }
-
-private fun calendarIntent(context: Context) = resolveOrFallback(
-    context, "com.vayunmathur.calendar", "com.vayunmathur.calendar.MainActivity",
-) { Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CALENDAR) } }
 
 @Composable
 private fun Content(weather: WidgetWeather?) {
@@ -142,12 +163,28 @@ private fun Content(weather: WidgetWeather?) {
         ) {
             Box(
                 modifier = GlanceModifier
-                    .clickable(actionStartActivity(clockIntent(context))),
+                    .clickable(
+                        actionRunCallback<LaunchAppAction>(
+                            actionParametersOf(
+                                PARAM_PACKAGE to "com.vayunmathur.clock",
+                                PARAM_CLASS to "com.vayunmathur.clock.MainActivity",
+                                PARAM_FALLBACK to "alarms",
+                            )
+                        )
+                    ),
             ) { TimeBlock(context) }
             Box(
                 modifier = GlanceModifier
                     .padding(top = 2.dp)
-                    .clickable(actionStartActivity(calendarIntent(context))),
+                    .clickable(
+                        actionRunCallback<LaunchAppAction>(
+                            actionParametersOf(
+                                PARAM_PACKAGE to "com.vayunmathur.calendar",
+                                PARAM_CLASS to "com.vayunmathur.calendar.MainActivity",
+                                PARAM_FALLBACK to "calendar",
+                            )
+                        )
+                    ),
             ) { DateBlock(now) }
         }
         // Right: large weather icon + temperature, clickable into this app.

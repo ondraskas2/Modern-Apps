@@ -1,0 +1,108 @@
+package com.vayunmathur.contacts.ui
+
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.core.content.FileProvider
+import com.vayunmathur.contacts.R
+import com.vayunmathur.contacts.data.Contact
+import com.vayunmathur.contacts.data.ContactGroup
+import com.vayunmathur.contacts.util.ContactViewModel
+import com.vayunmathur.contacts.util.VcfUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okio.FileSystem
+import okio.Path.Companion.toOkioPath
+import okio.buffer
+
+/** Display name with optional nickname suffix (e.g. "Jane Doe (Janey)"). */
+@Composable
+fun contactDisplayName(contact: Contact): String =
+    if (contact.nickname.value.isNotBlank())
+        stringResource(R.string.name_nickname_format, contact.name.value, contact.nickname.value)
+    else contact.name.value
+
+/** Groups (with non-blank names) that [contact] belongs to, from [allGroups]. */
+fun contactGroupsOf(contact: Contact, allGroups: List<ContactGroup>): List<ContactGroup> =
+    allGroups.filter { group ->
+        contact.details.groups.any { it.groupId == group.id } && group.name.trim().isNotEmpty()
+    }
+
+/** Circular avatar: decoded photo (off the main thread) or colored initials fallback. */
+@Composable
+fun ContactAvatar(
+    contact: Contact,
+    viewModel: ContactViewModel?,
+    modifier: Modifier = Modifier,
+    initialsStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+) {
+    val photoBase64 = contact.photo?.photo
+    val avatarBitmap by produceState<Bitmap?>(null, photoBase64, viewModel) {
+        value = if (photoBase64 != null) {
+            withContext(Dispatchers.IO) { viewModel?.decodePhoto(photoBase64) }
+        } else null
+    }
+    Box(modifier.clip(CircleShape), contentAlignment = Alignment.Center) {
+        val bmp = avatarBitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = stringResource(R.string.contact_photo_description, contact.name.value),
+                modifier = Modifier.fillMaxSize().clip(CircleShape)
+            )
+        } else {
+            Box(
+                Modifier.fillMaxSize().background(getAvatarColor(contact.id), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = contact.name.value.firstOrNull()?.uppercase() ?: "",
+                    color = Color.White,
+                    style = initialsStyle,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+/** Exports [contacts] to a VCF cache file and fires a share chooser. Runs I/O on [scope]. */
+fun shareContactsAsVcf(
+    scope: CoroutineScope,
+    context: Context,
+    contacts: List<Contact>,
+    filename: String,
+    chooserTitle: String,
+) {
+    scope.launch(Dispatchers.IO) {
+        val vcfFile = context.cacheDir.toOkioPath().resolve(filename)
+        FileSystem.SYSTEM.sink(vcfFile).buffer().use { VcfUtils.exportContacts(contacts, it) }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", vcfFile.toFile())
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/x-vcard"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, chooserTitle))
+    }
+}

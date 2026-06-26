@@ -4,7 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -56,46 +56,31 @@ class OCRManager(private val context: Context) {
     }
 
     private fun resizeImage(uri: Uri): File? {
-        try {
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, options)
-            }
-
-            val width = options.outWidth
-            val height = options.outHeight
-            if (width <= 0 || height <= 0) return null
-
-            var sampleSize = 1
-            while (width / sampleSize > MAX_IMAGE_DIMENSION * 2 || height / sampleSize > MAX_IMAGE_DIMENSION * 2) {
-                sampleSize *= 2
-            }
-
-            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-            val bitmap = context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, decodeOptions)
-            } ?: return null
-
-            val scaledBitmap = if (bitmap.width > MAX_IMAGE_DIMENSION || bitmap.height > MAX_IMAGE_DIMENSION) {
-                val scale = MAX_IMAGE_DIMENSION.toFloat() / maxOf(bitmap.width, bitmap.height)
-                val newWidth = (bitmap.width * scale).toInt()
-                val newHeight = (bitmap.height * scale).toInt()
-                Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true).also {
-                    if (it !== bitmap) bitmap.recycle()
+        return try {
+            val source = ImageDecoder.createSource(context.contentResolver, uri)
+            val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val w = info.size.width
+                val h = info.size.height
+                val maxDim = maxOf(w, h)
+                if (maxDim > MAX_IMAGE_DIMENSION) {
+                    val scale = MAX_IMAGE_DIMENSION.toFloat() / maxDim
+                    decoder.setTargetSize(
+                        (w * scale).toInt().coerceAtLeast(1),
+                        (h * scale).toInt().coerceAtLeast(1),
+                    )
                 }
-            } else {
-                bitmap
             }
 
             val file = File(context.cacheDir, "ocr_tmp_${System.nanoTime()}.jpg")
             file.outputStream().use { out ->
-                scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
             }
-            scaledBitmap.recycle()
-            return file
+            bitmap.recycle()
+            file
         } catch (e: Exception) {
             Log.e(TAG, "Failed to resize image", e)
-            return null
+            null
         }
     }
 
@@ -151,6 +136,4 @@ class OCRManager(private val context: Context) {
             false
         }
     }
-
-    fun cleanup() {}
 }

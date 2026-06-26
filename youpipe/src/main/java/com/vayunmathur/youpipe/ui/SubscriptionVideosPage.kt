@@ -10,6 +10,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -25,18 +26,9 @@ fun SubscriptionVideosPage(
     youPipeViewModel: YouPipeViewModel,
     category: String?,
 ) {
-    val videos by youPipeViewModel.subscriptionVideos.collectAsState()
-    val subscriptions by youPipeViewModel.subscriptions.collectAsState()
-    val pairs by youPipeViewModel.subscriptionCategories.collectAsState()
+    val videos by remember(category) { youPipeViewModel.subscriptionVideosFor(category) }
+        .collectAsState(initial = emptyList())
     val fetchProgress by youPipeViewModel.fetchProgress.collectAsState()
-
-    val subsInCategory = pairs.filter { it.category == category }.map { pair ->
-        subscriptions.first { it.id == pair.subscriptionID }
-    }
-
-    val videosInSubs = if (category == null) videos else subsInCategory.flatMap { sub ->
-        videos.filter { it.channelID == sub.id }
-    }
 
     Scaffold(bottomBar = { BottomNavBar(backStack, MAIN_BOTTOM_BAR_ITEMS, Route.SubscriptionsPage) }) { paddingValues ->
         LazyColumn(Modifier.padding(paddingValues)) {
@@ -47,9 +39,7 @@ fun SubscriptionVideosPage(
                     }
                 }
             }
-            items(videosInSubs.map {
-                VideoInfo(it.name, it.id, it.duration, it.views, it.uploadDate, it.thumbnailURL, it.author)
-            }.sortedByDescending { it.uploadDate }) {
+            items(videos) {
                 VideoItem(backStack, youPipeViewModel, it, true)
             }
         }

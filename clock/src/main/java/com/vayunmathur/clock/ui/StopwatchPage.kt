@@ -132,24 +132,24 @@ fun StopwatchPage(backStack: NavBackStack<Route>, clockViewModel: ClockViewModel
 
                 // Time Display
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    val minutes = countingTime.inWholeMinutes
-                    val seconds = countingTime.inWholeSeconds % 60
-                    val centiseconds = (countingTime.inWholeMilliseconds % 1000) / 10
+                    countingTime.toComponents { minutes, seconds, nanoseconds ->
+                        val centiseconds = nanoseconds / 10_000_000
 
-                    Text(
-                        text = stringResource(R.string.stopwatch_time_format, minutes, seconds),
-                        style = MaterialTheme.typography.displayLarge.copy(
-                            fontSize = 84.sp,
-                            fontWeight = FontWeight.Normal
+                        Text(
+                            text = stringResource(R.string.stopwatch_time_format, minutes, seconds),
+                            style = MaterialTheme.typography.displayLarge.copy(
+                                fontSize = 84.sp,
+                                fontWeight = FontWeight.Normal
+                            )
                         )
-                    )
-                    Text(
-                        text = stringResource(R.string.duration_ms_format, 0, centiseconds), // Reusing format for just centiseconds
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            color = Color.Gray,
-                            fontWeight = FontWeight.Light
+                        Text(
+                            text = stringResource(R.string.duration_ms_format, 0, centiseconds), // Reusing format for just centiseconds
+                            style = MaterialTheme.typography.headlineMedium.copy(
+                                color = Color.Gray,
+                                fontWeight = FontWeight.Light
+                            )
                         )
-                    )
+                    }
                 }
             }
 
@@ -208,12 +208,12 @@ fun LapRow(number: Int, color: Color, split: Duration, total: Duration) {
     }
 }
 
-fun formatDuration(context: android.content.Context, d: Duration): String {
-    val m = d.inWholeMinutes
-    val s = d.inWholeSeconds % 60
-    val ms = (d.inWholeMilliseconds % 1000) / 10
-    if(m == 0L) {
-        return context.getString(R.string.duration_ms_format, s, ms)
+fun formatDuration(context: android.content.Context, d: Duration): String =
+    d.toComponents { minutes, seconds, nanoseconds ->
+        val ms = nanoseconds / 10_000_000
+        if (minutes == 0L) {
+            context.getString(R.string.duration_ms_format, seconds, ms)
+        } else {
+            context.getString(R.string.duration_m_s_ms_format, minutes, seconds, ms)
+        }
     }
-    return context.getString(R.string.duration_m_s_ms_format, m, s, ms)
-}

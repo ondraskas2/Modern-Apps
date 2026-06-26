@@ -5,6 +5,7 @@ import android.accounts.AccountManager
 import android.content.ContentProviderOperation
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.provider.CalendarContract
 import android.util.Log
 import com.vayunmathur.contacts.R
@@ -24,6 +25,14 @@ object CalendarSyncHelper {
     
     private val syncMutex = Mutex()
 
+    /** Appends the sync-adapter query params used by every calendar/event write here. */
+    private fun Uri.asSyncAdapter(accountName: String, accountType: String): Uri =
+        buildUpon()
+            .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
+            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, accountName)
+            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, accountType)
+            .build()
+
     private fun ensureAccountExists(context: Context) {
         val accountManager = AccountManager.get(context)
         val accounts = accountManager.getAccountsByType(ACCOUNT_TYPE)
@@ -38,11 +47,7 @@ object CalendarSyncHelper {
         
         // Cleanup old local calendar if it exists to prevent duplicates from migration
         try {
-            val oldUri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
-                .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
-                .build()
+            val oldUri = CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, CalendarContract.ACCOUNT_TYPE_LOCAL)
             context.contentResolver.delete(oldUri, null, null)
         } catch (_: Exception) {}
 
@@ -67,11 +72,7 @@ object CalendarSyncHelper {
             Log.e("CalendarSyncHelper", "Error querying calendar", e)
         }
 
-        val syncAdapterUri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
-            .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, ACCOUNT_TYPE)
-            .build()
+        val syncAdapterUri = CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, ACCOUNT_TYPE)
 
         if (calendarIds.isNotEmpty()) {
             calendarIds.drop(1).forEach { extraId ->
@@ -111,11 +112,7 @@ object CalendarSyncHelper {
 
             val ops = ArrayList<ContentProviderOperation>()
             
-            val eventUri = CalendarContract.Events.CONTENT_URI.buildUpon()
-                .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, ACCOUNT_TYPE)
-                .build()
+            val eventUri = CalendarContract.Events.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, ACCOUNT_TYPE)
                 
             ops.add(ContentProviderOperation.newDelete(eventUri)
                 .withSelection("${CalendarContract.Events.CALENDAR_ID} = ? AND ${CalendarContract.Events.SYNC_DATA1} = ?", 
@@ -196,11 +193,7 @@ object CalendarSyncHelper {
             val calendarId = getOrCreateCalendarId(context)
             if (calendarId == -1L) return
             
-            val eventUri = CalendarContract.Events.CONTENT_URI.buildUpon()
-                .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, ACCOUNT_TYPE)
-                .build()
+            val eventUri = CalendarContract.Events.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, ACCOUNT_TYPE)
 
             try {
                 context.contentResolver.delete(eventUri, "${CalendarContract.Events.CALENDAR_ID} = ?", arrayOf(calendarId.toString()))
@@ -229,11 +222,7 @@ object CalendarSyncHelper {
     
     suspend fun removeCalendar(context: Context) {
         syncMutex.withLock {
-            val uri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
-                .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-                .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, ACCOUNT_TYPE)
-                .build()
+            val uri = CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, ACCOUNT_TYPE)
             try {
                 context.contentResolver.delete(uri, null, null)
             } catch (e: Exception) {
@@ -241,11 +230,7 @@ object CalendarSyncHelper {
             }
             
             try {
-                val oldUri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
-                    .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-                    .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, ACCOUNT_NAME)
-                    .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.ACCOUNT_TYPE_LOCAL)
-                    .build()
+                val oldUri = CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(ACCOUNT_NAME, CalendarContract.ACCOUNT_TYPE_LOCAL)
                 context.contentResolver.delete(oldUri, null, null)
             } catch (_: Exception) {}
         }

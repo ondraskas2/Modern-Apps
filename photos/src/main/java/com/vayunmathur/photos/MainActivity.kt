@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
+import androidx.core.net.toUri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -193,7 +194,7 @@ class MainActivity : FragmentActivity() {
                         Button(
                             onClick = {
                                 val intent = Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA).apply {
-                                    data = Uri.parse("package:${context.packageName}")
+                                    data = "package:${context.packageName}".toUri()
                                 }
                                 context.startActivity(intent)
                             }

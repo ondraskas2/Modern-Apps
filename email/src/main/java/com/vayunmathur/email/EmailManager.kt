@@ -44,13 +44,18 @@ fun EmailAccount.authType(): EmailManager.AuthType {
     return EmailManager.AuthType.Password(CredentialCrypto.decrypt(cipher, iv))
 }
 
+/** Close this folder, swallowing any exception (best-effort cleanup in finally blocks). */
+fun Folder.closeQuietly(expunge: Boolean = false) {
+    try { close(expunge) } catch (_: Throwable) {}
+}
+
 class EmailManager {
 
     sealed class AuthType {
         data class Password(val value: String) : AuthType()
     }
 
-    private fun getImapSession(auth: AuthType, server: ServerConfig): Session {
+    private fun getImapSession(server: ServerConfig): Session {
         val proto = server.imapProtocol
         val properties = Properties().apply {
             this["mail.store.protocol"] = proto
@@ -68,7 +73,7 @@ class EmailManager {
         return Session.getInstance(properties).also { registerProviders(it) }
     }
 
-    private fun getSmtpSession(auth: AuthType, server: ServerConfig): Session {
+    private fun getSmtpSession(server: ServerConfig): Session {
         val proto = server.smtpProtocol
         val properties = Properties().apply {
             this["mail.transport.protocol"] = proto
@@ -108,7 +113,7 @@ class EmailManager {
     }
 
     suspend fun <T> withStore(server: ServerConfig, user: String, auth: AuthType, block: suspend (Store) -> T): T = withContext(Dispatchers.IO) {
-        val session = getImapSession(auth, server)
+        val session = getImapSession(server)
         val store = session.getStore(server.imapProtocol)
         try {
             val credential = (auth as AuthType.Password).value
@@ -154,7 +159,7 @@ class EmailManager {
         try {
             fetchMessagesFromOpenFolder(folder, user, folderName, limit, offset, fetchBodies, skipUids)
         } finally {
-            try { folder.close(false) } catch (_: Throwable) {}
+            folder.closeQuietly()
         }
     }
 
@@ -205,7 +210,7 @@ class EmailManager {
                 Triple<String?, Boolean, List<Attachment>>(null, false, emptyList())
             }
             allAttachments.addAll(attachments)
-            emailMessages.add(buildEmailMessage(msg, user, folderName, uid, body, isHtml, attachments.isNotEmpty()))
+            emailMessages.add(buildEmailMessage(msg, user, folderName, uid, body, isHtml, attachments.isNotEmpty(), fetchBodies))
         }
         return emailMessages to allAttachments
     }
@@ -218,6 +223,7 @@ class EmailManager {
         body: String?,
         isHtml: Boolean,
         hasAttachments: Boolean,
+        fetchBodies: Boolean,
     ): EmailMessage {
         val gmailThreadId = (msg as? javax.mail.internet.MimeMessage)?.getHeader("X-GM-THRID")?.firstOrNull()
         val serverId = msg.getHeader("Message-ID")?.firstOrNull()
@@ -241,7 +247,7 @@ class EmailManager {
             isHtml = isHtml,
             isRead = isRead,
             references = refs,
-            hasAttachments = hasAttachments || hasAttachmentsInfo(msg),
+            hasAttachments = hasAttachments || (fetchBodies && hasAttachmentsInfo(msg)),
             listUnsubscribe = listUnsub,
         )
     }
@@ -277,7 +283,7 @@ class EmailManager {
             val message = (folder as UIDFolder).getMessageByUID(uid) ?: return@withContext Triple<String?, Boolean, List<Attachment>>(null, false, emptyList())
             processMessageContent(user, folderName, uid, message)
         } finally {
-            try { folder.close(false) } catch (_: Throwable) {}
+            folder.closeQuietly()
         }
     }
 
@@ -322,7 +328,7 @@ class EmailManager {
         from: String? = null,
         asHtml: Boolean = false
     ) = withContext(Dispatchers.IO) {
-        val session = getSmtpSession(auth, server)
+        val session = getSmtpSession(server)
         val message = MimeMessage(session)
         message.setFrom(InternetAddress(from ?: user))
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to))
@@ -408,7 +414,7 @@ class EmailManager {
             val msg = (folder as UIDFolder).getMessageByUID(uid) ?: return@withStore
             msg.setFlag(Flags.Flag.SEEN, seen)
         } finally {
-            try { folder.close(false) } catch (_: Throwable) {}
+            folder.closeQuietly()
         }
     }
 
@@ -427,7 +433,7 @@ class EmailManager {
             msg.setFlag(Flags.Flag.DELETED, true)
             folder.expunge()
         } finally {
-            try { folder.close(true) } catch (_: Throwable) {}
+            folder.closeQuietly(true)
         }
     }
 
@@ -458,14 +464,13 @@ class EmailManager {
             }
             file.absolutePath
         } finally {
-            folder.close(false)
+            folder.closeQuietly()
         }
     }
 
     private fun findPartById(part: Part, partId: String): Part? {
         if (partId == "0") return part
         if (part.isMimeType("multipart/*")) {
-            val mp = part.content as MimeMultipart
             val ids = partId.split(".")
             var currentPart: Part = part
             for (id in ids) {

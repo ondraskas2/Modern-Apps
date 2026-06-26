@@ -26,6 +26,9 @@ interface CachedRelatedVideoDao {
     @Query("SELECT * FROM CachedRelatedVideo")
     fun getAllFlow(): Flow<List<CachedRelatedVideo>>
 
+    @Query("SELECT * FROM CachedRelatedVideo")
+    suspend fun getAll(): List<CachedRelatedVideo>
+
     @Query("DELETE FROM CachedRelatedVideo WHERE cachedAt < :cutoff")
     suspend fun deleteOlderThan(cutoff: Instant)
 }

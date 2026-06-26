@@ -37,7 +37,7 @@ class TextEditorViewModel(application: Application) : AndroidViewModel(applicati
         val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             ctx.contentResolver.openOutputStream(uri)?.use {
-                it.bufferedWriter().write(content)
+                it.writer().use { w -> w.write(content) }
             }
             _initialContent.value = content
         }

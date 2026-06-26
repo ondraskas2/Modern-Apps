@@ -67,12 +67,13 @@ class CalendarGlanceWidget : GlanceAppWidget() {
         val instances = Instance.getInstances(context, today.atStartOfDayIn(TimeZone.currentSystemDefault()), nextMonth.atEndOfDayIn(
             TimeZone.currentSystemDefault()))
         val (allDay, notAllDay) = instances.partition { it.allDay }
+        val notAllDayById = notAllDay.associateBy { it.id }
 
         val positionedEvents = days.associateWith { day ->
             computePositionedEventsForDay(
                 notAllDay.filter { day in it.spanDays },
                 day
-            ).mapNotNull { posEvt -> notAllDay.find { it.id == posEvt.instanceID } } + allDay.filter { day in it.spanDays }
+            ).mapNotNull { posEvt -> notAllDayById[posEvt.instanceID] } + allDay.filter { day in it.spanDays }
         }
 
         provideContent {

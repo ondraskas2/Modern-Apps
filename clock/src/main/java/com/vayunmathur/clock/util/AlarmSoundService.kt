@@ -6,8 +6,10 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
+import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
 import com.vayunmathur.clock.R
@@ -62,11 +64,13 @@ class AlarmSoundService : Service() {
                 val vibrate = alarm?.vibrate ?: true
                 val gradualSeconds = alarm?.gradualVolumeSeconds ?: 0
 
-                withContext(Dispatchers.Main) {
-                    if (ringtoneUri != RINGTONE_SILENT) {
-                        playAlarm(resolveRingtone(ringtoneUri), gradualSeconds)
-                    }
-                    if (vibrate) startVibration()
+                // setDataSource()/prepare() are blocking; run them on the IO
+                // dispatcher (this coroutine) instead of the main thread.
+                if (ringtoneUri != RINGTONE_SILENT) {
+                    playAlarm(resolveRingtone(ringtoneUri), gradualSeconds)
+                }
+                if (vibrate) {
+                    withContext(Dispatchers.Main) { startVibration() }
                 }
             }
         }
@@ -115,7 +119,12 @@ class AlarmSoundService : Service() {
     }
 
     private fun startVibration() {
-        vibrator = getSystemService(Vibrator::class.java)
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
         val pattern = longArrayOf(0, 500, 500) // Off, On, Off
         vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
     }

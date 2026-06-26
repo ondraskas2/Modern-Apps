@@ -27,13 +27,27 @@ import com.vayunmathur.health.ui.components.GroupedSectionDivider
 import com.vayunmathur.health.util.HealthViewModel
 import com.vayunmathur.health.util.exerciseSegmentTypeName
 import com.vayunmathur.health.util.exerciseTypeName
+import com.vayunmathur.health.util.formatTimeAmPm
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.util.NavBackStack
 import kotlinx.serialization.json.Json
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.LocalTime
+import kotlinx.datetime.format
+import kotlinx.datetime.format.DayOfWeekNames
+import kotlinx.datetime.format.MonthNames
+import kotlinx.datetime.format.Padding
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
-private val dateFormatter = DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy")
+private val dateFormatter = LocalDate.Format {
+    dayOfWeek(DayOfWeekNames.ENGLISH_FULL)
+    chars(", ")
+    monthName(MonthNames.ENGLISH_ABBREVIATED)
+    chars(" ")
+    day(Padding.NONE)
+    chars(", ")
+    year()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,12 +160,14 @@ private fun ExerciseSessionCard(record: Record) {
 
             // Date + time range
             Text(
-                startZdt.format(dateFormatter),
+                dateFormatter.format(
+                    LocalDate(startZdt.year, startZdt.monthValue, startZdt.dayOfMonth)
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "${formatTime(startZdt)} – ${formatTime(endZdt)}",
+                "${formatTimeAmPm(LocalTime(startZdt.hour, startZdt.minute))} – ${formatTimeAmPm(LocalTime(endZdt.hour, endZdt.minute))}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outline
             )
@@ -287,14 +303,6 @@ private fun ExerciseSessionCard(record: Record) {
             }
         }
     }
-}
-
-private fun formatTime(zdt: java.time.ZonedDateTime): String {
-    val hour = zdt.hour
-    val minute = zdt.minute.toString().padStart(2, '0')
-    val h = if (hour % 12 == 0) 12 else hour % 12
-    val amPm = if (hour < 12) "AM" else "PM"
-    return "$h:$minute $amPm"
 }
 
 private fun formatDuration(minutes: Long): String = com.vayunmathur.health.util.formatDuration(minutes)

@@ -72,29 +72,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         WorkResult.success()
     }
 
-    private fun createForegroundInfo(): ForegroundInfo {
-        val channelId = "sync_worker"
-        val channel = NotificationChannel(
-            channelId,
-            "Photo Sync",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
-
-        val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("Syncing Photos")
-            .setContentText("Indexing photos and extracting text...")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true)
-            .build()
-
-        return ForegroundInfo(
-            101,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        )
-    }
+    private fun createForegroundInfo(): ForegroundInfo = applicationContext.syncForegroundInfo(
+        notificationId = 101,
+        channelId = "sync_worker",
+        channelName = "Photo Sync",
+        title = "Syncing Photos",
+        text = "Indexing photos and extracting text...",
+    )
 
     companion object {
         const val WORK_NAME = "SyncWorker"
@@ -146,29 +130,13 @@ class OCRWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
         }
     }
 
-    private fun createForegroundInfo(): ForegroundInfo {
-        val channelId = "ocr_worker"
-        val channel = NotificationChannel(
-            channelId,
-            "Photo Indexing",
-            NotificationManager.IMPORTANCE_LOW
-        )
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
-
-        val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle("Analyzing Photos")
-            .setContentText("Extracting scene information...")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true)
-            .build()
-
-        return ForegroundInfo(
-            102,
-            notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        )
-    }
+    private fun createForegroundInfo(): ForegroundInfo = applicationContext.syncForegroundInfo(
+        notificationId = 102,
+        channelId = "ocr_worker",
+        channelName = "Photo Indexing",
+        title = "Analyzing Photos",
+        text = "Extracting scene information...",
+    )
 
     companion object {
         private const val WORK_NAME = "OCRWorker"
@@ -188,7 +156,8 @@ class OCRWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
 
 suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri>? = null, lastGeneration: Long = 0L) {
     val photoDao = database.photoDao()
-    
+    // Single read of the local DB reused for both deletion detection and update diffing.
+    val existing = photoDao.getAll()
     // 1. Get all IDs currently in MediaStore to detect deletions
     val allMediaStoreIds = mutableSetOf<Long>()
     fun collectIds(baseUri: Uri) {
@@ -214,7 +183,7 @@ suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri
     collectIds(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
 
     // 2. Handle deletions
-    val localIds = photoDao.getAll().map { it.id }.toSet()
+    val localIds = existing.map { it.id }.toSet()
     val toDelete = if (uris != null) {
         val triggeredIds = uris.mapNotNull { runCatching { ContentUris.parseId(it) }.getOrNull() }.toSet()
         triggeredIds - allMediaStoreIds
@@ -240,7 +209,7 @@ suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri
         else -> null
     }
 
-    val existingPhotos = photoDao.getAll().associateBy { it.id }
+    val existingPhotos = existing.associateBy { it.id }
     val newOrUpdatedPhotos = mutableListOf<Photo>()
 
     fun processCursor(cursor: android.database.Cursor, isVideo: Boolean) {
@@ -312,6 +281,26 @@ suspend fun syncPhotos(context: Context, database: PhotoDatabase, uris: List<Uri
     }
 }
 
+private fun Context.syncForegroundInfo(
+    notificationId: Int,
+    channelId: String,
+    channelName: String,
+    title: String,
+    text: String,
+): ForegroundInfo {
+    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    manager.createNotificationChannel(
+        NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
+    )
+    val notification = NotificationCompat.Builder(this, channelId)
+        .setContentTitle(title)
+        .setContentText(text)
+        .setSmallIcon(android.R.drawable.stat_notify_sync)
+        .setOngoing(true)
+        .build()
+    return ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+}
+
 suspend fun setExifData(photos: List<Photo>, database: PhotoDatabase, context: Context) = coroutineScope {
     val photoDao = database.photoDao()
     val ps = photos.filter { !it.exifSet }.sortedByDescending { it.date }
@@ -362,21 +351,14 @@ suspend fun runOCR(photos: List<Photo>, database: PhotoDatabase, context: Contex
     // Check if model is available before processing
     if (!ocrManager.isAvailable()) {
         Log.w("SyncWorker", "OpenAssistant not installed, skipping OCR processing")
-        ocrManager.cleanup()
         return@coroutineScope
     }
 
     ps.forEach { photo ->
         ensureActive()
         if (!dataStore.getBoolean("image_understanding_enabled", false)) {
-            ocrManager.cleanup()
             return@coroutineScope
         }
-
-        val alreadyExists = database.query(SimpleSQLiteQuery("SELECT EXISTS(SELECT 1 FROM PhotoOCR WHERE rowid = ${photo.id})"), null).use { cursor ->
-            cursor.moveToFirst() && cursor.getInt(0) == 1
-        }
-        if (alreadyExists) return@forEach
 
         try {
             val result = ocrManager.runOCR(photo.uri.toUri())
@@ -391,8 +373,9 @@ suspend fun runOCR(photos: List<Photo>, database: PhotoDatabase, context: Contex
             Log.e("SyncWorker", "Error running OCR for photo ${photo.id}, will retry later", e)
         }
 
-        delay(30000)
+        // Throttle calls to the (shared, single-threaded) inference service.
+        delay(OCR_INTER_ITEM_DELAY_MS)
     }
-
-    ocrManager.cleanup()
 }
+
+private const val OCR_INTER_ITEM_DELAY_MS = 30_000L

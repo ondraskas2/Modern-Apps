@@ -1,26 +1,25 @@
 package com.vayunmathur.files.util
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
-import android.content.pm.ServiceInfo
-import androidx.core.app.NotificationCompat
-import androidx.work.CoroutineWorker
-import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import okio.Buffer
 import okio.FileSystem
+import okio.ForwardingSink
 import okio.Path
 import okio.Path.Companion.toPath
+import okio.buffer
+import okio.sink
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import com.vayunmathur.files.R
 
-class ZipWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-
-    private val notificationManager =
-        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-    private val channelId = "zip_progress_channel"
-    private val notificationId = 1
+class ZipWorker(context: Context, params: WorkerParameters) : ProgressNotificationWorker(
+    context,
+    params,
+    channelId = "zip_progress_channel",
+    notificationId = 1,
+    channelNameRes = R.string.zip_channel_name,
+    contentTitleRes = R.string.archiving,
+) {
 
     override suspend fun doWork(): Result {
         val sourcePaths = inputData.getStringArray("source_paths") ?: return Result.failure()
@@ -32,22 +31,18 @@ class ZipWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
 
         return try {
             val fileSystem = FileSystem.SYSTEM
-            
+
             var totalSize = 0L
             sourcePaths.forEach { totalSize += calculateTotalSize(fileSystem, it.toPath()) }
-            
+
             var bytesZipped = 0L
 
             fileSystem.write(destPath) {
                 ZipOutputStream(outputStream()).use { zipOutputStream ->
                     sourcePaths.forEach { pathString ->
-                        val path = pathString.toPath()
-                        addToZip(fileSystem, path, "", zipOutputStream) { bytes ->
+                        addToZip(fileSystem, pathString.toPath(), "", zipOutputStream) { bytes ->
                             bytesZipped += bytes
-                            if (totalSize > 0) {
-                                val progress = (bytesZipped * 100 / totalSize).toInt()
-                                updateNotification(progress)
-                            }
+                            updateProgress(bytesZipped, totalSize)
                         }
                     }
                 }
@@ -57,7 +52,7 @@ class ZipWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             e.printStackTrace()
             Result.failure()
         } finally {
-            notificationManager.cancel(notificationId)
+            cancelNotification()
         }
     }
 
@@ -89,39 +84,15 @@ class ZipWorker(context: Context, params: WorkerParameters) : CoroutineWorker(co
             }
         } else {
             zipOutputStream.putNextEntry(ZipEntry(entryName))
-            fileSystem.read(path) {
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                while (inputStream().read(buffer).also { bytesRead = it } != -1) {
-                    zipOutputStream.write(buffer, 0, bytesRead)
-                    onProgress(bytesRead.toLong())
+            val countingSink = object : ForwardingSink(zipOutputStream.sink()) {
+                override fun write(source: Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    onProgress(byteCount)
                 }
-            }
+            }.buffer()
+            fileSystem.read(path) { readAll(countingSink) }
+            countingSink.flush()
             zipOutputStream.closeEntry()
         }
-    }
-
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            channelId,
-            applicationContext.getString(R.string.zip_channel_name),
-            NotificationManager.IMPORTANCE_LOW
-        )
-        notificationManager.createNotificationChannel(channel)
-    }
-
-    private fun buildNotification(progress: Int) =
-        NotificationCompat.Builder(applicationContext, channelId)
-            .setContentTitle(applicationContext.getString(R.string.archiving))
-            .setSmallIcon(R.drawable.folder_24px)
-            .setProgress(100, progress, false)
-            .setOngoing(true)
-            .build()
-
-    private fun createForegroundInfo(progress: Int) =
-        ForegroundInfo(notificationId, buildNotification(progress), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-
-    private fun updateNotification(progress: Int) {
-        notificationManager.notify(notificationId, buildNotification(progress))
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.health.R
 import com.vayunmathur.health.Route
+import com.vayunmathur.health.data.NutritionData
 import com.vayunmathur.health.data.RecordType
 import com.vayunmathur.health.ui.components.GroupedSection
 import com.vayunmathur.health.ui.components.GroupedSectionDivider
@@ -38,7 +39,7 @@ fun NutritionDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewMo
     val tz = TimeZone.currentSystemDefault()
     val today = Clock.System.todayIn(tz)
 
-    val nutrients = remember(viewModel) { nutrientCatalog(viewModel) }
+    val nutrients = nutrientCatalog
 
     Scaffold(
         topBar = {
@@ -59,9 +60,18 @@ fun NutritionDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewMo
             val loggedHydration by remember(dayStart, dayEnd) {
                 viewModel.getAllRecordsInRange(RecordType.Hydration, dayStart, dayEnd)
             }.collectAsState(emptyList())
+            val nutritionTotals by remember(dayStart, dayEnd) {
+                viewModel.sumNutritionInRange(RecordType.Nutrition, dayStart, dayEnd)
+            }.collectAsState(NutritionData())
+            val hydrationTotal by remember(dayStart, dayEnd) {
+                viewModel.sumInRange(RecordType.Hydration, dayStart, dayEnd)
+            }.collectAsState(0.0)
             val allLogs = (loggedMeals + loggedHydration).sortedByDescending { it.startTime }
             val otherNutrients =
                 nutrients.filter { it.name !in listOf("Protein", "Carbohydrates", "Fat") }
+            val breakdownRows =
+                otherNutrients.map { it to it.accessor(nutritionTotals) } +
+                    (hydrationNutrient to hydrationTotal)
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -115,9 +125,9 @@ fun NutritionDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewMo
 
                 item {
                     GroupedSection(title = "Nutrient breakdown", accentColor = HealthColors.Nutrition) {
-                        otherNutrients.forEachIndexed { idx, nutrient ->
+                        breakdownRows.forEachIndexed { idx, (nutrient, value) ->
                             if (idx > 0) GroupedSectionDivider(insetStart = 16.dp)
-                            NutrientProgressRow(nutrient, dayStart, dayEnd)
+                            NutrientProgressRow(nutrient, value)
                         }
                     }
                 }

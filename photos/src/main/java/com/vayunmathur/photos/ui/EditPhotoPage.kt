@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,6 +46,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -68,6 +70,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -77,6 +80,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -256,19 +260,25 @@ private fun EditorMode.description(): String = when (this) {
     EditorMode.None -> ""
 }
 
-private enum class AdjustmentType(val label: String, val min: Float, val max: Float) {
-    Brightness("Brightness", -100f, 100f),
-    Contrast("Contrast", -100f, 100f),
-    Saturation("Saturation", -100f, 100f),
-    Warmth("Warmth", -100f, 100f),
-    Exposure("Exposure", -100f, 100f),
-    Highlights("Highlights", -100f, 100f),
-    Shadows("Shadows", -100f, 100f),
-    Sharpness("Sharpness", 0f, 100f),
-    Vignette("Vignette", 0f, 100f),
-    Grain("Grain", 0f, 100f),
-    Fade("Fade", 0f, 100f),
-    Tint("Tint", -100f, 100f),
+private enum class AdjustmentType(
+    val label: String,
+    val min: Float,
+    val max: Float,
+    val get: (ImageAdjustments) -> Float,
+    val set: (ImageAdjustments, Float) -> ImageAdjustments,
+) {
+    Brightness("Brightness", -100f, 100f, { it.brightness }, { a, v -> a.copy(brightness = v) }),
+    Contrast("Contrast", -100f, 100f, { it.contrast }, { a, v -> a.copy(contrast = v) }),
+    Saturation("Saturation", -100f, 100f, { it.saturation }, { a, v -> a.copy(saturation = v) }),
+    Warmth("Warmth", -100f, 100f, { it.warmth }, { a, v -> a.copy(warmth = v) }),
+    Exposure("Exposure", -100f, 100f, { it.exposure }, { a, v -> a.copy(exposure = v) }),
+    Highlights("Highlights", -100f, 100f, { it.highlights }, { a, v -> a.copy(highlights = v) }),
+    Shadows("Shadows", -100f, 100f, { it.shadows }, { a, v -> a.copy(shadows = v) }),
+    Sharpness("Sharpness", 0f, 100f, { it.sharpness }, { a, v -> a.copy(sharpness = v) }),
+    Vignette("Vignette", 0f, 100f, { it.vignette }, { a, v -> a.copy(vignette = v) }),
+    Grain("Grain", 0f, 100f, { it.grain }, { a, v -> a.copy(grain = v) }),
+    Fade("Fade", 0f, 100f, { it.fade }, { a, v -> a.copy(fade = v) }),
+    Tint("Tint", -100f, 100f, { it.tint }, { a, v -> a.copy(tint = v) }),
 }
 
 private inline fun <reified T : LayerAdjustment> EditDocument.activeAdjustment(): T? =
@@ -278,24 +288,14 @@ private inline fun <reified T : LayerAdjustment> EditDocument.activeAdjustment()
 @Composable
 fun EditPhotoPage(
     backStack: NavBackStack<EditRoute>,
-    photoDao: PhotoDao,
     photoEditViewModel: PhotoEditViewModel,
     id: Long,
     initialUri: String? = null,
 ) {
     val vm = photoEditViewModel
     val context = LocalActivity.current!!
-    val photoFromDb by photoDao.getByIdFlow(id).collectAsState(initial = null)
-    val photo = remember(photoFromDb, initialUri) {
-        photoFromDb ?: initialUri?.let { uri ->
-            Photo(
-                id = 0, name = uri.substringAfterLast("/"), uri = uri,
-                date = System.currentTimeMillis(), width = 0, height = 0,
-                dateModified = System.currentTimeMillis() / 1000, exifSet = false,
-                lat = null, long = null, videoData = null,
-            )
-        }
-    }
+    LaunchedEffect(id, initialUri) { vm.loadPhoto(id, initialUri) }
+    val photo by vm.photo.collectAsState()
 
     val document by vm.document.collectAsState()
     val preview by vm.compositedPreview.collectAsState()
@@ -586,8 +586,6 @@ fun EditPhotoPage(
                     val ratio = display.width.toFloat() / display.height.toFloat()
                     val containerRatio = maxW / maxH
                     val (vpW, vpH) = if (ratio > containerRatio) maxW to (maxW / ratio) else (maxH * ratio) to maxH
-                    currentViewportWidth = vpW
-                    currentViewportHeight = vpH
 
                     val density = LocalDensity.current
                     val densityFloat = density.density
@@ -598,6 +596,10 @@ fun EditPhotoPage(
                     Box(
                         modifier = Modifier
                             .size(vpWdp, vpHdp)
+                            .onGloballyPositioned {
+                                currentViewportWidth = it.size.width.toFloat()
+                                currentViewportHeight = it.size.height.toFloat()
+                            }
                             .graphicsLayer {
                                 scaleX = scale; scaleY = scale
                                 translationX = offset.x; translationY = offset.y; clip = false
@@ -632,12 +634,14 @@ fun EditPhotoPage(
                             )
                         }
 
-                        val canvasTextElements = remember(texts.toList(), currentViewportWidth, currentViewportHeight) {
-                            texts.map { te ->
-                                CanvasTextElement(
-                                    text = te.text, x = te.x * currentViewportWidth, y = te.y * currentViewportHeight,
-                                    rotation = te.rotation, color = te.color, fontSize = te.fontSize,
-                                )
+                        val canvasTextElements by remember {
+                            derivedStateOf {
+                                texts.map { te ->
+                                    CanvasTextElement(
+                                        text = te.text, x = te.x * currentViewportWidth, y = te.y * currentViewportHeight,
+                                        rotation = te.rotation, color = te.color, fontSize = te.fontSize,
+                                    )
+                                }
                             }
                         }
 
@@ -657,7 +661,7 @@ fun EditPhotoPage(
                         if (isDrawing && activeTool == DrawingTool.Pointer) {
                             Box(
                                 modifier = Modifier.fillMaxSize().pointerInput(
-                                    inkStrokes.toList(), texts.toList(), selectedStrokeIndex, selectedTextIndex,
+                                    selectedStrokeIndex, selectedTextIndex,
                                     currentViewportWidth, currentViewportHeight,
                                 ) {
                                     detectTapGestures(
@@ -1147,10 +1151,7 @@ private fun CropRotatePanel(
     val aspects: List<Pair<String, Float?>> = listOf(
         "Free" to null, "1:1" to 1f, "4:3" to 4f / 3f, "3:4" to 3f / 4f, "16:9" to 16f / 9f, "9:16" to 9f / 16f,
     )
-    Column(
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+    PanelContainer(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Aspect ratio", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             InfoHint("Locks the crop to a fixed width:height shape. \"Free\" lets you crop to any size.")
@@ -1160,11 +1161,7 @@ private fun CropRotatePanel(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             aspects.forEach { (label, ar) ->
-                Surface(
-                    modifier = Modifier.clickable { onAspect(ar) },
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (selectedAspect == ar) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                ) { Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+                SelectableChip(label, selectedAspect == ar, { onAspect(ar) })
             }
         }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1365,17 +1362,10 @@ private fun LiquifyPanel(
     radius: Float,
     onRadius: (Float) -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
+    PanelContainer(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             com.vayunmathur.photos.data.LiquifyTool.entries.forEach { t ->
-                Surface(
-                    modifier = Modifier.clickable { onTool(t) },
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (tool == t) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                ) { Text(t.name, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) }
+                SelectableChip(t.name, tool == t, { onTool(t) }, horizontalPadding = 10.dp)
             }
         }
         LabeledSlider("Strength", strength * 100f, 5f..100f) { onStrength(it / 100f) }
@@ -1385,25 +1375,17 @@ private fun LiquifyPanel(
 
 @Composable
 private fun SimpleBrushPanel(label: String, brushSize: Float, onBrushSize: (Float) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
-    ) {
+    PanelContainer {
         LabeledSlider(label, brushSize * 100f, 1f..20f) { onBrushSize(it / 100f) }
     }
 }
 
 @Composable
 private fun DodgeBurnPanel(mode: DodgeBurnMode, onMode: (DodgeBurnMode) -> Unit, brushSize: Float, onBrushSize: (Float) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
-    ) {
+    PanelContainer {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DodgeBurnMode.entries.forEach { m ->
-                Surface(
-                    modifier = Modifier.clickable { onMode(m) },
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (mode == m) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                ) { Text(m.name, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+                SelectableChip(m.name, mode == m, { onMode(m) })
             }
         }
         LabeledSlider("Brush", brushSize * 100f, 1f..20f) { onBrushSize(it / 100f) }
@@ -1422,17 +1404,10 @@ private fun SelectionPanel(
     onClear: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
+    PanelContainer(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(false to "Rectangle", true to "Ellipse").forEach { (ell, label) ->
-                Surface(
-                    modifier = Modifier.clickable { onShape(ell) },
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (isEllipse == ell) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                ) { Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) }
+                SelectableChip(label, isEllipse == ell, { onShape(ell) })
             }
         }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1693,6 +1668,38 @@ fun Handle(offset: Offset, onDrag: (Offset) -> Unit) {
 }
 
 @Composable
+private fun PanelContainer(
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(8.dp),
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
+}
+
+@Composable
+private fun SelectableChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    cornerRadius: Dp = 6.dp,
+    horizontalPadding: Dp = 12.dp,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(cornerRadius),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+    ) {
+        Text(label, fontSize = 12.sp, modifier = Modifier.padding(horizontal = horizontalPadding, vertical = 6.dp))
+    }
+}
+
+@Composable
 private fun AdjustmentPanel(
     adjustments: ImageAdjustments,
     selectedAdjustment: AdjustmentType,
@@ -1700,38 +1707,6 @@ private fun AdjustmentPanel(
     onUpdateAdjustment: ((ImageAdjustments) -> ImageAdjustments) -> Unit,
     onReset: () -> Unit,
 ) {
-    fun getValue(type: AdjustmentType): Float = when (type) {
-        AdjustmentType.Brightness -> adjustments.brightness
-        AdjustmentType.Contrast -> adjustments.contrast
-        AdjustmentType.Saturation -> adjustments.saturation
-        AdjustmentType.Warmth -> adjustments.warmth
-        AdjustmentType.Exposure -> adjustments.exposure
-        AdjustmentType.Highlights -> adjustments.highlights
-        AdjustmentType.Shadows -> adjustments.shadows
-        AdjustmentType.Sharpness -> adjustments.sharpness
-        AdjustmentType.Vignette -> adjustments.vignette
-        AdjustmentType.Grain -> adjustments.grain
-        AdjustmentType.Fade -> adjustments.fade
-        AdjustmentType.Tint -> adjustments.tint
-    }
-
-    fun withValue(type: AdjustmentType, value: Float): (ImageAdjustments) -> ImageAdjustments = { adj ->
-        when (type) {
-            AdjustmentType.Brightness -> adj.copy(brightness = value)
-            AdjustmentType.Contrast -> adj.copy(contrast = value)
-            AdjustmentType.Saturation -> adj.copy(saturation = value)
-            AdjustmentType.Warmth -> adj.copy(warmth = value)
-            AdjustmentType.Exposure -> adj.copy(exposure = value)
-            AdjustmentType.Highlights -> adj.copy(highlights = value)
-            AdjustmentType.Shadows -> adj.copy(shadows = value)
-            AdjustmentType.Sharpness -> adj.copy(sharpness = value)
-            AdjustmentType.Vignette -> adj.copy(vignette = value)
-            AdjustmentType.Grain -> adj.copy(grain = value)
-            AdjustmentType.Fade -> adj.copy(fade = value)
-            AdjustmentType.Tint -> adj.copy(tint = value)
-        }
-    }
-
     Column(
         modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
@@ -1740,7 +1715,7 @@ private fun AdjustmentPanel(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             AdjustmentType.entries.forEach { type ->
-                val value = getValue(type)
+                val value = type.get(adjustments)
                 Surface(
                     modifier = Modifier.clickable { onSelectAdjustment(type) },
                     shape = RoundedCornerShape(8.dp),
@@ -1753,9 +1728,9 @@ private fun AdjustmentPanel(
                 }
             }
         }
-        val currentValue = getValue(selectedAdjustment)
+        val currentValue = selectedAdjustment.get(adjustments)
         LabeledSlider(selectedAdjustment.label, currentValue, selectedAdjustment.min..selectedAdjustment.max) {
-            onUpdateAdjustment(withValue(selectedAdjustment, it))
+            onUpdateAdjustment { adj -> selectedAdjustment.set(adj, it) }
         }
         if (adjustments != ImageAdjustments()) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {

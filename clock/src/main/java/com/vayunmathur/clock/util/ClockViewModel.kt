@@ -216,7 +216,7 @@ class ClockViewModel(
                     val ctx = getApplication<Application>()
                     viewModelScope.launch(Dispatchers.IO) {
                         val id = alarmDao.upsert(alarm)
-                        AlarmScheduler.get().schedule(ctx, alarm.copy(id = id))
+                        AlarmScheduler.schedule(ctx, alarm.copy(id = id))
                     }
                     null
                 } else {
@@ -262,18 +262,52 @@ class ClockViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val map = try {
                 ctx.assets.open("cities.csv").bufferedReader().readLines().drop(1)
-                    .map { it.split(",") }
+                    .map { parseCsvLine(it) }
                     .filter {
                         val pop = it.getOrNull(14)?.toDoubleOrNull()
                         pop != null && pop > 100_000
                     }
-                    .associate { it[1].replace("\"", "") to it[15] }
+                    .associate { it[1] to it[15] }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load cities.csv", e)
                 emptyMap()
             }
             _cities.value = map
         }
+    }
+
+    /**
+     * Parse a single CSV line into its fields, honoring RFC 4180 quoting:
+     * quoted fields may contain commas, and a doubled quote ("") inside a
+     * quoted field is an escaped quote.
+     */
+    private fun parseCsvLine(line: String): List<String> {
+        val fields = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                inQuotes -> when {
+                    c == '"' && i + 1 < line.length && line[i + 1] == '"' -> {
+                        current.append('"')
+                        i++
+                    }
+                    c == '"' -> inQuotes = false
+                    else -> current.append(c)
+                }
+                c == '"' -> inQuotes = true
+                c == ',' -> {
+                    fields.add(current.toString())
+                    current.setLength(0)
+                }
+                else -> current.append(c)
+            }
+            i++
+        }
+        fields.add(current.toString())
+        return fields
     }
 
     companion object {

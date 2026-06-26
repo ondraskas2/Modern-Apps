@@ -1,6 +1,5 @@
 package com.vayunmathur.calendar.util
 import com.vayunmathur.calendar.ui.dateFormat
-import com.vayunmathur.calendar.ui.dialogs.capitalcase
 import kotlinx.datetime.DayOfWeek
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
@@ -13,6 +12,9 @@ import kotlinx.serialization.Serializable
 
 
 private fun DayOfWeek.toIcal(): String = this.name.take(2)
+
+// RFC 5545 two-letter day codes (MO, TU, ...) mapped back to DayOfWeek.
+private val dayOfWeekByIcal: Map<String, DayOfWeek> = DayOfWeek.entries.associateBy { it.toIcal() }
 
 // Helper to format LocalDate to YYYYMMDD
 private fun LocalDate.toIcalString(timeZone: TimeZone): String {
@@ -76,25 +78,8 @@ sealed class RRule {
             val endCondition = when {
                 parts.containsKey("COUNT") ->
                     EndCondition.Count(parts["COUNT"]?.toLongOrNull() ?: 1L)
-                parts.containsKey("UNTIL") -> {
-                    val untilStr = parts["UNTIL"]!!
-                    // Standard iCal UNTIL is YYYYMMDD or YYYYMMDDTHHMMSSZ
-                    try {
-                        val year = untilStr.take(4).toInt()
-                        val month = untilStr.substring(4, 6).toInt()
-                        val day = untilStr.substring(6, 8).toInt()
-                        if('T' in untilStr) {
-                            val hour = untilStr.substring(9, 11).toInt()
-                            val minute = untilStr.substring(11, 13).toInt()
-                            val second = untilStr.substring(13, 15).toInt()
-                            EndCondition.Until(LocalDate(year, month, day).atTime(hour, minute, second).toInstant(TimeZone.UTC).toLocalDateTime(timeZone).date)
-                        } else {
-                            EndCondition.Until(LocalDate(year, month, day))
-                        }
-                    } catch (_: Exception) {
-                        return null
-                    }
-                }
+                parts.containsKey("UNTIL") ->
+                    parseIcalUntil(parts["UNTIL"]!!, timeZone)?.let { EndCondition.Until(it) } ?: return null
                 else -> EndCondition.Never
             }
 
@@ -104,9 +89,7 @@ sealed class RRule {
             val bySetPos = parts["BYSETPOS"]?.split(",")?.mapNotNull { it.toIntOrNull() }
             val byYearDay = parts["BYYEARDAY"]?.split(",")?.mapNotNull { it.toIntOrNull() }
             val byWeekNo = parts["BYWEEKNO"]?.split(",")?.mapNotNull { it.toIntOrNull() }
-            val wkst = parts["WKST"]?.let { wkstStr ->
-                DayOfWeek.entries.find { it.name.startsWith(wkstStr.take(2)) }
-            }
+            val wkst = parts["WKST"]?.let { dayOfWeekByIcal[it.take(2)] }
 
             // 3. Dispatch to specific classes based on FREQ
             return when (freq) {
@@ -114,10 +97,7 @@ sealed class RRule {
 
                 "WEEKLY" -> {
                     val byDay = parts["BYDAY"]
-                    val days = byDay?.split(",")?.mapNotNull { dayStr ->
-                        // Expecting values like MO, TU, etc.
-                        DayOfWeek.entries.find { it.name.startsWith(dayStr.take(2)) }
-                    } ?: emptyList()
+                    val days = byDay?.split(",")?.mapNotNull { dayOfWeekByIcal[it.take(2)] } ?: emptyList()
                     EveryXWeeks(interval, days, endCondition, byMonthDay, byMonth, bySetPos, byYearDay, byWeekNo, wkst)
                 }
 
@@ -234,7 +214,7 @@ sealed class RRule {
             return buildRRuleString(base, timeZone)
         }
         override fun toStringImpl(): String = "Every $weeks weeks on ${
-            daysOfWeek.joinToString(", ") { it.name.take(3).capitalcase() }
+            daysOfWeek.joinToString(", ") { it.name.take(3).lowercase().replaceFirstChar { c -> c.titlecase() } }
         }"
     }
 

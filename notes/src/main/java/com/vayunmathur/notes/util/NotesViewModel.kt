@@ -6,7 +6,7 @@ import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -23,11 +23,16 @@ import com.vayunmathur.library.util.parseMarkdown
 import com.vayunmathur.notes.data.Note
 import com.vayunmathur.notes.data.NoteDao
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,10 +57,6 @@ class NotesViewModel(
     val notes: StateFlow<List<Note>> = noteDao.getAllFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun upsert(note: Note) {
-        viewModelScope.launch(Dispatchers.IO) { noteDao.upsert(note) }
-    }
-
     fun delete(note: Note) {
         viewModelScope.launch(Dispatchers.IO) { noteDao.delete(note) }
     }
@@ -68,21 +69,32 @@ class NotesViewModel(
      * Returns a [MutableState] backed by the DB row with the given id.
      *
      * On set, the new value is optimistically published locally and pushed to
-     * the database off-thread. If [initialId] was 0L (a new row), the id is
-     * updated after the first upsert returns so subsequent edits target the
-     * same row.
+     * the database off-thread, debounced so a burst of keystrokes collapses to a
+     * single upsert. If [initialId] was 0L (a new row), the id is updated after
+     * the first upsert returns so subsequent edits target the same row.
      */
+    @OptIn(FlowPreview::class)
     @Composable
     fun editableNote(initialId: Long, default: () -> Note): MutableState<Note> {
         var currentId by remember { mutableLongStateOf(initialId) }
 
         val noteFlow = remember(currentId) { noteDao.getByIdFlow(currentId) }
-        val dbNote by noteFlow.collectAsState(initial = null)
+        val dbNote by noteFlow.collectAsStateWithLifecycle(initialValue = null)
 
         val localState = remember { mutableStateOf<Note?>(null) }
 
         LaunchedEffect(dbNote, currentId) {
             dbNote?.let { localState.value = it }
+        }
+
+        // Debounce writes so a burst of keystrokes results in a single DB upsert
+        // once the user pauses, instead of one write per character.
+        val pendingWrites = remember { MutableStateFlow<Note?>(null) }
+        LaunchedEffect(Unit) {
+            pendingWrites.filterNotNull().debounce(300).collectLatest { newValue ->
+                val newId = withContext(Dispatchers.IO) { noteDao.upsert(newValue) }
+                if (currentId == 0L) currentId = newId
+            }
         }
 
         return remember {
@@ -91,12 +103,7 @@ class NotesViewModel(
                     get() = localState.value ?: default()
                     set(newValue) {
                         localState.value = newValue
-                        viewModelScope.launch(Dispatchers.IO) {
-                            val newId = noteDao.upsert(newValue)
-                            if (currentId == 0L) {
-                                currentId = newId
-                            }
-                        }
+                        pendingWrites.value = newValue
                     }
 
                 override fun component1(): Note = value
@@ -147,15 +154,8 @@ class NotesViewModel(
     /** Counts case-insensitive occurrences of [searchText] in the parsed text of [content]. */
     fun searchResultsCount(content: String, searchText: String): Int {
         if (searchText.isEmpty()) return 0
-        val text = parseDisplay(content).text.lowercase()
-        val q = searchText.lowercase()
-        var count = 0
-        var idx = text.indexOf(q)
-        while (idx >= 0) {
-            count++
-            idx = text.indexOf(q, idx + q.length)
-        }
-        return count
+        val text = parseDisplay(content).text
+        return Regex(Regex.escape(searchText), RegexOption.IGNORE_CASE).findAll(text).count()
     }
 
     private val _shareUris = MutableSharedFlow<Uri>(extraBufferCapacity = 1)

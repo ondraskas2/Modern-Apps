@@ -51,7 +51,7 @@ class OpenAssistant(private val context: Context, private val timeoutMs: Long = 
         suspendCancellableCoroutine { cont ->
             val receiver = SecureResultReceiver(Handler(Looper.getMainLooper())) { code, data ->
                 if (code == 0) {
-                    val result = data?.getString("json_result") ?: data?.getString("result") ?: ""
+                    val result = data?.getString("json_result") ?: ""
                     cont.resume(result)
                 } else {
                     val error = data?.getString("error") ?: "Inference failed"

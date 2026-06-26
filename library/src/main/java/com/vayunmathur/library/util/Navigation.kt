@@ -86,17 +86,8 @@ class NavBackStack<T: NavKey>(initial: Array<out T>) {
     }
 
     fun reset(vararg keys: T) {
-        // set values
-        clear()
-        while(backend.size > keys.size) {
-            pop()
-        }
-        keys.forEachIndexed { idx, key ->
-            if(backend.size <= idx) {
-                add(key)
-            } else
-                set(idx, key)
-        }
+        backend.clear()
+        backend.addAll(keys)
     }
 }
 

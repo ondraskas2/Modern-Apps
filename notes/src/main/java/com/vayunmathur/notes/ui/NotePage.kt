@@ -1,13 +1,9 @@
 package com.vayunmathur.notes.ui
 
 import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,21 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.FormatBold
-import androidx.compose.material.icons.filled.FormatItalic
-import androidx.compose.material.icons.filled.FormatListBulleted
-import androidx.compose.material.icons.filled.FormatListNumbered
-import androidx.compose.material.icons.filled.FormatQuote
-import androidx.compose.material.icons.filled.FormatStrikethrough
-import androidx.compose.material.icons.filled.HorizontalRule
-import androidx.compose.material.icons.filled.IntegrationInstructions
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Title
 import androidx.compose.material3.Surface
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,11 +40,11 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -71,12 +53,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -86,14 +71,6 @@ import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.library.ui.findCheckboxPositions
-import com.vayunmathur.library.ui.getActiveHeadingLevel
-import com.vayunmathur.library.ui.insertCodeBlock
-import com.vayunmathur.library.ui.insertHorizontalRule
-import com.vayunmathur.library.ui.insertHeading
-import com.vayunmathur.library.ui.isInlineFormatActive
-import com.vayunmathur.library.ui.isLinePrefixActive
-import com.vayunmathur.library.ui.toggleInlineFormat
-import com.vayunmathur.library.ui.toggleLinePrefix
 import com.vayunmathur.library.ui.tryToggleCheckbox
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.R as LibraryR
@@ -101,11 +78,12 @@ import com.vayunmathur.notes.R
 import com.vayunmathur.notes.Route
 import com.vayunmathur.notes.data.Note
 import com.vayunmathur.notes.util.NotesViewModel
+import kotlinx.coroutines.launch
 
 // Markdown editing helpers now live in the shared :library:ui module
 // (com.vayunmathur.library.ui.MarkdownEditor) so notes and email share them.
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotePage(
     backStack: NavBackStack<Route>,
@@ -121,10 +99,8 @@ fun NotePage(
     var searchIndex by remember { mutableIntStateOf(0) }
     val focusRequestor = remember { FocusRequester() }
 
-    val searchResultsCount by remember(note.content, searchText) {
-        derivedStateOf {
-            notesViewModel.searchResultsCount(note.content, searchText)
-        }
+    val searchResultsCount = remember(note.content, searchText) {
+        notesViewModel.searchResultsCount(note.content, searchText)
     }
 
     BackHandler(enabled = showSearchBar) {
@@ -143,6 +119,8 @@ fun NotePage(
     }
 
     val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(notesViewModel) {
         notesViewModel.shareUris.collect { uri ->
@@ -159,7 +137,6 @@ fun NotePage(
         mutableStateOf(TextFieldValue(notesViewModel.parseDisplay(note.content)))
     }
 
-    var showHeadingMenu by remember { mutableStateOf(false) }
     var contentFocused by remember { mutableStateOf(false) }
 
     fun applyFormat(transform: (TextFieldValue) -> TextFieldValue) {
@@ -206,8 +183,9 @@ fun NotePage(
             if (!showSearchBar) {
                 IconButton({ showSearchBar = true }) { IconSearch() }
                 IconButton({
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("note", note.content))
+                    scope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("note", note.content)))
+                    }
                 }) {
                     IconCopy()
                 }
@@ -276,20 +254,18 @@ fun NotePage(
                 Spacer(Modifier.height(8.dp))
             }
             item {
-                val displayValue by remember(note.content, searchText, searchIndex, showSearchBar, contentValue.selection) {
-                    derivedStateOf {
-                        if (showSearchBar) {
-                            TextFieldValue(
-                                notesViewModel.parseDisplay(
-                                    note.content,
-                                    searchQuery = searchText,
-                                    searchIndex = searchIndex,
-                                ),
-                                selection = contentValue.selection,
-                            )
-                        } else {
-                            contentValue
-                        }
+                val displayValue = remember(note.content, searchText, searchIndex, showSearchBar, contentValue) {
+                    if (showSearchBar) {
+                        TextFieldValue(
+                            notesViewModel.parseDisplay(
+                                note.content,
+                                searchQuery = searchText,
+                                searchIndex = searchIndex,
+                            ),
+                            selection = contentValue.selection,
+                        )
+                    } else {
+                        contentValue
                     }
                 }
                 var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -307,7 +283,19 @@ fun NotePage(
                             applyFormat { _ -> newValue }
                         },
                         Modifier.fillMaxSize().onFocusChanged { contentFocused = it.isFocused },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = LocalContentColor.current),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = LocalContentColor.current,
+                            // Constant line height for every line — including empty ones.
+                            // Without Trim.None, each line is its own paragraph and gets
+                            // its top/bottom leading trimmed, so an empty line is shorter
+                            // than a line with text; typing then grows the line and shoves
+                            // the rest of the note down. Trim.None keeps all lines equal.
+                            lineHeight = MaterialTheme.typography.bodyMedium.fontSize * 1.6f,
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.None,
+                            ),
+                        ),
                         cursorBrush = SolidColor(LocalContentColor.current),
                         onTextLayout = { textLayoutResult = it },
                         decorationBox = { innerTextField ->
@@ -322,17 +310,38 @@ fun NotePage(
                     )
                     textLayoutResult?.let { layout ->
                         val checkboxes = remember(note.content) { findCheckboxPositions(note.content) }
+                        // Size and place the overlay from the text baseline + font size
+                        // rather than the measured line box. A blank line before a list
+                        // item makes getBoundingBox report a taller box (extra leading on
+                        // the paragraph's first/last line), which previously mis-sized and
+                        // shifted the icon. The baseline tracks the glyphs, so the checkbox
+                        // stays aligned regardless of preceding blank lines.
+                        val fontSizePx = with(density) {
+                            MaterialTheme.typography.bodyMedium.fontSize.toPx()
+                        }
+                        // Center the checkbox in its line box. Line boxes are a
+                        // constant height (Trim.None) with the text centered in them,
+                        // so the line-box center matches the text center for every
+                        // row — including the very first line when a note starts
+                        // with a checkbox. This avoids baseline math that behaved
+                        // differently on the first line.
+                        val iconSizePx = fontSizePx * 1.25f
                         checkboxes.forEach { (bracketOffset, isChecked) ->
-                            val rect = runCatching { layout.getBoundingBox(bracketOffset) }.getOrNull() ?: return@forEach
-                            val lineHeight = rect.bottom - rect.top
+                            val line = runCatching { layout.getLineForOffset(bracketOffset) }
+                                .getOrNull() ?: return@forEach
+                            val left = layout.getHorizontalPosition(bracketOffset, usePrimaryDirection = true)
+                            val lineCenterY = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2f
                             with(density) {
                                 Icon(
                                     imageVector = if (isChecked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
                                     contentDescription = if (isChecked) "Checked" else "Unchecked",
                                     tint = if (isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
-                                        .offset(x = rect.left.toDp() - 12.dp, y = rect.top.toDp())
-                                        .size(lineHeight.toDp())
+                                        .offset(
+                                            x = left.toDp() - 12.dp,
+                                            y = (lineCenterY - iconSizePx / 2f).toDp(),
+                                        )
+                                        .size(iconSizePx.toDp())
                                         .clickable {
                                             tryToggleCheckbox(bracketOffset, contentValue)?.let {
                                                 applyFormat { _ -> it }

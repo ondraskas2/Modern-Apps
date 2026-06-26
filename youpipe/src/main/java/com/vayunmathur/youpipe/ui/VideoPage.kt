@@ -2,6 +2,7 @@ package com.vayunmathur.youpipe.ui
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.text.format.Formatter
 import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -56,7 +57,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.core.text.HtmlCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -70,6 +70,7 @@ import com.vayunmathur.youpipe.R
 import com.vayunmathur.youpipe.Route
 import com.vayunmathur.youpipe.findActivity
 import com.vayunmathur.youpipe.util.YouPipeViewModel
+import com.vayunmathur.youpipe.util.decodeHtml
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
@@ -267,7 +268,7 @@ fun VideoDetails(
                         onExpandedChange = { videoExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = "${selectedVideoStream.quality} (${getVideoCodecName(selectedVideoStream.codec)}) - ${formatSize(selectedVideoStream.size)}",
+                            value = "${selectedVideoStream.quality} (${getVideoCodecName(selectedVideoStream.codec)}) - ${Formatter.formatShortFileSize(context, selectedVideoStream.size)}",
                             onValueChange = {},
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = videoExpanded) },
@@ -280,7 +281,7 @@ fun VideoDetails(
                         ) {
                             videoStreams.forEach { stream ->
                                 DropdownMenuItem(
-                                    text = { Text("${stream.quality} (${getVideoCodecName(stream.codec)}) - ${formatSize(stream.size)}") },
+                                    text = { Text("${stream.quality} (${getVideoCodecName(stream.codec)}) - ${Formatter.formatShortFileSize(context, stream.size)}") },
                                     onClick = {
                                         selectedVideoStream = stream
                                         videoExpanded = false
@@ -333,7 +334,7 @@ fun VideoDetails(
                             onExpandedChange = { audioExpanded = it }
                         ) {
                             OutlinedTextField(
-                                value = selectedAudioStream?.let { "${it.bitrate / 1000} kbps (${getAudioCodecName(it.codec)}) - ${formatSize(it.size)}" } ?: "None",
+                                value = selectedAudioStream?.let { "${it.bitrate / 1000} kbps (${getAudioCodecName(it.codec)}) - ${Formatter.formatShortFileSize(context, it.size)}" } ?: "None",
                                 onValueChange = {},
                                 readOnly = true,
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = audioExpanded) },
@@ -346,7 +347,7 @@ fun VideoDetails(
                             ) {
                                 filteredAudioStreams.forEach { stream ->
                                     DropdownMenuItem(
-                                        text = { Text("${stream.bitrate / 1000} kbps (${getAudioCodecName(stream.codec)}) - ${formatSize(stream.size)}") },
+                                        text = { Text("${stream.bitrate / 1000} kbps (${getAudioCodecName(stream.codec)}) - ${Formatter.formatShortFileSize(context, stream.size)}") },
                                         onClick = {
                                             selectedAudioStream = stream
                                             audioExpanded = false
@@ -515,10 +516,7 @@ fun countString(context: android.content.Context, count: Long): String {
 }
 
 fun String.fromHTML(): String {
-    return HtmlCompat.fromHtml(
-        this.replace("<br>", "\n"),
-        HtmlCompat.FROM_HTML_MODE_LEGACY
-    ).toString()
+    return this.replace("<br>", "\n").decodeHtml()
 }
 
 fun getVideoCodecName(codec: String): String {
@@ -535,15 +533,5 @@ fun getAudioCodecName(codec: String): String {
         codec.contains("opus", ignoreCase = true) -> "opus"
         codec.contains("mp4a", ignoreCase = true) || codec.contains("aac", ignoreCase = true) -> "aac"
         else -> codec
-    }
-}
-
-fun formatSize(bytes: Long): String {
-    return when {
-        bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-        bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-        bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
-        bytes > 0 -> "$bytes B"
-        else -> "Unknown"
     }
 }

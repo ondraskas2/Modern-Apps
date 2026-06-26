@@ -1,6 +1,5 @@
 package com.vayunmathur.camera.util
 
-import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -8,8 +7,6 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.Environment
-import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,9 +22,6 @@ import org.opencv.core.Rect
 import org.opencv.features2d.FlannBasedMatcher
 import org.opencv.features2d.SIFT
 import org.opencv.imgproc.Imgproc
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 enum class GuideDotState {
     PENDING,
@@ -81,7 +75,6 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
     private var lastCaptureAngle = 0f
     private var angularVelocity = 0f
     private var pitchVelocity = 0f
-    private var rollVelocity = 0f
 
     private var sphereMode = false
     private val ALIGNMENT_THRESHOLD_DEGREES = 3f
@@ -109,7 +102,6 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         lastTimestamp = 0L
         angularVelocity = 0f
         pitchVelocity = 0f
-        rollVelocity = 0f
         _frameCount.value = 0
         _sweepAngle.value = 0f
         _sweepDirection.value = 0
@@ -183,7 +175,6 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
             val rollRate = Math.toDegrees(event.values[2].toDouble()).toFloat()
             pitchVelocity = pitchRate
             angularVelocity = yawRate
-            rollVelocity = rollRate
             accumulatedPitch += pitchRate * dt
             accumulatedAngle += yawRate * dt
             accumulatedRoll += rollRate * dt
@@ -589,19 +580,9 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
     }
 
     fun saveToMediaStore(bitmap: Bitmap) {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val prefix = if (sphereMode) "SPHERE" else "PANO"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "${prefix}_$timestamp.jpg")
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
-        }
-        val uri = context.contentResolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
-        ) ?: return
-        context.contentResolver.openOutputStream(uri)?.use { os ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, os)
-        }
+        val contentValues = MediaStoreSaver.imageValues("${prefix}_${MediaStoreSaver.timestamp()}.jpg")
+        MediaStoreSaver.saveBitmap(context.contentResolver, contentValues, bitmap)
     }
 
     fun reset() {
@@ -619,6 +600,5 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         accumulatedPitch = 0f
         accumulatedRoll = 0f
         pitchVelocity = 0f
-        rollVelocity = 0f
     }
 }

@@ -38,15 +38,18 @@ interface ContactDao {
     suspend fun syncContacts(toUpsert: List<ContactEntity>, toDelete: List<Long>, searchEntities: List<ContactSearchEntity>) {
         if (toDelete.isNotEmpty()) {
             deleteContacts(toDelete)
-            // FTS table is automatically updated if using external content, 
-            // but we might need to handle it manually if we want precise control.
-            // With contentEntity, deletes from 'contacts' should delete from 'contacts_search'.
+            // The FTS table is not content-backed, so deletes from 'contacts' do not
+            // cascade — remove the matching search rows in the same transaction.
+            deleteSearchEntities(toDelete)
         }
         if (toUpsert.isNotEmpty()) {
             insertContacts(toUpsert)
             insertSearchEntities(searchEntities)
         }
     }
+
+    @Query("DELETE FROM contacts_search WHERE rowid IN (:ids)")
+    suspend fun deleteSearchEntities(ids: List<Long>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSearchEntities(entities: List<ContactSearchEntity>)

@@ -15,7 +15,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +47,7 @@ val COLOR_SWATCHES = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsChangeColorDialog(viewModel: CalendarViewModel, backStack: NavBackStack<Route>, calendarId: Long) {
-    val calendars by viewModel.calendars.collectAsState()
+    val calendars by viewModel.calendars.collectAsStateWithLifecycle()
     val cal = calendars.find { it.id == calendarId } ?: run {
         backStack.pop()
         return

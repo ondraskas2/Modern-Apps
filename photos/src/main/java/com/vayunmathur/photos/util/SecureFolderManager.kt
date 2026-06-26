@@ -60,6 +60,7 @@ class SecureFolderManager(val context: Context) {
         // 2. Encrypt Thumbnail
         val baos = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+        bitmap.recycle()
         val thumbBytes = baos.toByteArray()
         
         FileOutputStream(thumbFile).use { fos ->
@@ -126,7 +127,11 @@ class SecureFolderManager(val context: Context) {
         context.contentResolver.openOutputStream(uri)?.use { output ->
             FileInputStream(inputFile).use { fis ->
                 val iv = ByteArray(12)
-                if (fis.read(iv) != 12) return null
+                if (fis.read(iv) != 12) {
+                    // Don't leave an empty MediaStore row behind on a malformed file.
+                    context.contentResolver.delete(uri, null, null)
+                    return null
+                }
                 val cipher = getCipher(Cipher.DECRYPT_MODE, key, iv)
                 CipherInputStream(fis, cipher).use { input ->
                     input.copyTo(output)

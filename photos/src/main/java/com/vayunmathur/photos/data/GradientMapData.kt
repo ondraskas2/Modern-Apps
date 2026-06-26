@@ -9,11 +9,6 @@ data class GradientMapAdjustment(val stops: List<GradientStop> = emptyList()) {
 }
 
 fun GradientMapAdjustment.applyToBitmap(bitmap: Bitmap): Bitmap {
-    val w = bitmap.width
-    val h = bitmap.height
-    val pixels = IntArray(w * h)
-    bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-
     val sorted = stops.sortedBy { it.position }
     val lut = IntArray(256)
     for (v in 0..255) {
@@ -21,24 +16,21 @@ fun GradientMapAdjustment.applyToBitmap(bitmap: Bitmap): Bitmap {
         lut[v] = colorAt(sorted, t)
     }
 
-    for (i in pixels.indices) {
-        val p = pixels[i]
-        val a = (p ushr 24) and 0xFF
-        val r = (p ushr 16) and 0xFF
-        val g = (p ushr 8) and 0xFF
-        val b = p and 0xFF
+    return bitmap.copy(Bitmap.Config.ARGB_8888, true).apply {
+        mapPixels { p ->
+            val a = (p ushr 24) and 0xFF
+            val r = (p ushr 16) and 0xFF
+            val g = (p ushr 8) and 0xFF
+            val b = p and 0xFF
 
-        val lum = (0.299f * r + 0.587f * g + 0.114f * b).toInt().coerceIn(0, 255)
-        val c = lut[lum]
-        val nr = (c ushr 16) and 0xFF
-        val ng = (c ushr 8) and 0xFF
-        val nb = c and 0xFF
-        pixels[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
+            val lum = (0.299f * r + 0.587f * g + 0.114f * b).toInt().coerceIn(0, 255)
+            val c = lut[lum]
+            val nr = (c ushr 16) and 0xFF
+            val ng = (c ushr 8) and 0xFF
+            val nb = c and 0xFF
+            (a shl 24) or (nr shl 16) or (ng shl 8) or nb
+        }
     }
-
-    val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    result.setPixels(pixels, 0, w, 0, 0, w, h)
-    return result
 }
 
 private fun colorAt(sorted: List<GradientStop>, t: Float): Int {

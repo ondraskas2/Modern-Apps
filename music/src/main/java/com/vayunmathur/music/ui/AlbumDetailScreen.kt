@@ -36,7 +36,8 @@ import com.vayunmathur.music.util.formatDuration
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel, albumId: Long) {
-    val album by musicViewModel.albumState(albumId)
+    val albumValue by musicViewModel.albumState(albumId)
+    val album = albumValue ?: return
     val allMusic by musicViewModel.music.collectAsState()
     val musicInAlbum = remember(allMusic, albumId) {
         allMusic.filter { it.albumId == albumId }.sortedBy { it.trackNumber }
@@ -91,40 +92,14 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewM
 
             // Action Buttons
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            musicViewModel.playSong(musicInAlbum, 0, sourceId = "album_$albumId", sourceName = album.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        IconPlay(tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_play), color = Color.White)
-                    }
-
-                    Button(
-                        onClick = {
-                            musicViewModel.playShuffled(musicInAlbum, sourceId = "album_$albumId", sourceName = album.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        Icon(painterResource(com.vayunmathur.music.R.drawable.ic_shuffle), contentDescription = null, tint = Color.Black)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_shuffle), color = Color.Black)
-                    }
-                }
+                PlayShuffleRow(
+                    onPlay = {
+                        musicViewModel.playSong(musicInAlbum, 0, sourceId = "album_$albumId", sourceName = album.name)
+                    },
+                    onShuffle = {
+                        musicViewModel.playShuffled(musicInAlbum, sourceId = "album_$albumId", sourceName = album.name)
+                    },
+                )
             }
 
             // Track List Header
@@ -148,52 +123,40 @@ fun AlbumDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewM
             // Track Items
             itemsIndexed(musicInAlbum) { idx, music ->
                 val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "album_$albumId"
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            text = music.title,
-                            color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                            fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal
-                        )
+                TrackListItem(
+                    title = music.title,
+                    isPlaying = isPlaying,
+                    artUri = music.uri.toUri(),
+                    onClick = {
+                        musicViewModel.playSong(musicInAlbum, idx, sourceId = "album_$albumId", sourceName = album.name)
                     },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isPlaying) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                        .clickable {
-                            musicViewModel.playSong(musicInAlbum, idx, sourceId = "album_$albumId", sourceName = album.name)
-                        },
-                    trailingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(formatDuration(music.duration))
-                            AddToPlaylistButton(backStack, music)
-                        }
-                    },
-                    leadingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    leading = {
+                        Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
                             if (isPlaying) {
-                                Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
-                                        contentDescription = "Playing",
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                                Icon(
+                                    painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
+                                    contentDescription = "Playing",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
                             } else {
                                 Text(
                                     text = music.trackNumber.toString(),
                                     fontWeight = FontWeight.Medium,
                                     fontSize = 16.sp,
                                     modifier = Modifier.width(28.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                 )
                             }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            AlbumArt(music.uri.toUri(), Modifier.size(48.dp))
                         }
-                    }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    },
+                    trailing = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(formatDuration(music.duration))
+                            AddToPlaylistButton(backStack, music)
+                        }
+                    },
                 )
             }
         }

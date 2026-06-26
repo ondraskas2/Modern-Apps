@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -110,7 +111,6 @@ fun PdfViewerScreen(
 
     LaunchedEffect(pdfDocument) {
         viewModel.pdfWriteResults.collect { result ->
-            if (result.targetUri == pdfDocument.uri) return@collect
             val msg = if (result.success) pdfSavedMessage else pdfSaveErrorMessage
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
@@ -121,6 +121,8 @@ fun PdfViewerScreen(
     var searchIndex by remember(searchResults) { mutableIntStateOf(0) }
     var searchText by remember { mutableStateOf("") }
     var showSaveMenu by remember { mutableStateOf(false) }
+    var viewerLaidOut by remember { mutableStateOf(false) }
+    var centerOffset by remember { mutableStateOf(Offset.Zero) }
 
     BackHandler {
         when {
@@ -133,22 +135,15 @@ fun PdfViewerScreen(
         }
     }
 
-    LaunchedEffect(pdfDocument.uri) {
-        coroutineScope.launch {
-            delay(500)
-            val restored = PdfStateStore.restore(context, pdfDocument.uri)
-            if (restored != null) {
-                restored(pdfState)
-            }
-        }
+    LaunchedEffect(pdfDocument.uri, viewerLaidOut) {
+        if (!viewerLaidOut) return@LaunchedEffect
+        PdfStateStore.restore(context, pdfDocument.uri)?.invoke(pdfState)
     }
-
-    val centerRef = remember { object { var offset = androidx.compose.ui.geometry.Offset.Zero } }
 
     LaunchedEffect(Unit) {
         while (true) {
             delay(2000)
-            PdfStateStore.save(context, pdfDocument.uri, centerRef.offset, pdfState)
+            PdfStateStore.save(context, pdfDocument.uri, centerOffset, pdfState)
         }
     }
 
@@ -168,8 +163,6 @@ fun PdfViewerScreen(
         }
         searchResults = resultsFinal
     }
-
-    var changesMade by remember { mutableStateOf(false) }
 
     LaunchedEffect(searchResults, searchIndex) {
         val allHighlights = searchResults.mapIndexed { idx, it ->
@@ -289,7 +282,6 @@ fun PdfViewerScreen(
                                         onClick = {
                                             showSaveMenu = false
                                             viewModel.saveDocumentChanges(pdfDocument, pdfDocument.uri)
-                                            Toast.makeText(context, pdfSavedMessage, Toast.LENGTH_SHORT).show()
                                         }
                                     )
                                     DropdownMenuItem(
@@ -338,7 +330,8 @@ fun PdfViewerScreen(
                     pdfDocument = pdfDocument,
                     state = pdfState,
                     modifier = Modifier.onGloballyPositioned { coordinates ->
-                        centerRef.offset = coordinates.size.center.toOffset()
+                        centerOffset = coordinates.size.center.toOffset()
+                        viewerLaidOut = true
                     },
                     fastScrollConfig = FastScrollConfiguration.withDrawableIdsAndDp(
                         fastScrollPageIndicatorBackgroundDrawableRes = R.drawable.pdf_page_indicator_background,
@@ -351,7 +344,6 @@ fun PdfViewerScreen(
                     onFormWidgetInfoUpdated = { editInfo ->
                         coroutineScope.launch {
                             pdfDocument.applyEdit(editInfo)
-                            changesMade = true
                         }
                     },
                 ) { uri ->

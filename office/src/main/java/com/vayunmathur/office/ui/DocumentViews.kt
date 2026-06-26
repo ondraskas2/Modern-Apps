@@ -78,7 +78,6 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
@@ -91,7 +90,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.AnnotatedString
@@ -117,7 +115,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.vayunmathur.office.odf.*
-import kotlinx.coroutines.delay
 
 // --- Headings for outline ---
 
@@ -725,39 +722,12 @@ private fun ContinuousParagraphEditor(
     val transformation = remember(paras, fontSizeMultiplier, onSurface, prefixColor) {
         VisualTransformation { buildDocTransformed(it.text, paras, lens, prefixes, onSurface, prefixColor, fontSizeMultiplier) }
     }
-    // Drive the caret from the laid-out (visually transformed) text so it tracks the glyphs for
-    // every paragraph alignment. The built-in caret assumes left alignment and lands at the line
-    // start for centered/right/justified paragraphs, so it is disabled and drawn manually here. (caret-align fix)
-    val cursorColor = MaterialTheme.colorScheme.primary
-    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    var focused by remember { mutableStateOf(false) }
-    var blinkOn by remember { mutableStateOf(true) }
-    LaunchedEffect(focused, tfv.selection) {
-        if (!focused) { blinkOn = false; return@LaunchedEffect }
-        blinkOn = true
-        while (true) { delay(500); blinkOn = !blinkOn }
-    }
-    // Original caret offset -> transformed offset (mirrors PrefixOffsetMapping / buildDocTransformed).
-    val caretStarts = remember(lens, prefixes) {
-        val n = paras.size
-        val origStarts = IntArray(n)
-        val transStarts = IntArray(n)
-        val prefixLens = IntArray(n) { prefixes[it].length }
-        var oAcc = 0; var tAcc = 0
-        for (i in 0 until n) {
-            origStarts[i] = oAcc; transStarts[i] = tAcc
-            oAcc += lens[i] + 1; tAcc += prefixLens[i] + lens[i] + 1
-        }
-        Triple(origStarts, transStarts, prefixLens)
-    }
-    fun origToTransformed(offset: Int): Int {
-        val (origStarts, transStarts, prefixLens) = caretStarts
-        if (origStarts.isEmpty()) return 0
-        var p = 0
-        for (i in origStarts.indices) { if (origStarts[i] <= offset) p = i else break }
-        val inPara = (offset - origStarts[p]).coerceIn(0, lens[p])
-        return transStarts[p] + prefixLens[p] + inPara
-    }
+    // Let Compose own the caret. The built-in cursor is positioned with the SAME internal
+    // (visually-transformed) TextLayoutResult and OffsetMapping that lay out the aligned glyphs,
+    // so getCursorRect reflects each paragraph's TextAlign (set via ParagraphStyle below) and the
+    // caret stays aligned with the displayed text for left/center/right/justified paragraphs.
+    // A manual caret has to reconstruct that layout/mapping in the outer draw scope and drifts out
+    // of alignment, so it is intentionally not used here. (caret-align fix)
     BasicTextField(
         value = tfv,
         onValueChange = { nv ->
@@ -768,19 +738,8 @@ private fun ContinuousParagraphEditor(
         },
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = onSurface, lineHeight = (22f * fontSizeMultiplier).sp),
         visualTransformation = transformation,
-        onTextLayout = { layout = it },
-        cursorBrush = SolidColor(Color.Transparent),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         modifier = Modifier.fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
-            .drawWithContent {
-                drawContent()
-                val lr = layout
-                if (focused && blinkOn && tfv.selection.collapsed && lr != null) {
-                    val tOff = origToTransformed(tfv.selection.end).coerceIn(0, lr.layoutInput.text.length)
-                    val rect = lr.getCursorRect(tOff)
-                    drawLine(cursorColor, Offset(rect.left, rect.top), Offset(rect.left, rect.bottom), 2.dp.toPx())
-                }
-            }
     )
 }
 
@@ -792,18 +751,45 @@ private fun buildDocTransformed(
     val origStarts = IntArray(n)
     val transStarts = IntArray(n)
     val prefixLens = IntArray(n) { prefixes[it].length }
+
+    // Paragraph-break model (fixes the extra blank line between paragraphs + the start-of-paragraph
+    // backspace-merge). Compose renders each ParagraphStyle range as its own paragraph, so a '\n'
+    // that lands on a ParagraphStyle boundary becomes an extra empty "gap" paragraph -> a blank
+    // line between every paragraph, and that blank line is caret-addressable (its offset maps back
+    // to the END of the previous paragraph, so backspace there deletes a char instead of merging).
+    //
+    // Instead we keep a '\n' separator ONLY between consecutive paragraphs that share the same
+    // paragraph-level layout (alignment, line spacing) and use no first-line indent: those sit
+    // inside ONE shared ParagraphStyle, so the '\n' is an ordinary single line break (no blank
+    // line, fully addressable). At a real layout change we drop the '\n' and let the paragraph
+    // break come for free from the two adjacent ParagraphStyle ranges. Empty paragraphs keep a
+    // separator with their previous (or, for a leading empty paragraph, next) neighbour so they
+    // still occupy a caret-addressable line. The original text always joins paragraphs with '\n'
+    // (see plainText), so origStarts still advances by lens[i] + 1 for every paragraph.
+    fun sameLayout(a: OdfParagraph, b: OdfParagraph): Boolean =
+        a.alignment == b.alignment && a.lineHeightPercent == b.lineHeightPercent &&
+            a.textIndent == 0f && b.textIndent == 0f
+    val sep = IntArray(n) // sep[i] = 1 if a '\n' is emitted between paragraph i and i+1
+    for (i in 0 until n - 1) {
+        sep[i] = if (sameLayout(paras[i], paras[i + 1]) || lens[i + 1] == 0) 1 else 0
+    }
+    if (n > 0 && lens[0] == 0 && n > 1) sep[0] = 1 // keep a leading empty paragraph on its own line
+
     var oAcc = 0; var tAcc = 0
     for (i in 0 until n) {
         origStarts[i] = oAcc
         transStarts[i] = tAcc
         oAcc += lens[i] + 1
-        tAcc += prefixLens[i] + lens[i] + 1
+        tAcc += prefixLens[i] + lens[i] + sep[i]
     }
     val origLen = text.length
     val transLen = if (n == 0) 0 else transStarts[n - 1] + prefixLens[n - 1] + lens[n - 1]
 
     val annotated = buildAnnotatedString {
+        var groupStart = 0   // annotated offset where the current ParagraphStyle group began
+        var groupFirst = 0   // index of the first paragraph in the current group
         for (i in paras.indices) {
+            if (i == 0 || sep[i - 1] == 0) { groupStart = length; groupFirst = i }
             val para = paras[i]
             // prefix (styled muted, never bold/italic)
             if (prefixes[i].isNotEmpty()) {
@@ -816,17 +802,6 @@ private fun buildDocTransformed(
             val textStart = length
             append(paraText)
             val textEnd = length
-            // paragraph style: alignment, first-line/hanging indent (A5), line spacing (A6)
-            val firstLineIndent = if (para.textIndent != 0f) para.textIndent.sp else 0.sp
-            addStyle(
-                androidx.compose.ui.text.ParagraphStyle(
-                    textAlign = para.alignment ?: TextAlign.Unspecified,
-                    lineHeight = para.lineHeightPercent?.let { (22f * mult * it).sp } ?: TextUnit.Unspecified,
-                    textIndent = if (para.textIndent != 0f) androidx.compose.ui.text.style.TextIndent(firstLine = firstLineIndent, restLine = 0.sp) else androidx.compose.ui.text.style.TextIndent.None
-                ),
-                if (prefixes[i].isNotEmpty()) textStart - prefixLens[i] else textStart,
-                textEnd
-            )
             headingSizeSp(para.style)?.let { addStyle(SpanStyle(fontSize = (it * mult).sp, fontWeight = FontWeight.Bold), textStart, textEnd) }
             var off = textStart
             for (span in para.spans) {
@@ -853,7 +828,30 @@ private fun buildDocTransformed(
                 }
                 off = segEnd
             }
-            if (i < paras.size - 1) append("\n")
+            // At the end of a group, emit ONE ParagraphStyle spanning every paragraph in the group
+            // (prefixes, text and interior '\n' separators). The group's paragraph-level layout is
+            // taken from its first non-empty paragraph so that an absorbed empty paragraph never
+            // overrides the alignment/indent of real content. (A5/A6 + paragraph-spacing fix)
+            if (i == n - 1 || sep[i] == 0) {
+                val styleSrc = (groupFirst..i).firstOrNull { lens[it] > 0 }?.let { paras[it] } ?: paras[groupFirst]
+                val firstLineIndent = if (styleSrc.textIndent != 0f) styleSrc.textIndent.sp else 0.sp
+                // Justify is stretched at draw time, but BasicTextField computes caret / selection /
+                // handle positions from the UNSTRETCHED glyph advances, so they drift left of the
+                // displayed justified glyphs. Render the editable field with Start alignment so the
+                // caret and selection match the glyphs exactly; the OdfParagraph.alignment model is
+                // untouched, so read-only rendering (ParagraphView) and export stay justified.
+                // (justified-selection alignment fix)
+                val editorAlign = if (styleSrc.alignment == TextAlign.Justify) TextAlign.Start else (styleSrc.alignment ?: TextAlign.Unspecified)
+                addStyle(
+                    androidx.compose.ui.text.ParagraphStyle(
+                        textAlign = editorAlign,
+                        lineHeight = styleSrc.lineHeightPercent?.let { (22f * mult * it).sp } ?: TextUnit.Unspecified,
+                        textIndent = if (styleSrc.textIndent != 0f) androidx.compose.ui.text.style.TextIndent(firstLine = firstLineIndent, restLine = 0.sp) else androidx.compose.ui.text.style.TextIndent.None
+                    ),
+                    groupStart, length
+                )
+            }
+            if (sep[i] == 1) append("\n")
         }
     }
     return TransformedText(annotated, PrefixOffsetMapping(origStarts, transStarts, prefixLens, lens.toIntArray(), origLen, transLen))

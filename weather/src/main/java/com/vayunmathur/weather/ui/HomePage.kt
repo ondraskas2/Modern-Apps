@@ -38,7 +38,6 @@ import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.weather.R
 import com.vayunmathur.weather.Route
 import com.vayunmathur.weather.data.SavedLocation
-import com.vayunmathur.weather.intents.parseLocalIsoToEpochSec
 import com.vayunmathur.weather.ui.components.CurrentWeatherCard
 import com.vayunmathur.weather.ui.components.DailyCard
 import com.vayunmathur.weather.ui.components.HourlyCard
@@ -52,12 +51,16 @@ import com.vayunmathur.weather.util.TemperatureUnit
 import com.vayunmathur.weather.util.WeatherMetric
 import com.vayunmathur.weather.util.WeatherViewModel
 import com.vayunmathur.weather.util.WindUnit
+import com.vayunmathur.weather.util.formatHourAxisLabel
 import com.vayunmathur.weather.util.formatPressure
 import com.vayunmathur.weather.util.formatTemperatureCompact
 import com.vayunmathur.weather.util.formatWind
+import com.vayunmathur.weather.util.mmToInches
+import com.vayunmathur.weather.util.metersToMiles
+import com.vayunmathur.weather.util.parseLocalIsoToEpochSec
 import com.vayunmathur.weather.util.resolveConditions
+import java.util.Locale
 import kotlin.math.roundToInt
-import kotlinx.datetime.toLocalDateTime
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -259,7 +262,7 @@ private fun LocationPage(
                 title = gm.title,
                 points = com.vayunmathur.weather.util.metricSeries(forecast, gm, selected),
                 valueLabel = metricValueFormatter(gm, tempUnit, windUnit, pressureUnit),
-                timeLabel = { epoch -> formatGraphTime(epoch, use24Hour) },
+                timeLabel = { epoch -> formatHourAxisLabel(epoch, use24Hour) },
                 onDismiss = { graphMetric = null },
             )
         }
@@ -278,29 +281,15 @@ private fun metricValueFormatter(
     WeatherMetric.Humidity, WeatherMetric.CloudCover ->
         { v -> "${v.roundToInt()}%" }
     WeatherMetric.Precipitation ->
-        { v -> if (windUnit == WindUnit.Mph) String.format("%.2f in", v / 25.4) else String.format("%.1f mm", v) }
+        { v -> if (windUnit == WindUnit.Mph) String.format(Locale.US, "%.2f in", mmToInches(v)) else String.format(Locale.US, "%.1f mm", v) }
     WeatherMetric.WindSpeed, WeatherMetric.WindGusts ->
         { v -> formatWind(v, windUnit) }
     WeatherMetric.Pressure ->
         { v -> formatPressure(v, pressureUnit) }
     WeatherMetric.Visibility ->
-        { v -> if (windUnit == WindUnit.Mph) "${(v / 1609.34).roundToInt()} mi" else "${(v / 1000).roundToInt()} km" }
+        { v -> if (windUnit == WindUnit.Mph) "${metersToMiles(v).roundToInt()} mi" else "${(v / 1000).roundToInt()} km" }
     WeatherMetric.UvIndex ->
         { v -> v.roundToInt().toString() }
-}
-
-/** Format an epoch second as a local hour label for the graph axis. */
-private fun formatGraphTime(epochSec: Long, use24Hour: Boolean): String {
-    val ldt = kotlin.time.Instant.fromEpochSeconds(epochSec)
-        .toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
-    val h = ldt.hour
-    return if (use24Hour) {
-        "%02d:00".format(h)
-    } else {
-        val display = if (h % 12 == 0) 12 else h % 12
-        val ampm = if (h < 12) "AM" else "PM"
-        "$display $ampm"
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

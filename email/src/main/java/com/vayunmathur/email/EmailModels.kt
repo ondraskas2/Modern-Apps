@@ -3,7 +3,9 @@ package com.vayunmathur.email
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.core.text.HtmlCompat
 import kotlinx.serialization.Serializable
+import javax.mail.internet.InternetAddress
 
 @Serializable
 @Entity(primaryKeys = ["accountEmail", "fullName"])
@@ -135,32 +137,46 @@ data class EmailAccount(
     @ColumnInfo(defaultValue = "")
     val signature: String = "",
 ) {
-    fun getColor(): Long {
-        val colors = listOf(
-            0xFFF44336, // Red
-            0xFFE91E63, // Pink
-            0xFF9C27B0, // Purple
-            0xFF673AB7, // Deep Purple
-            0xFF3F51B5, // Indigo
-            0xFF2196F3, // Blue
-            0xFF03A9F4, // Light Blue
-            0xFF00BCD4, // Cyan
-            0xFF009688, // Teal
-            0xFF4CAF50, // Green
-            0xFF8BC34A, // Light Green
-            0xFFCDDC39, // Lime
-            0xFFFFEB3B, // Yellow
-            0xFFFFC107, // Amber
-            0xFFFF9800, // Orange
-            0xFFFF5722, // Deep Orange
-            0xFF795548, // Brown
-            0xFF9E9E9E, // Grey
-            0xFF607D8B  // Blue Grey
-        )
-        val hash = email.hashCode()
-        return colors[(hash and Int.MAX_VALUE) % colors.size]
-    }
+    fun getColor(): Long = accountColor(email)
 }
+
+/** Material palette used to give each account a stable color, by email hash. */
+val ACCOUNT_COLORS: List<Long> = listOf(
+    0xFFF44336, // Red
+    0xFFE91E63, // Pink
+    0xFF9C27B0, // Purple
+    0xFF673AB7, // Deep Purple
+    0xFF3F51B5, // Indigo
+    0xFF2196F3, // Blue
+    0xFF03A9F4, // Light Blue
+    0xFF00BCD4, // Cyan
+    0xFF009688, // Teal
+    0xFF4CAF50, // Green
+    0xFF8BC34A, // Light Green
+    0xFFCDDC39, // Lime
+    0xFFFFEB3B, // Yellow
+    0xFFFFC107, // Amber
+    0xFFFF9800, // Orange
+    0xFFFF5722, // Deep Orange
+    0xFF795548, // Brown
+    0xFF9E9E9E, // Grey
+    0xFF607D8B  // Blue Grey
+)
+
+/** Stable color for [email], derived from its hash. */
+fun accountColor(email: String): Long {
+    val hash = email.hashCode()
+    return ACCOUNT_COLORS[(hash and Int.MAX_VALUE) % ACCOUNT_COLORS.size]
+}
+
+/** Plain-text rendering of this message's body (strips HTML when [isHtml]). */
+fun EmailMessage.plainTextBody(): String? =
+    body?.let { if (isHtml) HtmlCompat.fromHtml(it, HtmlCompat.FROM_HTML_MODE_LEGACY).toString() else it }
+
+/** Display name for a "Name <addr>" sender header, falling back to the address. */
+fun senderDisplayName(from: String): String =
+    runCatching { InternetAddress.parse(from).firstOrNull()?.let { it.personal ?: it.address } }
+        .getOrNull() ?: from.substringBefore("<").trim()
 
 /// Pending outgoing message stored locally until it is successfully sent by the
 /// background sender. Attachments are copied to app-private storage at queue time

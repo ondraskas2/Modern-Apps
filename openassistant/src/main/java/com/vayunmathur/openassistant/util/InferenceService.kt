@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.ResultReceiver
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.IntentCompat
 import com.google.ai.edge.litertlm.*
 import com.vayunmathur.library.util.SecureResultReceiver
 import com.vayunmathur.library.util.buildDatabase
@@ -90,6 +91,8 @@ class InferenceService : Service() {
                         standardQueue.onReceive { executeStandardInference(it) }
                         intentQueue.onReceive { processIntentJob(it) }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("InferenceService", "Critical error in job processor loop", e)
                 }
@@ -99,27 +102,32 @@ class InferenceService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("InferenceService", "onStartCommand received intent")
-        intent?.setExtrasClassLoader(SecureResultReceiver::class.java.classLoader)
-        
-        val conversationId = intent?.getLongExtra("conversation_id", -1L) ?: -1L
-        val userText = intent?.getStringExtra("user_text") ?: ""
-        val audioPath = intent?.getStringExtra("audio_path")
-        val schema = intent?.getStringExtra("schema")
-        val receiver = intent?.getParcelableExtra<ResultReceiver>("RECEIVER")
+        if (intent == null) return START_STICKY
+        intent.setExtrasClassLoader(SecureResultReceiver::class.java.classLoader)
 
-        val imageUris = intent?.getParcelableArrayListExtra<Uri>("image_uris")
-        val imagePathsFromUris = imageUris?.mapNotNull { uri ->
-            copyUriToFile(this, uri)?.absolutePath
-        }?.toTypedArray() ?: emptyArray()
+        val conversationId = intent.getLongExtra("conversation_id", -1L)
+        val userText = intent.getStringExtra("user_text") ?: ""
+        val audioPath = intent.getStringExtra("audio_path")
+        val schema = intent.getStringExtra("schema")
+        val receiver = IntentCompat.getParcelableExtra(intent, "RECEIVER", ResultReceiver::class.java)
 
-        val imagePaths = (intent?.getStringArrayExtra("image_paths") ?: emptyArray()) + imagePathsFromUris
+        val imageUris = IntentCompat.getParcelableArrayListExtra(intent, "image_uris", Uri::class.java)
+        val staticImagePaths = intent.getStringArrayExtra("image_paths") ?: emptyArray()
 
-        if (receiver != null && schema != null) {
-            Log.i("InferenceService", "Queueing Intent Inference request")
-            intentQueue.trySend(InferenceJob.Intent(userText, imagePaths, schema, receiver))
-        } else if (conversationId != -1L) {
-            Log.d("InferenceService", "Queueing standard inference for conversation: $conversationId")
-            standardQueue.trySend(InferenceJob.Standard(conversationId, userText, imagePaths, audioPath))
+        serviceScope.launch {
+            val imagePathsFromUris = imageUris?.mapNotNull { uri ->
+                copyUriToFile(this@InferenceService, uri)?.absolutePath
+            }?.toTypedArray() ?: emptyArray()
+
+            val imagePaths = staticImagePaths + imagePathsFromUris
+
+            if (receiver != null && schema != null) {
+                Log.i("InferenceService", "Queueing Intent Inference request")
+                intentQueue.trySend(InferenceJob.Intent(userText, imagePaths, schema, receiver))
+            } else if (conversationId != -1L) {
+                Log.d("InferenceService", "Queueing standard inference for conversation: $conversationId")
+                standardQueue.trySend(InferenceJob.Standard(conversationId, userText, imagePaths, audioPath))
+            }
         }
 
         return START_STICKY
@@ -201,6 +209,9 @@ class InferenceService : Service() {
                 resetConversation(job.conversationId, job.userText)
             }
             runInferenceLoop(job.conversationId, job.userText, job.imagePaths, job.audioPath)
+        } catch (e: CancellationException) {
+            if (e.message != "HALT") throw e
+            Log.i("InferenceService", "Standard inference halted successfully.")
         } catch (e: Exception) {
             Log.e("InferenceService", "Inference failed, resetting engine for retry", e)
             currentConversation?.close()
@@ -300,19 +311,38 @@ class InferenceService : Service() {
     }
 
     private fun tryExtractLargestJson(text: String): String? {
-        var start = text.indexOf('{')
-        while (start != -1) {
-            var end = text.lastIndexOf('}')
-            while (end != -1 && end > start) {
-                val candidate = text.substring(start, end + 1)
-                try {
-                    Json.parseToJsonElement(candidate)
-                    return candidate
-                } catch (e: Exception) {
-                    end = text.lastIndexOf('}', end - 1)
+        val start = text.indexOf('{')
+        if (start == -1) return null
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until text.length) {
+            val c = text[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        val candidate = text.substring(start, i + 1)
+                        return try {
+                            Json.parseToJsonElement(candidate)
+                            candidate
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
                 }
             }
-            start = text.indexOf('{', start + 1)
         }
         return null
     }

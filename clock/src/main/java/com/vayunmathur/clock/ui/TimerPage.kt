@@ -379,13 +379,11 @@ fun TimerCard(timer: Timer, now: Instant, clockViewModel: ClockViewModel) {
     }
 }
 
-fun formatTimerDuration(duration: Duration): String {
-    val totalSeconds = duration.inWholeSeconds
-    val h = totalSeconds / 3600
-    val m = (totalSeconds % 3600) / 60
-    val s = totalSeconds % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
+fun formatTimerDuration(duration: Duration): String =
+    duration.toComponents { hours, minutes, seconds, _ ->
+        if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
+        else "%d:%02d".format(minutes, seconds)
+    }
 
 
 /**

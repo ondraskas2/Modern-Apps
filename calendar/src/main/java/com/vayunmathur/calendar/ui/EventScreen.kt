@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.text.format.DateFormat
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,8 +50,8 @@ import kotlinx.datetime.format
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EventScreen(viewModel: CalendarViewModel, instance: Instance, backStack: NavBackStack<Route>) {
-    val events by viewModel.events.collectAsState()
-    val calendars by viewModel.calendars.collectAsState()
+    val events by viewModel.events.collectAsStateWithLifecycle()
+    val calendars by viewModel.calendars.collectAsStateWithLifecycle()
 
     val event = events.find { it.id == instance.eventID }
     if (event == null) {
@@ -140,7 +141,7 @@ fun EventScreen(viewModel: CalendarViewModel, instance: Instance, backStack: Nav
                         // app (Google Maps, Waze, our own maps app, etc.)
                         // resolve the address. Wrap with chooser so user can
                         // pick if multiple are installed.
-                        Uri.parse("geo:0,0?q=${Uri.encode(event.location)}")
+                        "geo:0,0?q=${Uri.encode(event.location)}".toUri()
                     ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
                     val chooser = Intent.createChooser(
                         intent,

@@ -7,7 +7,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
@@ -186,13 +185,15 @@ class PasswordsViewModel(
         viewModelScope.launch {
             _importing.value = true
             _importMessage.value = null
+            // Best-effort: persist read access for potential re-reads. Not
+            // required for this one-shot import, so failure must not abort it.
             try {
-                try {
-                    ctx.contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                    )
-                } catch (_: Exception) {}
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: Exception) {}
+            try {
                 val result = withContext(Dispatchers.IO) {
                     importCsvFromUri(ctx.contentResolver, uri, source)
                 }
@@ -213,10 +214,7 @@ class PasswordsViewModel(
         uri: Uri,
         source: ImportSource,
     ): ImportResult {
-        val inputStream = contentResolver.openInputStream(uri)
-            ?: throw Exception("Unable to open selected file")
-
-        val rows = try {
+        val rows = contentResolver.openInputStream(uri)?.use { inputStream ->
             val reader = inputStream.bufferedReader()
             val list = mutableListOf<List<String>>()
             var line = reader.readLine()
@@ -247,10 +245,7 @@ class PasswordsViewModel(
                 line = reader.readLine()
             }
             list
-        } catch (e: Exception) {
-            Log.e(TAG, "Error reading CSV from input stream", e)
-            emptyList<List<String>>()
-        }
+        } ?: throw Exception("Unable to open selected file")
         if (rows.isEmpty()) return ImportResult(0, 0)
 
         val header = rows.first().map { it.trim().lowercase() }
@@ -300,10 +295,6 @@ class PasswordsViewModel(
         }
 
         return ImportResult(inserted, skipped)
-    }
-
-    companion object {
-        private const val TAG = "PasswordsViewModel"
     }
 }
 

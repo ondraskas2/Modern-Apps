@@ -26,21 +26,22 @@ import com.vayunmathur.music.util.AlbumArt
 import com.vayunmathur.music.util.MusicViewModel
 import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
-import com.vayunmathur.music.data.Music
 import com.vayunmathur.music.data.Playlist
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel, playlistId: Long) {
     val playlist by musicViewModel.playlistState(playlistId)
-    val allMusic by musicViewModel.music.collectAsState()
-    var musicInPlaylist by remember { mutableStateOf(emptyList<Music>()) }
-    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(allMusic, playlistId) {
-        val musicIds = musicViewModel.getMusicInPlaylist(playlistId).toSet()
-        musicInPlaylist = allMusic.filter { it.id in musicIds }
+    if (playlist == null) {
+        return
+    }
+
+    val allMusic by musicViewModel.music.collectAsState()
+    val matchedIds by musicViewModel.matchedMusicForPlaylist(playlistId)
+    val musicInPlaylist = remember(allMusic, matchedIds) {
+        val idSet = matchedIds.toSet()
+        allMusic.filter { it.id in idSet }
     }
 
     val currentMediaItem by musicViewModel.currentMediaItem.collectAsState()
@@ -60,12 +61,13 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicVi
                         AlertDialog(
                             onDismissRequest = { showDeleteDialog = false },
                             title = { Text(stringResource(R.string.dialog_delete_playlist)) },
-                            text = { Text(stringResource(R.string.dialog_delete_playlist_confirm, playlist.name)) },
+                            text = { Text(stringResource(R.string.dialog_delete_playlist_confirm, playlist!!.name)) },
                             confirmButton = {
                                 TextButton(onClick = {
                                     showDeleteDialog = false
-                                    musicViewModel.deletePlaylist(playlist)
+                                    val toDelete = playlist!!
                                     backStack.pop()
+                                    musicViewModel.deletePlaylist(toDelete)
                                 }) {
                                     Text(stringResource(R.string.dialog_delete))
                                 }
@@ -110,8 +112,8 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicVi
 
                     ListItem({
                         var showRenameDialog by remember { mutableStateOf(false) }
-                        var newName by remember(playlist.name) { mutableStateOf(playlist.name) }
-                        Text(playlist.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.clickable {
+                        var newName by remember(playlist!!.name) { mutableStateOf(playlist!!.name) }
+                        Text(playlist!!.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.clickable {
                             showRenameDialog = true
                         })
 
@@ -124,7 +126,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicVi
                                 },
                                 confirmButton = {
                                     TextButton(onClick = {
-                                        musicViewModel.renamePlaylist(playlist, newName)
+                                        musicViewModel.renamePlaylist(playlist!!, newName)
                                         showRenameDialog = false
                                     }) {
                                         Text(stringResource(R.string.dialog_rename))
@@ -145,86 +147,43 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicVi
 
             // Action Buttons
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            musicViewModel.playSong(musicInPlaylist, 0, sourceId = "playlist_$playlistId", sourceName = playlist.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f)),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        IconPlay(tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_play), color = Color.White)
-                    }
-
-                    Button(
-                        onClick = {
-                            musicViewModel.playShuffled(musicInPlaylist, sourceId = "playlist_$playlistId", sourceName = playlist.name)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(50.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        Icon(painterResource(com.vayunmathur.music.R.drawable.ic_shuffle), contentDescription = null, tint = Color.Black)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.label_shuffle), color = Color.Black)
-                    }
-                }
+                PlayShuffleRow(
+                    onPlay = {
+                        musicViewModel.playSong(musicInPlaylist, 0, sourceId = "playlist_$playlistId", sourceName = playlist!!.name)
+                    },
+                    onShuffle = {
+                        musicViewModel.playShuffled(musicInPlaylist, sourceId = "playlist_$playlistId", sourceName = playlist!!.name)
+                    },
+                )
             }
 
             // Track List
             itemsIndexed(musicInPlaylist) { idx, music ->
                 val isPlaying = currentMediaItem?.mediaId == music.id.toString() && currentSource == "playlist_$playlistId"
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            text = music.title,
-                            color = if (isPlaying) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                            fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal
-                        )
+                TrackListItem(
+                    title = music.title,
+                    isPlaying = isPlaying,
+                    artUri = music.uri.toUri(),
+                    onClick = {
+                        musicViewModel.playSong(musicInPlaylist, idx, sourceId = "playlist_$playlistId", sourceName = playlist!!.name)
                     },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isPlaying) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                        .clickable {
-                            musicViewModel.playSong(musicInPlaylist, idx, sourceId = "playlist_$playlistId", sourceName = playlist.name)
-                        },
-                    trailingContent = {
+                    leading = if (isPlaying) {
+                        {
+                            Icon(
+                                painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
+                                contentDescription = "Playing",
+                                modifier = Modifier.size(24.dp).padding(end = 8.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else null,
+                    trailing = {
                         IconButton({
-                            musicViewModel.removeMusicFromPlaylist(playlistId, music.id) {
-                            scope.launch {
-                                    val musicIds = musicViewModel.getMusicInPlaylist(playlistId).toSet()
-                                    musicInPlaylist = allMusic.filter { it.id in musicIds }
-                                }
-                            }
+                            musicViewModel.removeMusicFromPlaylist(playlistId, music.id)
                         }) {
                             IconClose()
                         }
                     },
-                    leadingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (isPlaying) {
-                                Icon(
-                                    painter = painterResource(com.vayunmathur.library.R.drawable.outline_play_arrow_24),
-                                    contentDescription = "Playing",
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .padding(end = 8.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            AlbumArt(music.uri.toUri(), Modifier.size(48.dp))
-                        }
-                    }
                 )
             }
         }

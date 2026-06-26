@@ -13,7 +13,40 @@ import com.vayunmathur.music.data.Music
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlin.random.Random
+
+/** Typed model of a playback queue's origin, encoded as the string id stored on each queue. */
+sealed interface PlaybackSource {
+    val id: String
+
+    data object AllSongs : PlaybackSource {
+        override val id = "all_songs"
+    }
+
+    data class Album(val albumId: Long) : PlaybackSource {
+        override val id = "album_$albumId"
+    }
+
+    data class Playlist(val playlistId: Long) : PlaybackSource {
+        override val id = "playlist_$playlistId"
+    }
+
+    data class Artist(val artistId: Long) : PlaybackSource {
+        override val id = "artist_$artistId"
+    }
+
+    companion object {
+        fun parse(id: String?): PlaybackSource? = when {
+            id == null -> null
+            id == AllSongs.id -> AllSongs
+            id.startsWith("album_") -> id.removePrefix("album_").toLongOrNull()?.let(::Album)
+            id.startsWith("playlist_") -> id.removePrefix("playlist_").toLongOrNull()?.let(::Playlist)
+            id.startsWith("artist_") -> id.removePrefix("artist_").toLongOrNull()?.let(::Artist)
+            else -> null
+        }
+    }
+}
 
 class PlaybackManager private constructor(context: Context) {
 
@@ -79,17 +112,21 @@ class PlaybackManager private constructor(context: Context) {
 
     private fun startProgressUpdateLoop() {
         scope.launch {
-            while (true) {
-                controller?.let {
-                    _currentPosition.value = it.currentPosition
-                    _duration.value = it.duration.coerceAtLeast(0L)
+            _isPlaying.collectLatest { playing ->
+                if (!playing) return@collectLatest
+                while (true) {
+                    controller?.let {
+                        _currentPosition.value = it.currentPosition
+                        _duration.value = it.duration.coerceAtLeast(0L)
+                    }
+                    delay(1000)
                 }
-                delay(1000)
             }
         }
     }
 
     fun playSong(songs: List<Music>, startWithIndex: Int, sourceId: String? = null, sourceName: String? = null) {
+        if (songs.isEmpty() || startWithIndex !in songs.indices) return
         _currentSource.value = sourceId
         _currentSourceName.value = sourceName
         playSongsInternal(songs, startWithIndex, shuffle = false)
@@ -104,6 +141,7 @@ class PlaybackManager private constructor(context: Context) {
     }
 
     private fun playSongsInternal(songs: List<Music>, startWithIndex: Int, shuffle: Boolean) {
+        if (songs.isEmpty() || startWithIndex !in songs.indices) return
         val player = controller ?: return
 
         player.repeatMode = Player.REPEAT_MODE_ALL
@@ -130,7 +168,10 @@ class PlaybackManager private constructor(context: Context) {
     }
 
     fun togglePlayPause() = controller?.let { if (it.isPlaying) it.pause() else it.play() }
-    fun seekTo(pos: Long) = controller?.seekTo(pos)
+    fun seekTo(pos: Long) {
+        controller?.seekTo(pos)
+        _currentPosition.value = pos
+    }
     fun skipNext() = controller?.seekToNext()
     fun skipPrevious() = controller?.seekToPrevious()
 

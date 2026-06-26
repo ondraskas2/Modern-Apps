@@ -1,12 +1,15 @@
 package com.vayunmathur.pdf.util
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.util.Log
 import com.vayunmathur.pdf.model.CapturedImage
+import com.vayunmathur.pdf.model.Quadrilateral
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.FileOutputStream
@@ -48,32 +51,9 @@ suspend fun savePdfToUri(context: Context, images: List<CapturedImage>, targetUr
 
                 when {
                     quadrilateral != null -> {
-                        // Apply perspective transform using Matrix.setPolyToPoly
-                        // This maps the 4 corners of the quadrilateral to the 4 corners of the output rectangle
-                        val srcPoints = quadrilateral.toSrcPoints(bitmap.width, bitmap.height)
-                        val dstPoints = floatArrayOf(
-                            0f, 0f,
-                            targetWidth.toFloat(), 0f,
-                            targetWidth.toFloat(), targetHeight.toFloat(),
-                            0f, targetHeight.toFloat()
-                        )
-                        val matrix = Matrix()
-                        val success = matrix.setPolyToPoly(srcPoints, 0, dstPoints, 0, 4)
-                        if (!success) {
-                            Log.w("PdfExporter", "setPolyToPoly failed, falling back to bounding rect crop")
-                            // Fallback to bounding rect if perspective transform fails
-                            val bounds = quadrilateral.toBoundingRect()
-                            val srcRect = android.graphics.Rect(
-                                (bounds.left * bitmap.width).roundToInt(),
-                                (bounds.top * bitmap.height).roundToInt(),
-                                (bounds.right * bitmap.width).roundToInt(),
-                                (bounds.bottom * bitmap.height).roundToInt()
-                            )
-                            val dstRect = android.graphics.Rect(0, 0, targetWidth, targetHeight)
-                            page.canvas.drawBitmap(bitmap, srcRect, dstRect, null)
-                        } else {
-                            page.canvas.drawBitmap(bitmap, matrix, null)
-                        }
+                        val warped = warpQuadToBitmap(bitmap, quadrilateral, targetWidth, targetHeight)
+                        page.canvas.drawBitmap(warped, 0f, 0f, null)
+                        warped.recycle()
                     }
                     crop != null -> {
                         val srcRect = android.graphics.Rect(
@@ -110,5 +90,34 @@ suspend fun savePdfToUri(context: Context, images: List<CapturedImage>, targetUr
         false
     } finally {
         pdfDocument.close()
+    }
+}
+
+/**
+ * Perspective-warps [quad] (normalized corners) out of [src] into a new [width]x[height] bitmap.
+ * Falls back to a bounding-box crop when the perspective matrix is degenerate. Caller owns the result.
+ */
+fun warpQuadToBitmap(src: Bitmap, quad: Quadrilateral, width: Int, height: Int): Bitmap {
+    val targetWidth = width.coerceAtLeast(1)
+    val targetHeight = height.coerceAtLeast(1)
+    val srcPoints = quad.toSrcPoints(src.width, src.height)
+    val dstPoints = floatArrayOf(
+        0f, 0f,
+        targetWidth.toFloat(), 0f,
+        targetWidth.toFloat(), targetHeight.toFloat(),
+        0f, targetHeight.toFloat()
+    )
+    val matrix = Matrix()
+    return if (matrix.setPolyToPoly(srcPoints, 0, dstPoints, 0, 4)) {
+        Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).also {
+            Canvas(it).drawBitmap(src, matrix, null)
+        }
+    } else {
+        val bounds = quad.toBoundingRect()
+        val left = (bounds.left * src.width).roundToInt().coerceIn(0, src.width - 1)
+        val top = (bounds.top * src.height).roundToInt().coerceIn(0, src.height - 1)
+        val w = targetWidth.coerceAtMost(src.width - left)
+        val h = targetHeight.coerceAtMost(src.height - top)
+        Bitmap.createBitmap(src, left, top, w, h)
     }
 }

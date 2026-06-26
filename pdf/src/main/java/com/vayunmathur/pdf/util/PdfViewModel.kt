@@ -3,7 +3,6 @@ package com.vayunmathur.pdf.util
 import android.app.Application
 import android.net.Uri
 import android.util.Log
-import androidx.compose.ui.geometry.Rect
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.pdf.EditablePdfDocument
@@ -14,7 +13,6 @@ import com.vayunmathur.pdf.R
 import com.vayunmathur.pdf.model.CapturedImage
 import com.vayunmathur.pdf.model.Quadrilateral
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -51,14 +49,6 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
         val current = _capturedImages.value
         if (from !in current.indices || to !in current.indices) return
         _capturedImages.value = current.toMutableList().also { it.add(to, it.removeAt(from)) }
-    }
-
-    fun updateCrop(index: Int, crop: Rect) {
-        val current = _capturedImages.value
-        if (index !in current.indices) return
-        _capturedImages.value = current.toMutableList().also {
-            it[index] = it[index].copy(cropRect = crop, quadrilateral = Quadrilateral.fromRect(crop))
-        }
     }
 
     fun updateQuadrilateral(index: Int, quadrilateral: Quadrilateral) {
@@ -122,7 +112,6 @@ class PdfViewModel(application: Application) : AndroidViewModel(application) {
         val ctx = getApplication<Application>()
         _passwordError.value = null
         viewModelScope.launch {
-            delay(1000)
             try {
                 val doc = pdfLoader.openDocument(uri, password) as EditablePdfDocument
                 _pdfDocument.value = doc

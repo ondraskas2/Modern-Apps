@@ -1,4 +1,4 @@
-@file:OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+@file:OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class, kotlinx.coroutines.FlowPreview::class)
 
 package com.vayunmathur.contacts.util
 import android.app.Application
@@ -8,7 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.provider.ContactsContract
 import android.util.Log
-import androidx.core.graphics.scale
+import androidx.collection.LruCache
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.contacts.data.Address
@@ -35,13 +35,18 @@ import com.vayunmathur.library.util.DataStoreUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -72,7 +77,7 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
             if (query.isBlank()) {
                 contactDao.getContactsFlow()
             } else {
-                contactDao.search("*$query*")
+                contactDao.search("$query*")
             }
         },
         hiddenAccounts
@@ -90,7 +95,7 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         resolver.registerContentObserver(ContactsContract.Groups.CONTENT_URI, true, observer)
         send(fetchGroups())
         awaitClose { resolver.unregisterContentObserver(observer) }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private fun fetchGroups(): List<ContactGroup> {
         val resolver = getApplication<Application>().contentResolver
@@ -119,16 +124,31 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     val accounts: StateFlow<List<ContactAccount>> = _accounts.asStateFlow()
 
     private val _lastSelectedAccount = MutableStateFlow<ContactAccount?>(null)
-    val lastSelectedAccount: StateFlow<ContactAccount?> = _lastSelectedAccount.asStateFlow()
 
     val isCalendarSyncEnabled: StateFlow<Boolean> = dataStore.booleanFlow("calendar_sync_enabled")
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), dataStore.getBoolean("calendar_sync_enabled", false))
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val showAccountLabels: StateFlow<Boolean> = dataStore.booleanFlow("show_account_labels")
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), dataStore.getBoolean("show_account_labels", true))
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    // Coalesces system-contact change notifications; collected with debounce so a
+    // burst of provider writes triggers a single re-sync instead of one per change.
+    private val syncTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     init {
-        syncWithSystemContacts()
+        viewModelScope.launch {
+            val resolver = getApplication<Application>().contentResolver
+            val observer = object : android.database.ContentObserver(null) {
+                override fun onChange(selfChange: Boolean) { syncTrigger.tryEmit(Unit) }
+            }
+            resolver.registerContentObserver(ContactsContract.AUTHORITY_URI, true, observer)
+            syncTrigger.tryEmit(Unit) // initial sync
+            try {
+                syncTrigger.debounce(500).collectLatest { syncFromSystem() }
+            } finally {
+                resolver.unregisterContentObserver(observer)
+            }
+        }
         loadAccounts()
         loadLastSelectedAccount()
     }
@@ -160,37 +180,37 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun syncWithSystemContacts() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val systemContacts = com.vayunmathur.contacts.data.Contact.getAllContacts(getApplication())
-                val localContacts = contacts.value
-                
-                val toUpsert = systemContacts.map { ContactEntity.fromContact(it) }
-                val searchEntities = systemContacts.map { contact ->
-                    ContactSearchEntity(
-                        rowid = contact.id,
-                        displayName = contact.name.value,
-                        nickname = contact.nickname.value,
-                        phoneNumbers = contact.details.phoneNumbers.joinToString(" ") { it.number },
-                        emails = contact.details.emails.joinToString(" ") { it.address },
-                        notes = contact.details.notes.joinToString(" ") { it.content },
-                        organization = contact.details.orgs.joinToString(" ") { it.company }
-                    )
-                }
-                
-                val systemIds = systemContacts.map { it.id }.toSet()
-                val toDelete = localContacts.map { it.id }.filter { it !in systemIds }
-                
-                contactDao.syncContacts(toUpsert, toDelete, searchEntities)
-                Log.d("ContactViewModel", "Sync complete: ${toUpsert.size} upserted, ${toDelete.size} deleted")
-            } catch (e: Exception) {
-                Log.e("ContactViewModel", "Error syncing contacts", e)
-            }
-        }
+    /** Requests a debounced re-sync from the system contacts provider. */
+    fun loadContacts() {
+        syncTrigger.tryEmit(Unit)
     }
 
-    fun loadContacts() = syncWithSystemContacts()
+    private suspend fun syncFromSystem() = withContext(Dispatchers.IO) {
+        try {
+            val systemContacts = com.vayunmathur.contacts.data.Contact.getAllContacts(getApplication())
+            val localContacts = contacts.value
+
+            val toUpsert = systemContacts.map { ContactEntity.fromContact(it) }
+            val searchEntities = systemContacts.map { contact ->
+                ContactSearchEntity(
+                    rowid = contact.id,
+                    displayName = contact.name.value,
+                    nickname = contact.nickname.value,
+                    phoneNumbers = contact.details.phoneNumbers.joinToString(" ") { it.number },
+                    emails = contact.details.emails.joinToString(" ") { it.address },
+                    notes = contact.details.notes.joinToString(" ") { it.content },
+                    organization = contact.details.orgs.joinToString(" ") { it.company }
+                )
+            }
+
+            val systemIds = systemContacts.map { it.id }.toSet()
+            val toDelete = localContacts.map { it.id }.filter { it !in systemIds }
+
+            contactDao.syncContacts(toUpsert, toDelete, searchEntities)
+        } catch (e: Exception) {
+            Log.e("ContactViewModel", "Error syncing contacts", e)
+        }
+    }
 
     fun loadAccounts() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -205,29 +225,34 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
                 val cursor = app.contentResolver.query(uri, projection, null, null, null)
                 cursor?.use {
                     while (it.moveToNext()) {
-                        try {
-                            val name = it.getString(0) ?: ""
-                            val type = it.getString(1) ?: ""
-                            accountSet.add(ContactAccount(name, type))
-                        } catch (e: Exception) {
-                            Log.e("ContactViewModel", "Error reading account from cursor", e)
-                        }
+                        val name = it.getString(0) ?: ""
+                        val type = it.getString(1) ?: ""
+                        accountSet.add(ContactAccount(name, type))
                     }
                 }
             } catch (e: Exception) {
                 Log.e("ContactViewModel", "Error querying raw contacts for accounts", e)
             }
-            // Also include any accounts from DataStore that might not have contacts yet
-            val savedAccounts = dataStore.getString("extra_accounts")?.split(",")?.filter { it.isNotEmpty() }?.mapNotNull { 
-                try {
-                    val parts = it.split("|")
-                    ContactAccount(parts[0], parts.getOrElse(1) { "com.vayunmathur.contacts.local" })
-                } catch (e: Exception) {
-                    Log.e("ContactViewModel", "Error parsing extra account: $it", e)
-                    null
+            // Also include any accounts from DataStore that might not have contacts yet.
+            // Stored as a string set of "name|type" entries to avoid the comma/pipe
+            // corruption of the previous single comma-joined string.
+            // Backward-compat: older builds stored these as a single comma-joined
+            // String under "extra_accounts". Reading that String through a string-set
+            // key throws, so migrate it once into the new set key, then blank the old one.
+            val legacyAccounts = dataStore.getString("extra_accounts").orEmpty()
+            if (legacyAccounts.isNotBlank()) {
+                legacyAccounts.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
+                    dataStore.addStringToSetIfAbsent("extra_accounts_set", it)
                 }
-            } ?: emptyList()
-            
+                dataStore.setString("extra_accounts", "")
+            }
+            val savedAccounts = dataStore.stringSetFlow("extra_accounts_set").first().mapNotNull { entry ->
+                val parts = entry.split("|")
+                parts.firstOrNull()?.takeIf { it.isNotEmpty() }?.let { name ->
+                    ContactAccount(name, parts.getOrElse(1) { "com.vayunmathur.contacts.local" })
+                }
+            }
+
             _accounts.value = (accountSet + savedAccounts).toList().sortedBy { it.name }
         }
     }
@@ -256,11 +281,7 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
 
     fun createAccount(name: String, type: String = "com.vayunmathur.contacts.local") {
         viewModelScope.launch {
-            val current = dataStore.getString("extra_accounts") ?: ""
-            val entry = "$name|$type"
-            if (!current.contains(entry)) {
-                val newValue = if (current.isEmpty()) entry else "$current,$entry"
-                dataStore.setString("extra_accounts", newValue)
+            if (dataStore.addStringToSetIfAbsent("extra_accounts_set", "$name|$type")) {
                 loadAccounts()
             }
         }
@@ -300,29 +321,6 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun addContactToGroup(contactId: Long, groupId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val resolver = getApplication<Application>().contentResolver
-            val values = android.content.ContentValues().apply {
-                put(ContactsContract.Data.RAW_CONTACT_ID, contactId)
-                put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE)
-                put(ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID, groupId)
-            }
-            resolver.insert(ContactsContract.Data.CONTENT_URI, values)
-            syncWithSystemContacts()
-        }
-    }
-
-    fun removeContactFromGroup(contactId: Long, groupId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val resolver = getApplication<Application>().contentResolver
-            val where = "${ContactsContract.Data.RAW_CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID} = ?"
-            val args = arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE, groupId.toString())
-            resolver.delete(ContactsContract.Data.CONTENT_URI, where, args)
-            syncWithSystemContacts()
-        }
-    }
-
     fun addContactsToGroup(contactIds: List<Long>, groupId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             val resolver = getApplication<Application>().contentResolver
@@ -335,7 +333,6 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
                     .build())
             }
             resolver.applyBatch(ContactsContract.AUTHORITY, ops)
-            syncWithSystemContacts()
         }
     }
 
@@ -350,14 +347,6 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
                     .build())
             }
             resolver.applyBatch(ContactsContract.AUTHORITY, ops)
-            syncWithSystemContacts()
-        }
-    }
-
-    fun getGroupsForContact(contactId: Long): Flow<List<ContactGroup>> {
-        return combine(groups, contactGroupMemberships) { groups, memberships ->
-            val groupIds = memberships.filter { it.contactId == contactId }.map { it.groupId }
-            groups.filter { it.id in groupIds }
         }
     }
 
@@ -372,17 +361,13 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
         return contacts.map { contacts -> contacts.find { it.id == contactId } }
     }
 
-    fun loadContact(contactId: Long) = syncWithSystemContacts()
-
     fun saveContact(contact: com.vayunmathur.contacts.data.Contact) {
         viewModelScope.launch(Dispatchers.IO) {
             val contactId = contact.id
             val details = contact.details
             val oldDetails = contacts.value.find { it.id == contactId }?.details ?: com.vayunmathur.contacts.data.ContactDetails.empty()
             contact.save(getApplication(), details, oldDetails)
-
-            // Reload from system to ensure we have the latest (especially for new contacts)
-            syncWithSystemContacts()
+            // The system-contacts ContentObserver picks up the write and re-syncs.
         }
     }
 
@@ -395,11 +380,7 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     // in a small LRU keyed by the raw Base64 string so we decode once.
     // ---------------------------------------------------------------------
 
-    private val photoCache = object : LinkedHashMap<String, Bitmap?>(32, 0.75f, true) {
-        override fun removeEldestEntry(
-            eldest: MutableMap.MutableEntry<String, Bitmap?>,
-        ): Boolean = size > 32
-    }
+    private val photoCache = LruCache<String, Bitmap>(32)
 
     /**
      * Returns the decoded [Bitmap] for the Base64-encoded contact photo, or
@@ -408,11 +389,11 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
      */
     @Synchronized
     fun decodePhoto(base64: String): Bitmap? {
-        photoCache[base64]?.let { return it }
+        photoCache.get(base64)?.let { return it }
         return try {
             val bytes = Base64.decode(base64)
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also {
-                photoCache[base64] = it
+                photoCache.put(base64, it)
             }
         } catch (e: Exception) {
             Log.e("ContactViewModel", "Error decoding contact photo", e)
@@ -536,35 +517,11 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
             } else bitmap
             val baos = okio.Buffer()
             scaled.compress(Bitmap.CompressFormat.JPEG, 100, baos.outputStream())
-            val encoded = android.util.Base64.encodeToString(baos.readByteArray(), android.util.Base64.NO_WRAP)
+            val encoded = Base64.encode(baos.readByteArray())
             updateEditDraft { draft ->
                 val newPhoto = draft.photo?.withValue(encoded)
                     ?: com.vayunmathur.contacts.data.Photo(0, encoded)
                 draft.copy(photo = newPhoto)
-            }
-        }
-    }
-
-    fun setEditDraftPhotoFromUri(uri: android.net.Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val ctx = getApplication<Application>()
-                val bytes = ctx.contentResolver.openInputStream(uri)?.use { input ->
-                    val bitmap = BitmapFactory.decodeStream(input)
-                        ?: return@launch
-                    val scaled = bitmap.scale(1024, 1024)
-                    val baos = okio.Buffer()
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 100, baos.outputStream())
-                    val encoded = android.util.Base64.encodeToString(baos.readByteArray(), android.util.Base64.NO_WRAP)
-                    encoded
-                } ?: return@launch
-                updateEditDraft { draft ->
-                    val newPhoto = draft.photo?.withValue(bytes)
-                        ?: com.vayunmathur.contacts.data.Photo(0, bytes)
-                    draft.copy(photo = newPhoto)
-                }
-            } catch (e: Exception) {
-                Log.e("ContactViewModel", "Error decoding picked photo: $uri", e)
             }
         }
     }

@@ -23,7 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -42,11 +42,11 @@ import com.vayunmathur.library.ui.CommonSearchBar
 import com.vayunmathur.library.ui.IconAdd
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconDelete
-import com.vayunmathur.library.util.DatabaseHelper
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.R as LibraryR
 import com.vayunmathur.notes.Route
 import com.vayunmathur.notes.data.Note
+import com.vayunmathur.notes.data.noteDbConfigs
 import com.vayunmathur.notes.util.NotesViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -55,14 +55,12 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 @Composable
 fun NotesListPage(backStack: NavBackStack<Route>, viewModel: NotesViewModel) {
     val context = LocalContext.current
-    val notes by viewModel.notes.collectAsState()
+    val notes by viewModel.notes.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
-    val filtered by remember(notes, searchQuery) {
-        derivedStateOf {
-            if (searchQuery.isBlank()) notes
-            else notes.filter { it.toString().contains(searchQuery, true) }
-        }
+    val filtered = remember(notes, searchQuery) {
+        if (searchQuery.isBlank()) notes
+        else notes.filter { it.toString().contains(searchQuery, true) }
     }
 
     BackHandler(enabled = searchQuery.isNotEmpty()) {
@@ -179,9 +177,8 @@ fun NotesListPage(backStack: NavBackStack<Route>, viewModel: NotesViewModel) {
                         )
                     },
                     actions = {
-                        val pass = remember { DatabaseHelper(context).getPassphrase() }
                         BackupButtons(
-                            dbConfigs = listOf("notes-db" to pass),
+                            dbConfigs = remember { noteDbConfigs(context) },
                             extraFiles = emptyList()
                         )
                     }

@@ -9,6 +9,7 @@ import com.vayunmathur.clock.data.ClockDatabase
 import com.vayunmathur.library.util.buildDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.vayunmathur.clock.ui.AlarmActivity
 import com.vayunmathur.clock.R
@@ -44,13 +45,18 @@ class AlarmReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
 
         val db = context.buildDatabase<ClockDatabase>(useDeviceProtectedStorage = true)
-        CoroutineScope(Dispatchers.IO).launch {
-            val alarm = db.alarmDao().get(alarmId)
-            if(alarm.days == 0) {
-                db.alarmDao().upsert(alarm.copy(enabled = false))
-            } else {
-                val alarmScheduler = AlarmScheduler.get()
-                alarmScheduler.schedule(context, alarm)
+        val pendingResult = goAsync()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                val alarm = db.alarmDao().get(alarmId)
+                if (alarm.days == 0) {
+                    db.alarmDao().upsert(alarm.copy(enabled = false))
+                } else {
+                    AlarmScheduler.schedule(context, alarm)
+                }
+            } catch (_: Exception) {
+            } finally {
+                pendingResult.finish()
             }
         }
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
