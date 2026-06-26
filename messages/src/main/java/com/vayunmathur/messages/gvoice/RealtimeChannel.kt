@@ -102,12 +102,12 @@ class RealtimeChannel(
         var ackId = 0L
         var failedRequests = 0
         var lastResubscribeMs = System.currentTimeMillis()
-        var anyEventSeen = false
+        var connectedThisRun = false
 
         while (true) {
             if (System.currentTimeMillis() - lastResubscribeMs > FORCE_RESUBSCRIBE_INTERVAL_MS) {
                 Log.i(TAG, "force re-subscribe (interval elapsed)")
-                subscription = subscribe() ?: return anyEventSeen
+                subscription = subscribe() ?: return connectedThisRun
                 ackId = 0
                 lastResubscribeMs = System.currentTimeMillis()
             }
@@ -138,8 +138,12 @@ class RealtimeChannel(
                         ChannelOutcome.Error(resp.status.value)
                     }
                 } else {
+                    // A 2xx long-poll means the channel is healthy regardless of
+                    // whether any events arrived this cycle; reset the transient
+                    // retry budget on clean-vs-error, not on event presence.
+                    connectedThisRun = true
                     if (failedRequests > 0 || ackId == 0L) onEvent(RealtimeEvent.Connected)
-                    val newAckId = readChunks(resp, ackId).also { anyEventSeen = anyEventSeen || it.eventCount > 0 }
+                    val newAckId = readChunks(resp, ackId)
                     ackId = newAckId.lastAckId
                     if (newAckId.eventCount > 0) failedRequests = 0
                     if (newAckId.needResubscribe) {
@@ -159,12 +163,12 @@ class RealtimeChannel(
                     }
                     val sleep = ((failedRequests - 1) * 2_000L).coerceAtLeast(0)
                     if (sleep > 0) delay(sleep)
-                    subscription = subscribe() ?: return anyEventSeen
+                    subscription = subscribe() ?: return connectedThisRun
                     ackId = 0
                     lastResubscribeMs = System.currentTimeMillis()
                 }
                 ChannelOutcome.Reconnect -> {
-                    subscription = subscribe() ?: return anyEventSeen
+                    subscription = subscribe() ?: return connectedThisRun
                     ackId = 0
                     lastResubscribeMs = System.currentTimeMillis()
                 }
@@ -172,7 +176,7 @@ class RealtimeChannel(
                     if (outcome.status == 401 || outcome.status == 403) {
                         throw AuthException("HTTP ${outcome.status}")
                     }
-                    return anyEventSeen
+                    return connectedThisRun
                 }
                 ChannelOutcome.Ok -> {
                 }

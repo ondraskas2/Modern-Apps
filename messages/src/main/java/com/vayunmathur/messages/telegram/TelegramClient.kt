@@ -615,10 +615,15 @@ object TelegramClient {
                 existingAuthKey = authKey,
                 existingAuthKeyId = authKeyId,
                 existingSalt = auth.salt ?: 0L,
-                existingSessionId = null,
+                existingSessionId = auth.sessionId,
             )
             apiClient = client
             client.onDisconnected = { handleDisconnect() }
+            // Persist the MTProto session id so reconnects resume the same session
+            // (and its server-side state) instead of re-backfilling from scratch.
+            if (auth.sessionId == null) {
+                runCatching { auth.copy(sessionId = client.sessionId).save(appContext) }
+            }
             reconnectAttempt = 0
             _state.value = State.Connected
             startUpdateListener(client)

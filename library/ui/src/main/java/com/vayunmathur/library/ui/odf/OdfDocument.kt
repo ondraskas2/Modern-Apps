@@ -1,4 +1,4 @@
-package com.vayunmathur.office.odf
+package com.vayunmathur.library.ui.odf
 
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection

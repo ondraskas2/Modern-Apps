@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.Typography
 import com.vayunmathur.office.odf.*
+import com.vayunmathur.library.ui.odf.*
 import com.vayunmathur.office.ui.*
 import com.vayunmathur.office.util.OfficeViewModel
 import kotlinx.coroutines.launch

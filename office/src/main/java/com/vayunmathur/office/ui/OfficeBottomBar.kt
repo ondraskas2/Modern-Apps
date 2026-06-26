@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.office.R
 import com.vayunmathur.office.odf.*
+import com.vayunmathur.library.ui.odf.*
 import com.vayunmathur.office.util.OfficeViewModel
 import com.vayunmathur.library.ui.EditorBaseButtons
 import com.vayunmathur.library.ui.EditorFormat

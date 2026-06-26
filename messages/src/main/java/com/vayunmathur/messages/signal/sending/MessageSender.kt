@@ -7,6 +7,7 @@ import com.vayunmathur.messages.signal.groups.SenderKeyManager
 import com.vayunmathur.messages.signal.store.SignalGroupStore
 import com.vayunmathur.messages.signal.store.SignalProtocolStoreImpl
 import com.vayunmathur.messages.signal.web.SignalWebSocket
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import org.signal.libsignal.metadata.SealedSessionCipher
@@ -41,6 +42,7 @@ class MessageSender(
     private val aciIdentityKeyPair: IdentityKeyPair? = null,
     private val pniIdentityKeyPair: IdentityKeyPair? = null,
     private val accountRecord: com.vayunmathur.messages.signal.proto.AccountRecord? = null,
+    private val encryptionLock: kotlinx.coroutines.sync.Mutex? = null,
 ) {
     private val protocolStore = SignalProtocolStoreImpl(
         sessionStore, identityKeyStore, preKeyStore, signedPreKeyStore, kyberPreKeyStore, senderKeyStore
@@ -426,6 +428,19 @@ class MessageSender(
         address: SignalProtocolAddress,
         paddedContent: ByteArray,
         sealedSender: Boolean = false,
+    ): Triple<Int, Int, String> {
+        // Serialize ratchet/session mutation with the decrypt path (same lock
+        // instance is shared with SignalClient); libsignal sessions are not
+        // safe under concurrent encrypt/decrypt for the same recipient.
+        val lock = encryptionLock
+        return if (lock != null) lock.withLock { encryptForLocked(address, paddedContent, sealedSender) }
+        else encryptForLocked(address, paddedContent, sealedSender)
+    }
+
+    private suspend fun encryptForLocked(
+        address: SignalProtocolAddress,
+        paddedContent: ByteArray,
+        sealedSender: Boolean,
     ): Triple<Int, Int, String> {
         val regId = protocolStore.loadSession(address).remoteRegistrationId
 

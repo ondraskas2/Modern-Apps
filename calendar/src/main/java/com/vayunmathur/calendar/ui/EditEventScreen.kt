@@ -97,8 +97,8 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     val now = znow.time
 
     var title by remember { mutableStateOf(event?.title ?: editRoute.title ?: "") }
-    var description by remember { mutableStateOf(TextFieldValue(event?.description ?: editRoute.description ?: "")) }
-    var descriptionFocused by remember { mutableStateOf(false) }
+    var descriptionText by remember { mutableStateOf(event?.description ?: editRoute.description ?: "") }
+    val descriptionController = com.vayunmathur.library.ui.rememberOdfMarkdownEditorController(initialMarkdown = descriptionText) { descriptionText = it }
     var location by remember { mutableStateOf(event?.location ?: editRoute.location ?: "") }
     // default to the event's calendar if editing; otherwise prefer the first editable calendar
     var selectedCalendar by remember { mutableLongStateOf(event?.calendarID ?: (calendars.firstOrNull { it.canModify }?.id ?: calendars.firstOrNull()?.id ?: -1L)) }
@@ -187,11 +187,8 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
             IconNavigation(backStack)
         })
     }, bottomBar = {
-        if (descriptionFocused) {
-            com.vayunmathur.library.ui.MarkdownFormatToolbar(
-                value = description,
-                onValueChange = { description = it },
-            )
+        if (descriptionController.focused) {
+            com.vayunmathur.library.ui.OdfMarkdownEditorToolbar(descriptionController)
         }
     }, floatingActionButton = {
         FloatingActionButton(onClick = {
@@ -200,7 +197,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
                 id = eventId,
                 calendarID = selectedCalendar,
                 title = title,
-                description = description.text,
+                description = descriptionText,
                 location = location,
                 color = event?.color,
                 start = startDate.atTime(startTime).toInstant(buildTz).toEpochMilliseconds(),
@@ -235,11 +232,8 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             )
-            com.vayunmathur.library.ui.MarkdownEditor(
-                value = description,
-                onValueChange = { description = it },
-                placeholder = stringResource(R.string.label_description),
-                onFocusChanged = { descriptionFocused = it },
+            com.vayunmathur.library.ui.OdfMarkdownEditorField(
+                controller = descriptionController,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp)

@@ -59,6 +59,9 @@ object MetaProtocol {
     const val THREAD_TYPE_COMMUNITY_GROUP = 7
     const val THREAD_TYPE_UNKNOWN = 0
 
+    // Message-ID epoch (messagix/methods/methods.go MetaEpochMS)
+    const val META_EPOCH_MS = 1072915200000L
+
     // Folder names (from connector/events.go)
     const val FOLDER_INBOX = "inbox"
     const val FOLDER_OTHER = "other"
@@ -1072,190 +1075,180 @@ object MetaProtocol {
         return result
     }
 
+    // Typed positional accessors for Lightspeed args. Indices match the Go
+    // `index:` struct tags in messagix/table/{messages,threads}.go — they are
+    // non-sequential, so reading by Go index is mandatory for correctness.
+    private fun List<Any?>.argStr(i: Int): String? =
+        getOrNull(i)?.toString()?.takeIf { it.isNotEmpty() }
+
+    private fun List<Any?>.argLong(i: Int): Long? = when (val v = getOrNull(i)) {
+        is Long -> v
+        is Int -> v.toLong()
+        is Double -> v.toLong()
+        is String -> v.toLongOrNull()
+        else -> null
+    }
+
+    private fun List<Any?>.argBool(i: Int): Boolean = when (val v = getOrNull(i)) {
+        is Boolean -> v
+        is Long -> v != 0L
+        is Int -> v != 0
+        else -> false
+    }
+
     private fun parseSingleEvent(event: LightspeedDecoder.DecodedEvent): IncomingEvent? {
         val args = event.args
         return when (event.procedureName) {
-            "LSInsertNewMessageRange",
+            // Shared layout (table/messages.go LSUpsertMessage/LSInsertMessage/
+            // LSDeleteThenInsertMessage): text@0, threadKey@3, timestampMs@5,
+            // messageId@8, senderId@10, isUnsent@17, replySourceId@23.
             "LSUpsertMessage",
-            "LSInsertMessage" -> {
-                if (args.size < 5) return null
-                val text = args.getOrNull(0)?.toString() ?: ""
-                val threadId = args.getOrNull(1)?.toString() ?: return null
-                val messageId = args.getOrNull(2)?.toString() ?: return null
-                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
-                val senderId = args.getOrNull(4)?.toString() ?: ""
-                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
-                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
-                IncomingEvent.MessageReceived(
-                    MetaMessageEnriched(
-                        messageId = messageId,
-                        threadId = threadId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        text = text,
-                        timestamp = timestamp,
-                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
-                        replyToMessageId = replyToId,
-                    )
-                )
-            }
+            "LSInsertMessage",
             "LSDeleteThenInsertMessage" -> {
-                if (args.size < 5) return null
-                val isUnsent = args.getOrNull(6) as? Boolean ?: false
-                if (isUnsent) {
-                    val messageId = args.getOrNull(2)?.toString() ?: return null
-                    val threadId = args.getOrNull(1)?.toString() ?: return null
+                val threadId = args.argLong(3)?.toString() ?: return null
+                val messageId = args.argStr(8) ?: return null
+                val isUnsent = args.argBool(17)
+                if (isUnsent && event.procedureName == "LSDeleteThenInsertMessage") {
                     return IncomingEvent.MessageDeleted(threadId, messageId)
                 }
-                val text = args.getOrNull(0)?.toString() ?: ""
-                val threadId = args.getOrNull(1)?.toString() ?: return null
-                val messageId = args.getOrNull(2)?.toString() ?: return null
-                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
-                val senderId = args.getOrNull(4)?.toString() ?: ""
-                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
-                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
                 IncomingEvent.MessageReceived(
                     MetaMessageEnriched(
                         messageId = messageId,
                         threadId = threadId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        text = text,
-                        timestamp = timestamp,
+                        senderId = args.argLong(10)?.toString() ?: "",
+                        senderName = null,
+                        text = args.argStr(0) ?: "",
+                        timestamp = args.argLong(5) ?: System.currentTimeMillis(),
                         isGroup = (threadId.toLongOrNull() ?: 0) < 0,
-                        replyToMessageId = replyToId,
-                    )
-                )
-            }
-            "LSReplaceOptimsiticMessage" -> {
-                if (args.size < 5) return null
-                val text = args.getOrNull(0)?.toString() ?: ""
-                val threadId = args.getOrNull(1)?.toString() ?: return null
-                val messageId = args.getOrNull(2)?.toString() ?: return null
-                val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
-                val senderId = args.getOrNull(4)?.toString() ?: ""
-                val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
-                val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
-                IncomingEvent.MessageReceived(
-                    MetaMessageEnriched(
-                        messageId = messageId,
-                        threadId = threadId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        text = text,
-                        timestamp = timestamp,
-                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
-                        replyToMessageId = replyToId,
+                        replyToMessageId = args.argStr(23),
+                        isUnsent = isUnsent,
                     )
                 )
             }
             "LSEditMessage" -> {
-                val messageId = args.getOrNull(0)?.toString() ?: return null
-                val newText = args.getOrNull(1)?.toString() ?: return null
-                val editCount = (args.getOrNull(2) as? Long) ?: 1L
+                // messageId@0, text@2, editCount@3
+                val messageId = args.argStr(0) ?: return null
+                val newText = args.argStr(2) ?: return null
+                val editCount = args.argLong(3) ?: 1L
                 IncomingEvent.MessageEdited(messageId, newText, editCount)
             }
             "LSDeleteMessage" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val messageId = args.getOrNull(1)?.toString() ?: return null
+                // threadKey@0, messageId@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val messageId = args.argStr(1) ?: return null
                 IncomingEvent.MessageDeleted(threadId, messageId)
             }
-            "LSUpsertReaction",
-            "LSReplaceOptimisticReaction" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val messageId = args.getOrNull(1)?.toString() ?: return null
-                val senderId = args.getOrNull(2)?.toString() ?: return null
-                val reaction = args.getOrNull(3)?.toString() ?: return null
-                if (reaction.isBlank()) {
+            "LSUpsertReaction" -> {
+                // threadKey@0, messageId@2, actorId@3, reaction@4
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val messageId = args.argStr(2) ?: return null
+                val senderId = args.argLong(3)?.toString() ?: return null
+                val reaction = args.argStr(4)
+                if (reaction.isNullOrBlank()) {
                     IncomingEvent.ReactionRemoved(threadId, messageId, senderId)
                 } else {
                     IncomingEvent.ReactionReceived(threadId, messageId, senderId, reaction)
                 }
             }
             "LSDeleteReaction" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val messageId = args.getOrNull(1)?.toString() ?: return null
-                val senderId = args.getOrNull(2)?.toString() ?: return null
+                // threadKey@0, messageId@1, actorId@2
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val messageId = args.argStr(1) ?: return null
+                val senderId = args.argLong(2)?.toString() ?: return null
                 IncomingEvent.ReactionRemoved(threadId, messageId, senderId)
             }
             "LSUpdateReadReceipt" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val senderId = args.getOrNull(1)?.toString() ?: return null
-                val watermark = (args.getOrNull(2) as? Long) ?: return null
+                // readWatermarkTimestampMs@0, threadKey@1, contactId@2
+                val watermark = args.argLong(0) ?: return null
+                val threadId = args.argLong(1)?.toString() ?: return null
+                val senderId = args.argLong(2)?.toString() ?: "self"
                 IncomingEvent.ReadReceipt(threadId, senderId, watermark)
             }
-            "LSMarkThreadRead",
+            "LSMarkThreadRead" -> {
+                // lastReadWatermarkTimestampMs@0, threadKey@1
+                val watermark = args.argLong(0) ?: return null
+                val threadId = args.argLong(1)?.toString() ?: return null
+                IncomingEvent.ReadReceipt(threadId, "self", watermark)
+            }
             "LSMarkThreadReadV2" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val watermark = (args.getOrNull(1) as? Long) ?: return null
+                // threadKey@0, lastReadWatermarkTimestampMs@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val watermark = args.argLong(1) ?: return null
                 IncomingEvent.ReadReceipt(threadId, "self", watermark)
             }
             "LSUpdateTypingIndicator" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val senderId = args.getOrNull(1)?.toString() ?: return null
-                val isTyping = args.getOrNull(2) == true || args.getOrNull(2) == 1L
-                IncomingEvent.TypingIndicator(threadId, senderId, isTyping)
+                // threadKey@0, senderId@1, isTyping@2
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val senderId = args.argLong(1)?.toString() ?: return null
+                IncomingEvent.TypingIndicator(threadId, senderId, args.argBool(2))
             }
             "LSSyncUpdateThreadName" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val newName = args.getOrNull(1)?.toString() ?: return null
+                // threadName@0, threadKey@1
+                val newName = args.argStr(0) ?: return null
+                val threadId = args.argLong(1)?.toString() ?: return null
                 IncomingEvent.ThreadNameChanged(threadId, newName)
             }
             "LSSetThreadImageURL" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val imageUrl = args.getOrNull(1)?.toString()
-                IncomingEvent.ThreadImageChanged(threadId, imageUrl)
+                // threadKey@0, imageURL@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                IncomingEvent.ThreadImageChanged(threadId, args.argStr(1))
             }
             "LSAddParticipantIdToGroupThread" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val participantId = args.getOrNull(1)?.toString() ?: return null
+                // threadKey@0, contactId@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val participantId = args.argLong(1)?.toString() ?: return null
                 IncomingEvent.ParticipantAdded(threadId, participantId)
             }
             "LSRemoveParticipantFromThread" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val participantId = args.getOrNull(1)?.toString() ?: return null
+                // threadKey@0, participantId@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val participantId = args.argLong(1)?.toString() ?: return null
                 IncomingEvent.ParticipantRemoved(threadId, participantId)
             }
             "LSVerifyThreadExists" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val threadType = (args.getOrNull(1) as? Long)?.toInt() ?: THREAD_TYPE_UNKNOWN
-                val folderName = args.getOrNull(2)?.toString() ?: FOLDER_INBOX
+                // threadKey@0, threadType@1, folderName@2
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val threadType = args.argLong(1)?.toInt() ?: THREAD_TYPE_UNKNOWN
+                val folderName = args.argStr(2) ?: FOLDER_INBOX
                 IncomingEvent.ThreadVerified(threadId, threadType, folderName)
             }
             "LSUpsertFolder" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
+                // threadKey@0
+                val threadId = args.argLong(0)?.toString() ?: return null
                 IncomingEvent.FolderSynced(threadId)
             }
             "LSMoveThreadToE2EECutoverFolder" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
+                // threadKey@0
+                val threadId = args.argLong(0)?.toString() ?: return null
                 IncomingEvent.ThreadMovedToE2EECutover(threadId)
             }
             "LSUpdateThreadMuteSetting" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val muteExpireTimeMs = (args.getOrNull(1) as? Long) ?: return null
+                // threadKey@0, muteExpireTimeMS@1
+                val threadId = args.argLong(0)?.toString() ?: return null
+                val muteExpireTimeMs = args.argLong(1) ?: return null
                 IncomingEvent.ThreadMuteChanged(threadId, muteExpireTimeMs)
             }
             "LSDeleteThread" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
+                // threadKey@0
+                val threadId = args.argLong(0)?.toString() ?: return null
                 IncomingEvent.ThreadDeleted(threadId)
             }
             "LSDeleteThenInsertMessageRequest" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
+                // threadKey@0
+                val threadId = args.argLong(0)?.toString() ?: return null
                 IncomingEvent.MessageRequestReceived(threadId)
             }
             "LSDeleteThenInsertThread" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val threadName = args.getOrNull(1)?.toString()
-                val lastActivityMs = (args.getOrNull(2) as? Long) ?: 0L
-                val folderName = args.getOrNull(3)?.toString()
+                // lastActivityTimestampMs@0, threadName@3, threadKey@7, folderName@10
+                val threadId = args.argLong(7)?.toString() ?: return null
+                val folderName = args.argStr(10)
                 if (folderName == FOLDER_SPAM) return null
-                IncomingEvent.ThreadSynced(threadId, threadName, lastActivityMs)
+                IncomingEvent.ThreadSynced(threadId, args.argStr(3), args.argLong(0) ?: 0L)
             }
             "LSUpdateOrInsertThread" -> {
-                val threadId = args.getOrNull(0)?.toString() ?: return null
-                val threadName = args.getOrNull(1)?.toString()
-                val lastActivityMs = (args.getOrNull(2) as? Long) ?: 0L
-                IncomingEvent.ThreadSynced(threadId, threadName, lastActivityMs)
+                // lastActivityTimestampMs@0, threadName@3, threadKey@7
+                val threadId = args.argLong(7)?.toString() ?: return null
+                IncomingEvent.ThreadSynced(threadId, args.argStr(3), args.argLong(0) ?: 0L)
             }
             else -> null
         }
@@ -1263,65 +1256,26 @@ object MetaProtocol {
 
     fun parseMessageEnriched(events: List<LightspeedDecoder.DecodedEvent>): MetaMessageEnriched? {
         for (event in events) {
-            when (event.procedureName) {
-                "LSInsertNewMessageRange",
-                "LSUpsertMessage",
-                "LSInsertMessage",
-                "LSReplaceOptimsiticMessage" -> {
-                    val args = event.args
-                    if (args.size < 5) continue
-                    val text = args.getOrNull(0)?.toString() ?: ""
-                    val threadId = args.getOrNull(1)?.toString() ?: continue
-                    val messageId = args.getOrNull(2)?.toString() ?: continue
-                    val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
-                    val senderId = args.getOrNull(4)?.toString() ?: ""
-                    val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
-                    val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
-
-                    return MetaMessageEnriched(
-                        messageId = messageId,
-                        threadId = threadId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        text = text,
-                        timestamp = timestamp,
-                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
-                        replyToMessageId = replyToId,
-                    )
-                }
-                "LSDeleteThenInsertMessage" -> {
-                    val args = event.args
-                    if (args.size < 5) continue
-                    val isUnsent = args.getOrNull(6) as? Boolean ?: false
-                    if (isUnsent) continue
-                    val text = args.getOrNull(0)?.toString() ?: ""
-                    val threadId = args.getOrNull(1)?.toString() ?: continue
-                    val messageId = args.getOrNull(2)?.toString() ?: continue
-                    val timestamp = (args.getOrNull(3) as? Long) ?: System.currentTimeMillis()
-                    val senderId = args.getOrNull(4)?.toString() ?: ""
-                    val senderName = args.getOrNull(5)?.toString()?.takeIf { it.isNotBlank() }
-                    val replyToId = args.getOrNull(7)?.toString()?.takeIf { it.isNotBlank() }
-
-                    return MetaMessageEnriched(
-                        messageId = messageId,
-                        threadId = threadId,
-                        senderId = senderId,
-                        senderName = senderName,
-                        text = text,
-                        timestamp = timestamp,
-                        isGroup = (threadId.toLongOrNull() ?: 0) < 0,
-                        replyToMessageId = replyToId,
-                    )
-                }
-            }
+            val parsed = parseSingleEvent(event)
+            if (parsed is IncomingEvent.MessageReceived) return parsed.message
         }
         return null
     }
 
     fun parseMessageId(messageId: String): Long? {
+        // Format: "mid.$" + chatType char + base64url(21 bytes); timestamp is the
+        // 5 big-endian bytes at [8..12] offset by the Meta epoch. Ref
+        // messagix/methods/methods.go ParseMessageIDFull/ParseMessageID.
+        if (!messageId.startsWith("mid.\$") || messageId.length < 6) return null
         return try {
-            val idLong = messageId.replace("mid.", "").toLongOrNull() ?: return null
-            idLong ushr 22
+            val payload = android.util.Base64.decode(
+                messageId.substring(6),
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+            )
+            if (payload.size != 21) return null
+            var ts = 0L
+            for (i in 8 until 13) ts = (ts shl 8) or (payload[i].toLong() and 0xFF)
+            ts + META_EPOCH_MS
         } catch (e: Exception) {
             null
         }
@@ -1354,7 +1308,7 @@ object MetaProtocol {
                 lastTimestamp = timestamp
                 epochCounter = 0
             }
-            return (timestamp shl 22) or (epochCounter shl 12) or SecureRandom().nextInt(4096).toLong()
+            return (timestamp shl 22) or (epochCounter shl 12) or 42L
         }
     }
 

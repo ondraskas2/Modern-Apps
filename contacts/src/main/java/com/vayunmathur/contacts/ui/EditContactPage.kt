@@ -50,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,14 +118,12 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
         }
     }
 
-    val currentDraft = draft
-    // Markdown note editor state (hoisted so the bottom toolbar can drive it).
-    var noteFocused by remember { mutableStateOf(false) }
-    var noteEdited by remember(contactId) { mutableStateOf<TextFieldValue?>(null) }
-    val noteValue = noteEdited ?: TextFieldValue(currentDraft?.noteContent ?: "")
-    val onNoteChange: (TextFieldValue) -> Unit = { nv ->
-        noteEdited = nv
-        viewModel.updateEditDraft { it.copy(noteContent = nv.text) }
+    val currentDraft = draft ?: return
+    // Markdown note editor backed by the shared ODF editor; stored content stays markdown.
+    val noteController = key(contactId) {
+        com.vayunmathur.library.ui.rememberOdfMarkdownEditorController(initialMarkdown = currentDraft.noteContent) { content ->
+            viewModel.updateEditDraft { it.copy(noteContent = content) }
+        }
     }
     Scaffold(
         topBar = {
@@ -149,15 +148,11 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
             )
         },
         bottomBar = {
-            if (noteFocused) {
-                com.vayunmathur.library.ui.MarkdownFormatToolbar(
-                    value = noteValue,
-                    onValueChange = onNoteChange,
-                )
+            if (noteController.focused) {
+                com.vayunmathur.library.ui.OdfMarkdownEditorToolbar(noteController)
             }
         }
     ) { paddingValues ->
-        if (currentDraft == null) return@Scaffold
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -321,11 +316,8 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(4.dp))
-            com.vayunmathur.library.ui.MarkdownEditor(
-                value = noteValue,
-                onValueChange = onNoteChange,
-                placeholder = stringResource(R.string.note),
-                onFocusChanged = { noteFocused = it },
+            com.vayunmathur.library.ui.OdfMarkdownEditorField(
+                controller = noteController,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 96.dp)

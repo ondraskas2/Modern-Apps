@@ -887,7 +887,7 @@ object SignalClient {
             val acctRecord = try {
                 auth.accountRecord?.let { com.vayunmathur.messages.signal.proto.AccountRecord.parseFrom(it) }
             } catch (_: Exception) { null }
-            val sender = MessageSender(ws, sessStore, idStore, pkStore, pkStore, pkStore, skStore, auth.aci, auth.deviceId, devManager, recipientStore, unauthedWs, groupStore, auth.pni, aciKeyPair, pniKeyPair, acctRecord)
+            val sender = MessageSender(ws, sessStore, idStore, pkStore, pkStore, pkStore, skStore, auth.aci, auth.deviceId, devManager, recipientStore, unauthedWs, groupStore, auth.pni, aciKeyPair, pniKeyPair, acctRecord, encryptionLock)
             messageSender = sender
             contactManager = ContactManager(recipientStore)
             contactDiscovery = ContactDiscovery(recipientStore, ws, appContext)
@@ -1040,10 +1040,14 @@ object SignalClient {
         scope.launch {
             try {
                 val envelope = SignalServiceProtos.Envelope.parseFrom(request.body)
-                val result = EnvelopeDecryptor.decrypt(
-                    envelope, sessStore, idStore, pkStore, pkStore, pkStore, skStore,
-                    null, auth.aci, auth.deviceId,
-                )
+                // Serialize ratchet/session access: libsignal session state is not
+                // safe under concurrent encrypt/decrypt for the same recipient.
+                val result = encryptionLock.withLock {
+                    EnvelopeDecryptor.decrypt(
+                        envelope, sessStore, idStore, pkStore, pkStore, pkStore, skStore,
+                        null, auth.aci, auth.deviceId,
+                    )
+                }
 
                 if (result.error != null) {
                     Log.e(TAG, "Decryption failed from ${result.senderAci}:${result.senderDeviceId}", result.error)
@@ -1058,6 +1062,26 @@ object SignalClient {
                 webSocket?.sendResponse(request.id, 200)
 
                 if (result.content != null) {
+                    // Process inbound SenderKeyDistributionMessage so subsequent
+                    // SenderKey-encrypted group messages from this sender decrypt.
+                    // Ref signalmeow/receiving.go + libsignal GroupSessionBuilder.
+                    if (result.content.hasSenderKeyDistributionMessage()) {
+                        try {
+                            val skdm = org.signal.libsignal.protocol.message.SenderKeyDistributionMessage(
+                                result.content.senderKeyDistributionMessage.toByteArray()
+                            )
+                            val senderAddress = org.signal.libsignal.protocol.SignalProtocolAddress(
+                                result.senderAci, result.senderDeviceId
+                            )
+                            encryptionLock.withLock {
+                                org.signal.libsignal.protocol.groups.GroupSessionBuilder(skStore)
+                                    .process(senderAddress, skdm)
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to process SKDM from ${result.senderAci}: ${e.message}")
+                        }
+                    }
+
                     val decrypted = ContentDispatcher.dispatch(
                         result.senderAci, result.senderDeviceId,
                         result.content, result.timestamp, result.serverTimestamp,

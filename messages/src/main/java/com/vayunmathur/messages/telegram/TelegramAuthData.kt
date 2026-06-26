@@ -14,6 +14,7 @@ data class TelegramAuthData(
     val salt: Long? = null,
     val dc: Int? = null,
     val serverAddress: String? = null,
+    val sessionId: Long? = null,
 ) {
     suspend fun save(context: Context) {
         DataStoreUtils.getInstance(context).setString(

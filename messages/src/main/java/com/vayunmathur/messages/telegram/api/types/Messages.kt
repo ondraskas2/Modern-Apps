@@ -382,29 +382,37 @@ data class Message(
         }
 
         private fun decodeWebPage(buf: TlBuffer): TlObject {
-            val typeId = buf.int32()
-            return when (typeId) {
-                0xe89c45b2.toInt() -> MessageMediaUnsupported // webPageEmpty
-                0xb0d13e47.toInt() -> { // webPagePending
-                    Fields.decode(buf)
-                    buf.int64() // id
-                    buf.string() // url
-                    buf.int32() // date
+            // Constructor IDs from gotd tl_web_page_gen.go
+            return when (buf.int32()) {
+                0x211a1788.toInt() -> { // webPageEmpty: flags, id:long, url:flags.0?string
+                    val f = Fields.decode(buf)
+                    buf.int64()
+                    if (f.has(0)) buf.string()
                     MessageMediaWebPage(url = "")
                 }
-                0xe89c45b2.toInt() -> MessageMediaUnsupported // webPageEmpty
-                else -> {
+                0xb0d13e47.toInt() -> { // webPagePending: flags, id:long, url:flags.0?string, date:int
+                    val f = Fields.decode(buf)
+                    buf.int64()
+                    val url = if (f.has(0)) buf.string() else ""
+                    buf.int32() // date
+                    MessageMediaWebPage(url = url)
+                }
+                0x7311ca11.toInt() -> { // webPageNotModified: flags, cached_page_views:flags.0?int
+                    val f = Fields.decode(buf)
+                    if (f.has(0)) buf.int32()
+                    MessageMediaWebPage(url = "")
+                }
+                0xe89c45b2.toInt() -> { // webPage (full)
                     try {
                         val wpFlags = Fields.decode(buf)
                         buf.int64() // id
                         val url = buf.string()
-                        val displayUrl = buf.string()
+                        buf.string() // display_url
                         if (wpFlags.has(1)) buf.int32() // hash
                         if (wpFlags.has(2)) buf.string() // type
-                        val siteName = if (wpFlags.has(3)) buf.string() else ""
+                        if (wpFlags.has(3)) buf.string() // site_name
                         val title = if (wpFlags.has(4)) buf.string() else ""
                         val description = if (wpFlags.has(5)) buf.string() else ""
-                        // Skip rest of web page (photo, embed, etc.)
                         if (wpFlags.has(6)) TlSkip.skipBoxedType(buf) // photo
                         if (wpFlags.has(7)) buf.string() // embed_url
                         if (wpFlags.has(8)) buf.string() // embed_type
@@ -413,13 +421,14 @@ data class Message(
                         if (wpFlags.has(11)) buf.int32() // duration
                         if (wpFlags.has(12)) buf.string() // author
                         if (wpFlags.has(13)) TlSkip.skipBoxedType(buf) // document
-                        if (wpFlags.has(14)) TlSkip.skipVector(buf) { TlSkip.skipBoxedType(it) } // cached_page (Page)
+                        if (wpFlags.has(14)) TlSkip.skipVector(buf) { TlSkip.skipBoxedType(it) } // cached_page
                         if (wpFlags.has(15)) TlSkip.skipVector(buf) { TlSkip.skipBoxedType(it) } // attributes
                         MessageMediaWebPage(url, title, description)
                     } catch (_: Exception) {
                         MessageMediaWebPage()
                     }
                 }
+                else -> MessageMediaUnsupported
             }
         }
     }

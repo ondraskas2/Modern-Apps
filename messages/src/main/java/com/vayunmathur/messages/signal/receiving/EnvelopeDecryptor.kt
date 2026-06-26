@@ -126,6 +126,8 @@ object EnvelopeDecryptor {
                         serverTimestamp = serverTimestamp,
                         senderE164 = result.senderE164.orElse(null),
                         unidentified = true,
+                        // contentHint is not surfaced by SealedSessionCipher.decrypt in
+                        // this libsignal version; obtaining it needs a decryptToUsmc refactor.
                         contentHint = 0,
                         groupId = result.groupId.orElse(null),
                     )
@@ -161,7 +163,10 @@ object EnvelopeDecryptor {
                     senderDeviceId = resolvedDeviceId,
                     content = null, timestamp = timestamp, serverTimestamp = serverTimestamp,
                     error = e,
-                    retriable = false,
+                    // Sealed-sender failures must be retriable so a retry-receipt /
+                    // session reset is requested; contentHint is unknown here since
+                    // decryption failed before the inner message was recovered.
+                    retriable = true,
                     ciphertext = envelope.content.toByteArray(),
                     ciphertextType = CiphertextMessage.SENDERKEY_TYPE,
                 )

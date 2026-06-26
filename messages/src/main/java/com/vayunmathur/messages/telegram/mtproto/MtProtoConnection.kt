@@ -207,17 +207,41 @@ class MtProtoConnection(
             MessageFraming.TYPE_BAD_MSG_NOTIFICATION -> {
                 buf.int32()
                 val notification = MessageFraming.parseBadMsgNotification(buf)
-                if (!serverTimeOffsetSet && (notification.errorCode == 16 || notification.errorCode == 17)) {
-                    val serverTime = MessageId.timeSeconds(msgId)
-                    val localTime = System.currentTimeMillis() / 1000
-                    serverTimeOffset = serverTime - localTime
-                    serverTimeOffsetSet = true
-                    MessageId.reset()
-                    updateSalt()
+                // Codes 16/17/20 are clock-related (msg_id too low/high, msg too old).
+                // Resync the server time offset and transparently resend the request
+                // rather than failing it. Ref gotd mtproto bad-msg handling.
+                val isTimeError = notification.errorCode == 16 ||
+                    notification.errorCode == 17 || notification.errorCode == 20
+                if (isTimeError) {
+                    if (!serverTimeOffsetSet) {
+                        val serverTime = MessageId.timeSeconds(msgId)
+                        val localTime = System.currentTimeMillis() / 1000
+                        serverTimeOffset = serverTime - localTime
+                        serverTimeOffsetSet = true
+                        MessageId.reset()
+                        updateSalt()
+                    }
                     Log.d(TAG, "Time resynced: offset=${serverTimeOffset}s (error code ${notification.errorCode})")
+                    val payload = rpcEngine.getPendingPayload(notification.badMsgId)
+                    if (payload != null) {
+                        try {
+                            val newMsgId = send(payload, true)
+                            rpcEngine.migratePending(notification.badMsgId, newMsgId)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Re-send after bad_msg_notification failed: ${e.message}")
+                            rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
+                                "bad_msg_notification error code ${notification.errorCode}")
+                        }
+                    } else {
+                        rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
+                            "bad_msg_notification error code ${notification.errorCode}")
+                    }
+                } else {
+                    // Sequence-number / structural errors (18/19/32-35 etc.) are not
+                    // transparently recoverable; surface them to the caller.
+                    rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
+                        "bad_msg_notification error code ${notification.errorCode}")
                 }
-                rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
-                    "bad_msg_notification error code ${notification.errorCode}")
             }
             MessageFraming.TYPE_FUTURE_SALTS -> {
                 buf.int32()

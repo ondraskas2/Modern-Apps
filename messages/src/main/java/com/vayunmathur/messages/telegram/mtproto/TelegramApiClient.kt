@@ -125,11 +125,12 @@ class TelegramApiClient {
         val key = authKey.copyOf()
         val keyId = authKeyId.copyOf()
         val s = salt
+        val sid = sessionId
         disconnect()
         var backoff = 100L
         for (attempt in 1..10) {
             try {
-                connect(currentDc, key, keyId, s)
+                connect(currentDc, key, keyId, s, existingSessionId = sid)
                 Log.i(TAG, "Reconnected on attempt $attempt")
                 return
             } catch (e: Exception) {

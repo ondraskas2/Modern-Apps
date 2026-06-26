@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.vayunmathur.office.odf.*
+import com.vayunmathur.library.ui.odf.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -276,55 +277,22 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Text document editing ---
 
+    private fun curText(): OdfDocument.TextDocument? = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument
+
     fun updateParagraphText(blockIndex: Int, newText: String) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val para = block.paragraph
-        val oldText = para.spans.joinToString("") { it.text }
-        if (newText == oldText) return
-        // Preserve span formatting on the unchanged prefix/suffix; inserted text inherits a neighbor's style.
-        var prefix = 0
-        while (prefix < oldText.length && prefix < newText.length && oldText[prefix] == newText[prefix]) prefix++
-        var oldEnd = oldText.length
-        var newEnd = newText.length
-        while (oldEnd > prefix && newEnd > prefix && oldText[oldEnd - 1] == newText[newEnd - 1]) { oldEnd--; newEnd-- }
-        val chars = spansToChars(para.spans)
-        val template = (chars.getOrNull(prefix - 1) ?: chars.getOrNull(oldEnd) ?: chars.getOrNull(prefix) ?: OdfSpan(text = "")).copy(text = "")
-        val result = ArrayList<OdfSpan>(newText.length)
-        for (i in 0 until prefix) result.add(chars[i])
-        for (i in prefix until newEnd) result.add(template.copy(text = newText[i].toString()))
-        for (i in oldEnd until chars.size) result.add(chars[i])
-        content[blockIndex] = OdfContentBlock.Paragraph(para.copy(spans = charsToSpans(result)))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.updateParagraphText(blockIndex, newText) ?: return)
     }
 
     /** Applies a span transform to the character range [start, end). If the range is empty, applies to the whole paragraph. */
     fun applySpanStyleToRange(blockIndex: Int, start: Int, end: Int, transform: (OdfSpan) -> OdfSpan) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val chars = spansToChars(block.paragraph.spans)
-        if (chars.isEmpty()) return
-        val s = start.coerceIn(0, chars.size)
-        val e = end.coerceIn(s, chars.size)
-        val range = if (s == e) chars.indices else (s until e)
-        for (i in range) chars[i] = transform(chars[i])
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(spans = charsToSpans(chars)))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.applySpanStyleToRange(blockIndex, start, end, transform) ?: return)
     }
 
     /** True if every character in [start, end) (or the whole paragraph when empty) satisfies [predicate]. */
-    fun rangeHasFormat(blockIndex: Int, start: Int, end: Int, predicate: (OdfSpan) -> Boolean): Boolean {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return false
-        val block = doc.content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return false
-        val chars = spansToChars(block.paragraph.spans)
-        if (chars.isEmpty()) return false
-        val s = start.coerceIn(0, chars.size)
-        val e = end.coerceIn(s, chars.size)
-        val range = if (s == e) chars.indices else (s until e)
-        return range.all { predicate(chars[it]) }
-    }
+    fun rangeHasFormat(blockIndex: Int, start: Int, end: Int, predicate: (OdfSpan) -> Boolean): Boolean =
+        curText()?.rangeHasFormat(blockIndex, start, end, predicate) ?: false
 
     private fun spansToChars(spans: List<OdfSpan>): MutableList<OdfSpan> {
         val out = ArrayList<OdfSpan>()
@@ -379,134 +347,34 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Edits a run of consecutive paragraphs [start, endInclusive] as one continuous text (paragraphs joined by '\n'). */
     fun updateParagraphRun(start: Int, endInclusive: Int, newText: String) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val paras = runParas(start, endInclusive) ?: return
-        val lens = paraLens(paras)
-        val oldText = paras.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
-        if (newText == oldText) return
-        var p = 0
-        while (p < oldText.length && p < newText.length && oldText[p] == newText[p]) p++
-        var oldEnd = oldText.length; var newEnd = newText.length
-        while (oldEnd > p && newEnd > p && oldText[oldEnd - 1] == newText[newEnd - 1]) { oldEnd--; newEnd-- }
-        val (sp, so) = runLocate(lens, p)
-        val (ep, eo) = runLocate(lens, oldEnd)
-        val middle = newText.substring(p, newEnd)
-        val startChars = spansToChars(paras[sp].spans)
-        val endChars = spansToChars(paras[ep].spans)
-        val head = startChars.subList(0, so.coerceIn(0, startChars.size)).toMutableList()
-        val tail = endChars.subList(eo.coerceIn(0, endChars.size), endChars.size).toMutableList()
-        val template = (head.lastOrNull() ?: startChars.firstOrNull() ?: paras[sp].spans.firstOrNull() ?: OdfSpan(text = "")).copy(text = "")
-        val segments = middle.split("\n")
-        val rebuilt = ArrayList<OdfParagraph>()
-        if (segments.size == 1) {
-            val chars = ArrayList<OdfSpan>(head)
-            for (ch in segments[0]) chars.add(template.copy(text = ch.toString()))
-            chars.addAll(tail)
-            rebuilt.add(paras[sp].copy(spans = charsToSpans(chars)))
-        } else {
-            val first = ArrayList<OdfSpan>(head)
-            for (ch in segments.first()) first.add(template.copy(text = ch.toString()))
-            rebuilt.add(paras[sp].copy(spans = charsToSpans(first)))
-            for (k in 1 until segments.size - 1) {
-                val mid = ArrayList<OdfSpan>()
-                for (ch in segments[k]) mid.add(template.copy(text = ch.toString()))
-                rebuilt.add(paras[sp].copy(spans = charsToSpans(mid)))
-            }
-            val last = ArrayList<OdfSpan>()
-            for (ch in segments.last()) last.add(template.copy(text = ch.toString()))
-            last.addAll(tail)
-            rebuilt.add(paras[ep].copy(spans = charsToSpans(last)))
-        }
-        val finalParas = ArrayList<OdfParagraph>()
-        finalParas.addAll(paras.subList(0, sp))
-        finalParas.addAll(rebuilt)
-        finalParas.addAll(paras.subList(ep + 1, paras.size))
-        val newContent = doc.content.toMutableList()
-        for (i in endInclusive downTo start) newContent.removeAt(i)
-        newContent.addAll(start, finalParas.map { OdfContentBlock.Paragraph(it) })
-        updateDocument(doc.copy(content = newContent))
+        val doc = curText() ?: return
+        updateDocument(doc.updateParagraphRun(start, endInclusive, newText) ?: return)
     }
 
     /** Applies a span transform across a (possibly multi-paragraph) selection within a run. Empty selection = caret's whole paragraph. */
     fun applyRunSpanStyle(start: Int, endInclusive: Int, gStart: Int, gEnd: Int, transform: (OdfSpan) -> OdfSpan) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val paras = runParas(start, endInclusive) ?: return
-        val lens = paraLens(paras)
-        val s = minOf(gStart, gEnd); val e = maxOf(gStart, gEnd)
-        val newParas = paras.toMutableList()
-        if (s == e) {
-            val (pi, _) = runLocate(lens, s)
-            val chars = spansToChars(paras[pi].spans)
-            for (k in chars.indices) chars[k] = transform(chars[k])
-            newParas[pi] = paras[pi].copy(spans = charsToSpans(chars))
-        } else {
-            var base = 0
-            for (i in paras.indices) {
-                val from = (maxOf(s, base) - base)
-                val to = (minOf(e, base + lens[i]) - base)
-                if (to > from) {
-                    val chars = spansToChars(paras[i].spans)
-                    for (k in from until to.coerceAtMost(chars.size)) chars[k] = transform(chars[k])
-                    newParas[i] = paras[i].copy(spans = charsToSpans(chars))
-                }
-                base += lens[i] + 1
-            }
-        }
-        val newContent = doc.content.toMutableList()
-        for (i in start..endInclusive) newContent[i] = OdfContentBlock.Paragraph(newParas[i - start])
-        updateDocument(doc.copy(content = newContent))
+        val doc = curText() ?: return
+        updateDocument(doc.applyRunSpanStyle(start, endInclusive, gStart, gEnd, transform) ?: return)
     }
 
     /** True if every character in the run selection (or caret's whole paragraph) satisfies [predicate]. */
-    fun runRangeHasFormat(start: Int, endInclusive: Int, gStart: Int, gEnd: Int, predicate: (OdfSpan) -> Boolean): Boolean {
-        val paras = runParas(start, endInclusive) ?: return false
-        val lens = paraLens(paras)
-        val s = minOf(gStart, gEnd); val e = maxOf(gStart, gEnd)
-        val sel = ArrayList<OdfSpan>()
-        if (s == e) {
-            val (pi, _) = runLocate(lens, s)
-            sel.addAll(spansToChars(paras[pi].spans))
-        } else {
-            var base = 0
-            for (i in paras.indices) {
-                val from = (maxOf(s, base) - base)
-                val to = (minOf(e, base + lens[i]) - base)
-                if (to > from) {
-                    val chars = spansToChars(paras[i].spans)
-                    sel.addAll(chars.subList(from.coerceIn(0, chars.size), to.coerceIn(0, chars.size)))
-                }
-                base += lens[i] + 1
-            }
-        }
-        return sel.isNotEmpty() && sel.all(predicate)
-    }
+    fun runRangeHasFormat(start: Int, endInclusive: Int, gStart: Int, gEnd: Int, predicate: (OdfSpan) -> Boolean): Boolean =
+        curText()?.runRangeHasFormat(start, endInclusive, gStart, gEnd, predicate) ?: false
 
     /** Paragraph index (within the document) at the given run-global caret position. */
-    fun runParagraphIndexAt(start: Int, endInclusive: Int, gPos: Int): Int {
-        val paras = runParas(start, endInclusive) ?: return start
-        val (pi, _) = runLocate(paraLens(paras), gPos)
-        return start + pi
-    }
+    fun runParagraphIndexAt(start: Int, endInclusive: Int, gPos: Int): Int =
+        curText()?.runParagraphIndexAt(start, endInclusive, gPos) ?: start
 
     /** Applies a paragraph-level mutation to every paragraph touched by the run selection. */
     fun mutateRunParagraphs(start: Int, endInclusive: Int, gStart: Int, gEnd: Int, transform: (OdfParagraph) -> OdfParagraph) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val paras = runParas(start, endInclusive) ?: return
-        val lens = paraLens(paras)
-        val lo = runLocate(lens, minOf(gStart, gEnd)).first
-        val hi = runLocate(lens, maxOf(gStart, gEnd)).first
-        val newContent = doc.content.toMutableList()
-        for (i in lo..hi) newContent[start + i] = OdfContentBlock.Paragraph(transform(paras[i]))
-        updateDocument(doc.copy(content = newContent))
+        val doc = curText() ?: return
+        updateDocument(doc.mutateRunParagraphs(start, endInclusive, gStart, gEnd, transform) ?: return)
     }
 
     /** Inserts literal text at the caret position within a paragraph run (B17/B18). */
     fun insertTextInRun(start: Int, endInclusive: Int, gPos: Int, insert: String) {
-        val paras = runParas(start, endInclusive) ?: return
-        val full = paras.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
-        val pos = gPos.coerceIn(0, full.length)
-        val newText = full.substring(0, pos) + insert + full.substring(pos)
-        updateParagraphRun(start, endInclusive, newText)
+        val doc = curText() ?: return
+        updateDocument(doc.insertTextInRun(start, endInclusive, gPos, insert) ?: return)
     }
 
     /** Inserts a real ODF text field (date/time/page-number/...) at the caret. (Priority 2) */
@@ -546,41 +414,20 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Clears all character formatting across a run selection (B24). */
     fun clearRunFormatting(start: Int, endInclusive: Int, gStart: Int, gEnd: Int) {
-        applyRunSpanStyle(start, endInclusive, gStart, gEnd) {
-            it.copy(bold = false, italic = false, underline = false, strikethrough = false,
-                color = null, backgroundColor = null, fontSize = null, superscript = false, subscript = false)
-        }
+        val doc = curText() ?: return
+        updateDocument(doc.clearRunFormatting(start, endInclusive, gStart, gEnd) ?: return)
     }
 
     /** Promote/demote a list item's nesting level (B13). */
     fun changeListLevel(blockIndex: Int, delta: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val para = block.paragraph
-        if (para.style != ParagraphStyle.LIST_ITEM) return
-        content[blockIndex] = OdfContentBlock.Paragraph(para.copy(listLevel = (para.listLevel + delta).coerceIn(1, 9)))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.changeListLevel(blockIndex, delta) ?: return)
     }
 
     /** Restart numbering at 1 for a numbered list item (B13). */
     fun restartNumbering(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(listItemIndex = 1))
-        // Renumber subsequent contiguous numbered items at the same level.
-        var idx = 1
-        var i = blockIndex + 1
-        val level = block.paragraph.listLevel
-        while (i < content.size) {
-            val b = content[i] as? OdfContentBlock.Paragraph ?: break
-            if (b.paragraph.style != ParagraphStyle.LIST_ITEM || b.paragraph.listType != ListType.NUMBERED || b.paragraph.listLevel != level) break
-            idx++
-            content[i] = OdfContentBlock.Paragraph(b.paragraph.copy(listItemIndex = idx))
-            i++
-        }
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.restartNumbering(blockIndex) ?: return)
     }
 
     /** Inserts an image (already-read bytes) after the given block (B14). */
@@ -620,11 +467,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Inserts a horizontal rule (rendered as a bordered empty paragraph) (B19). */
     fun insertHorizontalLine(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val at = (blockIndex + 1).coerceIn(0, content.size)
-        content.add(at, OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = "")), borderColor = 0xFF888888L)))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.insertHorizontalLine(blockIndex))
     }
 
     /** Generates a Table of Contents from headings and inserts it at the top (B21). */
@@ -903,18 +747,13 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun addParagraphAfter(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        content.add(blockIndex + 1, OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = "")))))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.addParagraphAfter(blockIndex))
     }
 
     fun deleteParagraph(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        if (doc.content.size <= 1) return
-        val content = doc.content.toMutableList()
-        content.removeAt(blockIndex)
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.deleteParagraph(blockIndex) ?: return)
     }
 
     fun toggleBold(blockIndex: Int) = toggleSpanFormat(blockIndex) { it.copy(bold = !it.bold) }
@@ -926,19 +765,13 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     fun setSpanFontSize(blockIndex: Int, size: Float) = toggleSpanFormat(blockIndex) { it.copy(fontSize = size) }
 
     fun setParagraphStyle(blockIndex: Int, style: ParagraphStyle) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(style = style))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.setParagraphStyle(blockIndex, style) ?: return)
     }
 
     fun setParagraphAlignment(blockIndex: Int, alignment: androidx.compose.ui.text.style.TextAlign?) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(alignment = alignment))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.setParagraphAlignment(blockIndex, alignment) ?: return)
     }
 
     fun replaceInDocument(search: String, replacement: String, replaceAll: Boolean, matchCase: Boolean = false, wholeWord: Boolean = false): Int {
@@ -988,73 +821,38 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun duplicateParagraph(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content.add(blockIndex + 1, OdfContentBlock.Paragraph(block.paragraph.copy()))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.duplicateParagraph(blockIndex) ?: return)
     }
 
     fun moveParagraphUp(blockIndex: Int) {
-        if (blockIndex <= 0) return
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val item = content.removeAt(blockIndex)
-        content.add(blockIndex - 1, item)
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.moveParagraphUp(blockIndex) ?: return)
     }
 
     fun moveParagraphDown(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        if (blockIndex >= doc.content.size - 1) return
-        val content = doc.content.toMutableList()
-        val item = content.removeAt(blockIndex)
-        content.add(blockIndex + 1, item)
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.moveParagraphDown(blockIndex) ?: return)
     }
 
     fun toggleListItem(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val para = block.paragraph
-        val newPara = if (para.style == ParagraphStyle.LIST_ITEM) {
-            para.copy(style = ParagraphStyle.BODY, listLevel = 0)
-        } else {
-            para.copy(style = ParagraphStyle.LIST_ITEM, listLevel = 1, listType = ListType.BULLET, listItemIndex = 1)
-        }
-        content[blockIndex] = OdfContentBlock.Paragraph(newPara)
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.toggleListItem(blockIndex) ?: return)
     }
 
     fun toggleNumberedList(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val para = block.paragraph
-        val newPara = if (para.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.NUMBERED) {
-            para.copy(style = ParagraphStyle.BODY, listLevel = 0)
-        } else {
-            para.copy(style = ParagraphStyle.LIST_ITEM, listLevel = 1, listType = ListType.NUMBERED, listItemIndex = 1)
-        }
-        content[blockIndex] = OdfContentBlock.Paragraph(newPara)
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.toggleNumberedList(blockIndex) ?: return)
     }
 
     fun indentParagraph(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(marginLeft = block.paragraph.marginLeft + 24f))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.indentParagraph(blockIndex) ?: return)
     }
 
     fun outdentParagraph(blockIndex: Int) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(marginLeft = maxOf(0f, block.paragraph.marginLeft - 24f)))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.outdentParagraph(blockIndex) ?: return)
     }
 
     fun insertTable(blockIndex: Int, rows: Int, cols: Int) {
@@ -1106,12 +904,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun toggleSpanFormat(blockIndex: Int, transform: (OdfSpan) -> OdfSpan) {
-        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return
-        val content = doc.content.toMutableList()
-        val block = content.getOrNull(blockIndex) as? OdfContentBlock.Paragraph ?: return
-        val updatedSpans = block.paragraph.spans.map(transform)
-        content[blockIndex] = OdfContentBlock.Paragraph(block.paragraph.copy(spans = updatedSpans))
-        updateDocument(doc.copy(content = content))
+        val doc = curText() ?: return
+        updateDocument(doc.toggleSpanFormat(blockIndex, transform) ?: return)
     }
 
     // --- Spreadsheet editing ---
@@ -1720,10 +1514,10 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         val slides = doc.slides.toMutableList()
         val slide = slides.getOrNull(slideIndex) ?: return
         val el = slide.elements.getOrNull(elementIndex) as? OdfSlideElement.Frame ?: return
-        if (el.frame.image == null) return
+        val frameImage = el.frame.image ?: return
         val path = uniqueImagePath(doc.images.keys, fileName)
         val elements = slide.elements.toMutableList()
-        elements[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(
+        elements[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = frameImage.copy(
             path = path, imageData = bytes, naturalWidthPx = 0f, naturalHeightPx = 0f,
             cropLeftPct = 0f, cropTopPct = 0f, cropRightPct = 0f, cropBottomPct = 0f, rotationDegrees = 0f
         )))
@@ -1738,9 +1532,9 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         val sheets = doc.sheets.toMutableList()
         val sheet = sheets.getOrNull(sheetIndex) ?: return
         val el = sheet.floating.getOrNull(elementIndex) as? OdfSlideElement.Frame ?: return
-        if (el.frame.image == null) return
+        val frameImage = el.frame.image ?: return
         val floating = sheet.floating.toMutableList()
-        floating[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(
+        floating[elementIndex] = OdfSlideElement.Frame(el.frame.copy(image = frameImage.copy(
             path = path, imageData = bytes, naturalWidthPx = 0f, naturalHeightPx = 0f,
             cropLeftPct = 0f, cropTopPct = 0f, cropRightPct = 0f, cropBottomPct = 0f, rotationDegrees = 0f
         )))
@@ -1767,10 +1561,12 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun cropElementImage(el: OdfSlideElement, l: Float, t: Float, r: Float, b: Float): OdfSlideElement =
-        if (el is OdfSlideElement.Frame && el.frame.image != null)
-            OdfSlideElement.Frame(el.frame.copy(image = el.frame.image.copy(cropLeftPct = l, cropTopPct = t, cropRightPct = r, cropBottomPct = b)))
+    private fun cropElementImage(el: OdfSlideElement, l: Float, t: Float, r: Float, b: Float): OdfSlideElement {
+        val frameImage = (el as? OdfSlideElement.Frame)?.frame?.image
+        return if (el is OdfSlideElement.Frame && frameImage != null)
+            OdfSlideElement.Frame(el.frame.copy(image = frameImage.copy(cropLeftPct = l, cropTopPct = t, cropRightPct = r, cropBottomPct = b)))
         else el
+    }
 
     /** Sets fill color on a slide shape/frame element. (extra) */
     fun setSlideElementFill(slideIndex: Int, elementIndex: Int, color: Long?) =

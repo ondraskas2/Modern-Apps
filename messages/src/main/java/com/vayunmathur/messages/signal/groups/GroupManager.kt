@@ -20,6 +20,8 @@ import org.signal.libsignal.zkgroup.auth.AuthCredentialWithPniResponse
 import org.signal.libsignal.zkgroup.auth.ClientZkAuthOperations
 import org.signal.libsignal.zkgroup.groups.GroupMasterKey
 import org.signal.libsignal.zkgroup.groups.GroupSecretParams
+import org.signal.libsignal.zkgroup.groups.ClientZkGroupCipher
+import org.signal.libsignal.zkgroup.groups.UuidCiphertext
 import org.signal.libsignal.protocol.ServiceId
 
 class GroupManager(
@@ -361,14 +363,60 @@ class GroupManager(
             val groupResponse = GroupResponse.parseFrom(response.body?.bytes())
             val groupProto = groupResponse.group
 
+            // Decrypt zkgroup-encrypted fields (title/description/timer/members).
+            // Ref signalmeow/groups.go decryptGroup + decryptMember.
+            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(GroupMasterKey(masterKey))
+            val cipher = ClientZkGroupCipher(groupSecretParams)
+
+            val title = try {
+                GroupAttributeBlob.parseFrom(cipher.decryptBlob(groupProto.title.toByteArray()))
+                    .title.takeIf { it.isNotEmpty() } ?: groupId.take(8)
+            } catch (e: Exception) {
+                groupId.take(8)
+            }
+
+            val description = try {
+                if (!groupProto.description.isEmpty) {
+                    GroupAttributeBlob.parseFrom(cipher.decryptBlob(groupProto.description.toByteArray()))
+                        .descriptionText.takeIf { it.isNotEmpty() }
+                } else null
+            } catch (e: Exception) {
+                null
+            }
+
+            val disappearing = try {
+                if (!groupProto.disappearingMessagesTimer.isEmpty) {
+                    GroupAttributeBlob.parseFrom(
+                        cipher.decryptBlob(groupProto.disappearingMessagesTimer.toByteArray())
+                    ).disappearingMessagesDuration
+                } else 0
+            } catch (e: Exception) {
+                0
+            }
+
+            val decryptedMembers = groupProto.membersList.mapNotNull { member ->
+                try {
+                    val serviceId = cipher.decrypt(UuidCiphertext(member.userId.toByteArray()))
+                    GroupMember(
+                        aci = serviceId.rawUUID,
+                        role = MemberRole.entries.find { it.value == member.role.number } ?: MemberRole.UNKNOWN,
+                        profileKey = member.profileKey.toByteArray(),
+                        joinedAtRevision = member.joinedAtVersion,
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to decrypt group member in $groupId: ${e.message}")
+                    null
+                }
+            }
+
             val group = SignalGroup(
                 groupId = groupId,
-                title = groupId.take(8),
-                members = emptyList(),
+                title = title,
+                members = decryptedMembers,
                 avatarPath = groupProto.avatarUrl.ifEmpty { null },
                 revision = groupProto.version,
-                description = null,
-                disappearingMessagesDuration = 0,
+                description = description,
+                disappearingMessagesDuration = disappearing,
                 announcementsOnly = groupProto.announcementsOnly,
                 accessControl = groupProto.accessControl?.let {
                     GroupAccessControl(

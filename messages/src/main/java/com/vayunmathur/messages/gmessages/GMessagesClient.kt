@@ -35,6 +35,7 @@ import conversations.Conversations.Message
 import conversations.Conversations.MessageInfo
 import conversations.Conversations.MessageContent
 import conversations.Conversations.ReactionData
+import conversations.Conversations.EmojiType
 import events.Events.UpdateEvents
 import java.util.UUID
 import java.security.MessageDigest
@@ -516,10 +517,9 @@ object GMessagesClient {
 
     /**
      * Add / remove / switch a reaction on [messageId].
-     * Mirrors `Client.SendReaction`. We send only the unicode emoji and
-     * `EmojiType.CUSTOM` is reserved for actual stickers — we always
-     * pass `REACTION_TYPE_UNSPECIFIED` so the relay infers the type
-     * from the unicode codepoint (Google's web client does the same).
+     * Mirrors `Client.SendReaction` + `gmproto.MakeReactionData`: send the unicode
+     * emoji together with its inferred [EmojiType] (CUSTOM for anything not in the
+     * built-in set), matching Google's web client.
      */
     suspend fun sendReaction(
         messageId: String,
@@ -532,7 +532,11 @@ object GMessagesClient {
         val reqBuilder = SendReactionRequest.newBuilder()
             .setMessageID(msgWebId)
             .setAction(action)
-            .setReactionData(ReactionData.newBuilder().setUnicode(qualifiedEmoji))
+            .setReactionData(
+                ReactionData.newBuilder()
+                    .setUnicode(qualifiedEmoji)
+                    .setType(unicodeToEmojiType(qualifiedEmoji))
+            )
         // Go omits SIMPayload for REMOVE action (1.2)
         if (action != SendReactionRequest.Action.REMOVE) {
             defaultSimPayload?.let { reqBuilder.setSIMPayload(it) }
@@ -966,6 +970,22 @@ object GMessagesClient {
         return emoji
     }
 
+    /** Port of libgm gmproto.UnicodeToEmojiType (emojitype.go). VS16-insensitive. */
+    private fun unicodeToEmojiType(emoji: String): EmojiType = when (emoji.replace("\uFE0F", "")) {
+        "\uD83D\uDC4D" -> EmojiType.LIKE          // 👍
+        "\uD83D\uDE0D" -> EmojiType.LOVE          // 😍
+        "\uD83D\uDE02" -> EmojiType.LAUGH         // 😂
+        "\uD83D\uDE2E" -> EmojiType.SURPRISED     // 😮
+        "\uD83D\uDE25" -> EmojiType.SAD           // 😥
+        "\uD83D\uDE20" -> EmojiType.ANGRY         // 😠
+        "\uD83D\uDC4E" -> EmojiType.DISLIKE       // 👎
+        "\uD83E\uDD14" -> EmojiType.QUESTIONING   // 🤔
+        "\uD83D\uDE22" -> EmojiType.CRYING_FACE   // 😢
+        "\uD83D\uDE21" -> EmojiType.POUTING_FACE  // 😡
+        "\u2764" -> EmojiType.RED_HEART           // ❤
+        else -> EmojiType.CUSTOM
+    }
+
     /** SHA-256 based deduplication ring buffer. Port of Go's deduplicateUpdate. */
     private fun deduplicateUpdate(id: String, data: ByteArray): Boolean {
         val hash = MessageDigest.getInstance("SHA-256").digest(data)
@@ -1196,6 +1216,10 @@ object GMessagesClient {
         kotlinx.coroutines.delay(2_000)
         longPoll.stop()
         longPoll.start(scope)
+
+        // The init()/start() paths start the ack ticker before postConnect(); the
+        // in-session first-pair path must do the same or acks never fire after QR pair.
+        sessionHandler.startAckInterval(scope)
 
         postConnect()
     }

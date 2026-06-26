@@ -1322,12 +1322,7 @@ object WhatsAppClient {
         if (!groupJid.contains("@g.us")) return false
 
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
-        val extraAttrs = mutableMapOf<String, String>()
-        if (previousTopicId != null) {
-            extraAttrs["prev_v"] = previousTopicId
-        }
-        extraAttrs["id"] = WhatsAppProtocol.generateMessageId(authData?.wid)
-        val node = WhatsAppProtocol.buildGroupInfoChange(groupJid, "description", topic, id, extraAttrs)
+        val node = WhatsAppProtocol.buildSetGroupTopic(groupJid, topic, id, previousTopicId)
         return ws.send(WhatsAppProtocol.encodeNode(node))
     }
 
@@ -1420,13 +1415,8 @@ object WhatsAppClient {
 
         if (leaveGroup && jid.contains("@g.us") && _state.value is State.Connected && ws != null) {
             val id = WhatsAppProtocol.generateMessageId(authData?.wid)
-            val ownJid = authData?.wid ?: ""
-            if (ownJid.isNotEmpty()) {
-                val node = WhatsAppProtocol.buildGroupParticipantChange(
-                    jid, listOf(ownJid), "remove", id
-                )
-                ws.send(WhatsAppProtocol.encodeNode(node))
-            }
+            val node = WhatsAppProtocol.buildLeaveGroup(jid, id)
+            ws.send(WhatsAppProtocol.encodeNode(node))
         }
 
         // Query last message timestamp for the delete anchor

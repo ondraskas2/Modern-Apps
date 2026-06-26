@@ -41,6 +41,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -133,18 +134,6 @@ fun NotePage(
         }
     }
 
-    var contentValue by remember(noteID) {
-        mutableStateOf(TextFieldValue(notesViewModel.parseDisplay(note.content)))
-    }
-
-    var contentFocused by remember { mutableStateOf(false) }
-
-    fun applyFormat(transform: (TextFieldValue) -> TextFieldValue) {
-        contentValue = transform(contentValue)
-        note = note.copy(content = contentValue.text)
-        contentValue = contentValue.copy(annotatedString = notesViewModel.parseDisplay(contentValue.text))
-    }
-
     Scaffold(topBar = {
         TopAppBar(title = {
             if (showSearchBar) {
@@ -222,136 +211,40 @@ fun NotePage(
                 }
             }
         }
-    }, bottomBar = {
-        if (!showSearchBar && contentFocused) {
-            com.vayunmathur.library.ui.MarkdownFormatToolbar(
-                value = contentValue,
-                onValueChange = { nv -> applyFormat { nv } },
-            )
-        }
     }) { paddingValues ->
-        LazyColumn(contentPadding = paddingValues + PaddingValues(horizontal = 16.dp) + PaddingValues(bottom = 16.dp)) {
-            item {
-                BasicTextField(
-                    note.title,
-                    { note = note.copy(title = it) },
-                    Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.headlineMedium.copy(color = LocalContentColor.current),
-                    cursorBrush = SolidColor(LocalContentColor.current),
-                    decorationBox = { innerTextField ->
-                        Box {
-                            if (note.title.isEmpty()) Text(
-                                text = stringResource(R.string.title),
-                                style = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            )
-                            innerTextField()
-                        }
-                    }
-                )
-            }
-            item {
-                Spacer(Modifier.height(8.dp))
-            }
-            item {
-                val displayValue = remember(note.content, searchText, searchIndex, showSearchBar, contentValue) {
-                    if (showSearchBar) {
-                        TextFieldValue(
-                            notesViewModel.parseDisplay(
-                                note.content,
-                                searchQuery = searchText,
-                                searchIndex = searchIndex,
-                            ),
-                            selection = contentValue.selection,
+        Column(
+            Modifier
+                .padding(paddingValues)
+                .padding(horizontal = 16.dp)
+                .fillMaxSize()
+        ) {
+            BasicTextField(
+                note.title,
+                { note = note.copy(title = it) },
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.headlineMedium.copy(color = LocalContentColor.current),
+                cursorBrush = SolidColor(LocalContentColor.current),
+                decorationBox = { innerTextField ->
+                    Box {
+                        if (note.title.isEmpty()) Text(
+                            text = stringResource(R.string.title),
+                            style = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                         )
-                    } else {
-                        contentValue
+                        innerTextField()
                     }
                 }
-                var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
-                val density = LocalDensity.current
-                Box {
-                    BasicTextField(
-                        displayValue,
-                        { newValue ->
-                            if (newValue.text == contentValue.text && newValue.selection.collapsed) {
-                                tryToggleCheckbox(newValue.selection.start, contentValue)?.let {
-                                    applyFormat { _ -> it }
-                                    return@BasicTextField
-                                }
-                            }
-                            applyFormat { _ -> newValue }
-                        },
-                        Modifier.fillMaxSize().onFocusChanged { contentFocused = it.isFocused },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = LocalContentColor.current,
-                            // Constant line height for every line — including empty ones.
-                            // Without Trim.None, each line is its own paragraph and gets
-                            // its top/bottom leading trimmed, so an empty line is shorter
-                            // than a line with text; typing then grows the line and shoves
-                            // the rest of the note down. Trim.None keeps all lines equal.
-                            lineHeight = MaterialTheme.typography.bodyMedium.fontSize * 1.6f,
-                            lineHeightStyle = LineHeightStyle(
-                                alignment = LineHeightStyle.Alignment.Center,
-                                trim = LineHeightStyle.Trim.None,
-                            ),
-                        ),
-                        cursorBrush = SolidColor(LocalContentColor.current),
-                        onTextLayout = { textLayoutResult = it },
-                        decorationBox = { innerTextField ->
-                            Box {
-                                if (note.content.isEmpty()) Text(
-                                    text = stringResource(R.string.content),
-                                    style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                )
-                                innerTextField()
-                            }
-                        }
-                    )
-                    textLayoutResult?.let { layout ->
-                        val checkboxes = remember(note.content) { findCheckboxPositions(note.content) }
-                        // Size and place the overlay from the text baseline + font size
-                        // rather than the measured line box. A blank line before a list
-                        // item makes getBoundingBox report a taller box (extra leading on
-                        // the paragraph's first/last line), which previously mis-sized and
-                        // shifted the icon. The baseline tracks the glyphs, so the checkbox
-                        // stays aligned regardless of preceding blank lines.
-                        val fontSizePx = with(density) {
-                            MaterialTheme.typography.bodyMedium.fontSize.toPx()
-                        }
-                        // Center the checkbox in its line box. Line boxes are a
-                        // constant height (Trim.None) with the text centered in them,
-                        // so the line-box center matches the text center for every
-                        // row — including the very first line when a note starts
-                        // with a checkbox. This avoids baseline math that behaved
-                        // differently on the first line.
-                        val iconSizePx = fontSizePx * 1.25f
-                        checkboxes.forEach { (bracketOffset, isChecked) ->
-                            val line = runCatching { layout.getLineForOffset(bracketOffset) }
-                                .getOrNull() ?: return@forEach
-                            val left = layout.getHorizontalPosition(bracketOffset, usePrimaryDirection = true)
-                            val lineCenterY = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2f
-                            with(density) {
-                                Icon(
-                                    imageVector = if (isChecked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                                    contentDescription = if (isChecked) "Checked" else "Unchecked",
-                                    tint = if (isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .offset(
-                                            x = left.toDp() - 12.dp,
-                                            y = (lineCenterY - iconSizePx / 2f).toDp(),
-                                        )
-                                        .size(iconSizePx.toDp())
-                                        .clickable {
-                                            tryToggleCheckbox(bracketOffset, contentValue)?.let {
-                                                applyFormat { _ -> it }
-                                            }
-                                        }
-                                )
-                            }
-                        }
-                    }
-                }
+            )
+            Spacer(Modifier.height(8.dp))
+            // Edit the note's markdown through the shared ODF editor. The stored content stays
+            // markdown; the editor converts to/from an in-memory ODF document. key(noteID) gives a
+            // fresh editor when navigating between notes.
+            key(noteID) {
+                com.vayunmathur.library.ui.OdfMarkdownEditor(
+                    initialMarkdown = note.content,
+                    onMarkdownChanged = { note = note.copy(content = it) },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
             }
         }
     }

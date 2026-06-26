@@ -1,5 +1,6 @@
 package com.vayunmathur.office.odf
 
+import com.vayunmathur.library.ui.odf.*
 import java.util.GregorianCalendar
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -194,10 +195,10 @@ object OdfFormulaEngine {
             val key = "$sheetName!$row,$col"
             if (key in visiting) throw FormulaException("#REF!")
             val cell = sheet.rows.getOrNull(row)?.cells?.getOrNull(col) ?: return Value.Blank
-            if (cell.formula == null) return rawCellValue(cell)
+            val formula = cell.formula ?: return rawCellValue(cell)
             visiting.add(key)
             try {
-                val expr = normalize(cell.formula)
+                val expr = normalize(formula)
                 return Parser(expr).parseExpression()
             } finally {
                 visiting.remove(key)

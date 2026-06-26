@@ -329,13 +329,24 @@ object WhatsAppProtocol {
     // -- Message ID generation --
 
     /**
-     * Generate a message ID in WhatsApp's format: "3EB0" + uppercase hex.
-     * From whatsmeow/send.go GenerateMessageID()
+     * Generate a message ID: "3EB0" + uppercase hex of sha256(unixSeconds ++ ownUser@c.us ++ random16)[:9].
+     * From whatsmeow/send.go Client.GenerateMessageID().
      */
     fun generateMessageId(ownJid: String?): String {
-        val randomBytes = ByteArray(8)
-        SecureRandom().nextBytes(randomBytes)
-        val hex = randomBytes.joinToString("") { "%02X".format(it) }
+        val buf = java.io.ByteArrayOutputStream()
+        val ts = ByteArray(8)
+        ByteBuffer.wrap(ts).putLong(System.currentTimeMillis() / 1000L)
+        buf.write(ts)
+        if (!ownJid.isNullOrEmpty()) {
+            val user = ownJid.substringBefore('@').substringBefore(':')
+            buf.write(user.toByteArray(Charsets.UTF_8))
+            buf.write("@c.us".toByteArray(Charsets.UTF_8))
+        }
+        val rand = ByteArray(16)
+        SecureRandom().nextBytes(rand)
+        buf.write(rand)
+        val hash = sha256(buf.toByteArray())
+        val hex = hash.copyOfRange(0, 9).joinToString("") { "%02X".format(it) }
         return WEB_MESSAGE_ID_PREFIX + hex
     }
 
@@ -343,10 +354,11 @@ object WhatsAppProtocol {
 
     /**
      * Pad message with random 1-15 bytes where each pad byte equals the pad count.
-     * From whatsmeow/message.go padMessage()
+     * From whatsmeow/message.go padMessage(): random byte masked to 0x0f, 0 -> 15.
      */
     fun padMessage(plaintext: ByteArray): ByteArray {
-        val padSize = 1 + SecureRandom().nextInt(16)
+        var padSize = SecureRandom().nextInt(16)
+        if (padSize == 0) padSize = 15
         val padded = ByteArray(plaintext.size + padSize)
         System.arraycopy(plaintext, 0, padded, 0, plaintext.size)
         for (i in plaintext.size until padded.size) {
@@ -542,7 +554,9 @@ object WhatsAppProtocol {
 
         private fun validateHex(value: String): Boolean {
             if (value.length > BinaryToken.PACKED_MAX) return false
-            return value.all { it in '0'..'9' || it in 'A'..'F' || it in 'a'..'f' }
+            // HEX_8 packing is uppercase-only; lowercase must fall through to raw
+            // string encoding or it decodes back as uppercase (whatsmeow binary/encoder.go).
+            return value.all { it in '0'..'9' || it in 'A'..'F' }
         }
 
         private fun writePackedBytes(value: String, dataType: Int) {
@@ -761,8 +775,40 @@ object WhatsAppProtocol {
     }
 
     fun decodeNode(data: ByteArray): Node {
-        val decoder = BinaryDecoder(data)
+        val decoder = BinaryDecoder(unpack(data))
         return decoder.readNode()
+    }
+
+    /**
+     * Strips the leading compression flag byte from a decrypted frame and inflates
+     * the remainder with zlib when the flag's 0x02 bit is set.
+     * Ref: whatsmeow/binary/unpack.go Unpack().
+     */
+    private fun unpack(data: ByteArray): ByteArray {
+        if (data.isEmpty()) throw IllegalStateException("empty frame, no flag byte")
+        val flag = data[0].toInt() and 0xFF
+        val payload = data.copyOfRange(1, data.size)
+        return if (flag and 2 > 0) {
+            val inflater = java.util.zip.Inflater()
+            inflater.setInput(payload)
+            val out = java.io.ByteArrayOutputStream(payload.size * 2)
+            val buf = ByteArray(8192)
+            try {
+                while (!inflater.finished()) {
+                    val n = inflater.inflate(buf)
+                    if (n == 0) {
+                        if (inflater.finished() || inflater.needsDictionary()) break
+                        if (inflater.needsInput()) throw IllegalStateException("zlib needs more input")
+                    }
+                    out.write(buf, 0, n)
+                }
+            } finally {
+                inflater.end()
+            }
+            out.toByteArray()
+        } else {
+            payload
+        }
     }
 
     // -- Message node builders (from whatsmeow/send.go) --
@@ -1395,6 +1441,60 @@ object WhatsAppProtocol {
             ),
             content = listOf(
                 Node(tag = field, attrs = childAttrs, content = listOf(), data = value.toByteArray(Charsets.UTF_8))
+            ),
+        )
+    }
+
+    /**
+     * Build a "set group topic/description" IQ.
+     * From whatsmeow group.go SetGroupTopic: <description id=newID [prev=previousID]
+     * [delete=true]> with a <body> child carrying the topic (no body when empty).
+     */
+    fun buildSetGroupTopic(
+        groupJid: String,
+        topic: String,
+        newId: String,
+        previousId: String? = null,
+    ): Node {
+        val descAttrs = mutableMapOf("id" to newId)
+        if (!previousId.isNullOrEmpty()) descAttrs["prev"] = previousId
+        val content = if (topic.isEmpty()) {
+            descAttrs["delete"] = "true"
+            emptyList()
+        } else {
+            listOf(Node(tag = "body", data = topic.toByteArray(Charsets.UTF_8)))
+        }
+        return Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to newId,
+                "type" to "set",
+                "xmlns" to "w:g2",
+                "to" to groupJid,
+            ),
+            content = listOf(Node(tag = "description", attrs = descAttrs, content = content)),
+        )
+    }
+
+    /**
+     * Build a "leave group" IQ.
+     * From whatsmeow group.go LeaveGroup: iq to the group server (g.us) with
+     * <leave><group id=<groupJid>/></leave>.
+     */
+    fun buildLeaveGroup(groupJid: String, id: String): Node {
+        return Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to id,
+                "type" to "set",
+                "xmlns" to "w:g2",
+                "to" to "g.us",
+            ),
+            content = listOf(
+                Node(
+                    tag = "leave",
+                    content = listOf(Node(tag = "group", attrs = mapOf("id" to groupJid))),
+                ),
             ),
         )
     }
