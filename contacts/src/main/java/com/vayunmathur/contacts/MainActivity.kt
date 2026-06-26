@@ -2,6 +2,7 @@ package com.vayunmathur.contacts
 
 import android.Manifest
 import android.content.Intent
+import android.content.ClipData
 import android.content.pm.PackageManager
 import android.content.ContentUris
 import android.net.Uri
@@ -59,13 +60,26 @@ class MainActivity : ComponentActivity() {
                             type = CDKPhone.CONTENT_ITEM_TYPE
                         }
                         val contacts by viewModel.contacts.collectAsState()
-                        ContactListPick(type, contacts) {
-                            val resultIntent = Intent().apply {
-                                data = it
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        val allowMultiple = intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+                        if (allowMultiple) {
+                            val selected = remember { mutableStateListOf<Uri>() }
+                            ContactListPick(
+                                mimeType = type,
+                                contacts = contacts,
+                                allowMultiple = true,
+                                selectedUris = selected,
+                                onConfirm = { finishPickWithSelection(selected) },
+                                onClick = { uri -> if (!selected.remove(uri)) selected.add(uri) },
+                            )
+                        } else {
+                            ContactListPick(type, contacts) {
+                                val resultIntent = Intent().apply {
+                                    data = it
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                setResult(RESULT_OK, resultIntent)
+                                finish()
                             }
-                            setResult(RESULT_OK, resultIntent)
-                            finish()
                         }
                     } else {
                         val route by externalRoute
@@ -81,6 +95,22 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    /** Return a multi-select pick result: items go in ClipData (per EXTRA_ALLOW_MULTIPLE). */
+    private fun finishPickWithSelection(uris: List<Uri>) {
+        val resultIntent = Intent().apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (uris.isNotEmpty()) {
+                // First item also as data for callers that read a single result.
+                data = uris.first()
+                val clip = ClipData.newUri(contentResolver, "contacts", uris.first())
+                for (i in 1 until uris.size) clip.addItem(ClipData.Item(uris[i]))
+                clipData = clip
+            }
+        }
+        setResult(RESULT_OK, resultIntent)
+        finish()
     }
 
     private fun handleIntent(intent: Intent?) {

@@ -290,7 +290,14 @@ fun ContactList(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -> Unit) {
+fun ContactListPick(
+    mimeType: String?,
+    contacts: List<Contact>,
+    allowMultiple: Boolean = false,
+    selectedUris: List<Uri> = emptyList(),
+    onConfirm: () -> Unit = {},
+    onClick: (Uri) -> Unit,
+) {
     val (favorites, otherContacts) = remember(contacts) { contacts.partition { it.isFavorite } }
 
     val groupedContacts = remember(otherContacts) {
@@ -299,7 +306,20 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
             .toSortedMap()
     }
 
-    Scaffold(topBar = { TopAppBar({ Text(stringResource(R.string.app_name)) }) }) { paddingValues ->
+    val selectedSet = selectedUris.toSet()
+
+    Scaffold(
+        topBar = { TopAppBar({ Text(stringResource(R.string.app_name)) }) },
+        floatingActionButton = {
+            if (allowMultiple) {
+                ExtendedFloatingActionButton(onClick = onConfirm) {
+                    val label = stringResource(R.string.done) +
+                        if (selectedUris.isNotEmpty()) " (${selectedUris.size})" else ""
+                    Text(label)
+                }
+            }
+        },
+    ) { paddingValues ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -309,7 +329,7 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
                 item(key = "pick-favorites-header") { FavoritesHeader() }
                 item(key = "pick-favorites-card") {
                     GroupedContactSection(count = favorites.size) { idx ->
-                        ContactItemPick(favorites[idx], mimeType, onClick)
+                        ContactItemPick(favorites[idx], mimeType, selectedSet, onClick)
                     }
                 }
             }
@@ -318,7 +338,7 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
                 item(key = "pick-letter-header-$letter") { LetterHeader(letter) }
                 item(key = "pick-letter-card-$letter") {
                     GroupedContactSection(count = contactsInGroup.size) { idx ->
-                        ContactItemPick(contactsInGroup[idx], mimeType, onClick)
+                        ContactItemPick(contactsInGroup[idx], mimeType, selectedSet, onClick)
                     }
                 }
             }
@@ -328,17 +348,14 @@ fun ContactListPick(mimeType: String?, contacts: List<Contact>, onClick: (Uri) -
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit) {
+fun ContactItemPick(contact: Contact, mimeType: String?, selectedUris: Set<Uri>, onClick: (Uri) -> Unit) {
     if (mimeType == null || mimeType == ContactsContract.Contacts.CONTENT_ITEM_TYPE || mimeType == ContactsContract.Contacts.CONTENT_TYPE) {
+        val uri = Uri.withAppendedPath(ContactsContract.RawContacts.CONTENT_URI, contact.id.toString())
         ContactItem(
             contact = contact,
-            isSelected = false,
+            isSelected = uri in selectedUris,
             showAccountLabels = true,
-            onClick = {
-                onClick(Uri.withAppendedPath(
-                    ContactsContract.RawContacts.CONTENT_URI,
-                    contact.id.toString()))
-            }
+            onClick = { onClick(uri) }
         )
     } else {
         val details = contact.details
@@ -348,18 +365,14 @@ fun ContactItemPick(contact: Contact, mimeType: String?, onClick: (Uri) -> Unit)
             CDKStructuredPostal.CONTENT_ITEM_TYPE -> details.addresses to CDKStructuredPostal.CONTENT_URI
             else -> throw IllegalArgumentException("Unsupported MIME type: $mimeType")
         }
+        val itemUris = relevantList.map { Uri.withAppendedPath(baseURI, it.id.toString()) }
         ContactItem(
             contact = contact,
-            isSelected = false,
+            isSelected = itemUris.any { it in selectedUris },
             showAccountLabels = true,
             onClick = {  },
             dropdownList = relevantList.map { it.value },
-            dropdownListClick = { index ->
-                onClick(Uri.withAppendedPath(
-                    baseURI,
-                    relevantList[index].id.toString()
-                ))
-            }
+            dropdownListClick = { index -> onClick(itemUris[index]) }
         )
     }
 }

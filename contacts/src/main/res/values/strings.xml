@@ -17,6 +17,7 @@
     <string name="add_contact">Add contact</string>
     <string name="edit_contact">Edit contact</string>
     <string name="save">Save</string>
+    <string name="done">Done</string>
     <string name="first_name">First name</string>
     <string name="middle_name">Middle name</string>
     <string name="last_name">Last name</string>
