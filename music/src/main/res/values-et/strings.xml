@@ -38,4 +38,11 @@
     <string name="notification_shuffle">Sega lood</string>
     <string name="notification_repeat">Korda</string>
     <string name="go_to_source">Ava %1$s</string>
+    <string name="dialog_delete_playlist">Kustuta esitusloend</string>
+    <string name="dialog_delete_playlist_confirm">Kas kustutad „%1$s“ esitusloendi? Seda tegevust ei saa tagasi pöörata.</string>
+    <string name="dialog_delete">Kustuta</string>
+    <string name="menu_delete_playlist">Kustuta esitusloend</string>
+    <string name="dialog_create_playlist">Koosta esitusloend</string>
+    <string name="dialog_create">Koosta</string>
+    <string name="playlist_name_hint">Esitusloendi nimi</string>
 </resources>
