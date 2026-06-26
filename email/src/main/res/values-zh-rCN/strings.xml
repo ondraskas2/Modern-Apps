@@ -26,4 +26,7 @@
     <string name="ssl_tls">SSL/TLS</string>
     <string name="starttls">STARTTLS</string>
     <string name="listening_for_new_mail">正在监听新邮件</string>
+    <string name="settings">设置</string>
+    <string name="drafts">草稿</string>
+    <string name="save">保存</string>
 </resources>
