@@ -46,6 +46,9 @@ data class WhatsAppAuthData(
     val platformType: String = "WEB",
     // LID (Linked Identity) JID for this device
     val lid: String = "",
+    // Base64 self-signed ADV device identity (waAdv.ADVSignedDeviceIdentity) from pairing.
+    // Sent in the device-identity node alongside pkmsg sends. Empty until paired.
+    val accountSignedDeviceIdentity: String = "",
 ) {
     companion object {
         private const val PREFS_NAME = "whatsapp_auth"

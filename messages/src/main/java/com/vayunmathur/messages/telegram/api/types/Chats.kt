@@ -8,6 +8,8 @@ data class Chat(
     val id: Long,
     val title: String,
     val participantsCount: Int,
+    val photoId: Long = 0,
+    val photoDcId: Int = 0,
 ) : TlObject {
     override val typeId = 0x41cbf256.toInt()
     override fun encode(buf: TlBuffer) {}
@@ -17,14 +19,14 @@ data class Chat(
             val flags = Fields.decode(buf)
             val id = buf.int64()
             val title = buf.string()
-            TlSkip.skipChatPhoto(buf) // photo (mandatory)
+            val photo = TlSkip.parseChatPhoto(buf) // photo (mandatory)
             val participantsCount = buf.int32()
             buf.int32() // date
             buf.int32() // version
             if (flags.has(6)) TlSkip.skipBoxedType(buf) // migrated_to
             if (flags.has(14)) TlSkip.skipBoxedType(buf) // admin_rights
             if (flags.has(18)) TlSkip.skipBoxedType(buf) // default_banned_rights
-            return Chat(id, title, participantsCount)
+            return Chat(id, title, participantsCount, photo?.photoId ?: 0L, photo?.dcId ?: 0)
         }
     }
 }
@@ -36,6 +38,8 @@ data class Channel(
     val username: String = "",
     val megagroup: Boolean = false,
     val forum: Boolean = false,
+    val photoId: Long = 0,
+    val photoDcId: Int = 0,
 ) : TlObject {
     override val typeId = 0x1c32b11c.toInt()
     override fun encode(buf: TlBuffer) {}
@@ -50,7 +54,7 @@ data class Channel(
             val accessHash = if (flags.has(13)) buf.int64() else 0
             val title = buf.string()
             val username = if (flags.has(6)) buf.string() else ""
-            TlSkip.skipChatPhoto(buf) // photo (mandatory)
+            val photo = TlSkip.parseChatPhoto(buf) // photo (mandatory)
             buf.int32() // date (mandatory)
             if (flags.has(9)) { // restriction_reason vector
                 TlSkip.skipVectorBoxed(buf)
@@ -69,7 +73,8 @@ data class Channel(
             if (flags2.has(13)) buf.int64() // bot_verification_icon
             if (flags2.has(14)) buf.int64() // send_paid_messages_stars
             if (flags2.has(18)) buf.int64() // linked_monoforum_id
-            return Channel(id, accessHash, title, username, megagroup = megagroup, forum = forum)
+            return Channel(id, accessHash, title, username, megagroup = megagroup, forum = forum,
+                photoId = photo?.photoId ?: 0L, photoDcId = photo?.dcId ?: 0)
         }
     }
 }

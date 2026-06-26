@@ -65,6 +65,9 @@ interface EditorFormatter {
 
     /** Create or edit a link with the given [text]/[url]. */
     fun applyLink(context: LinkContext, text: String, url: String) {}
+
+    /** Remove the link at the current selection/cursor, keeping its text. */
+    fun removeLink(context: LinkContext) {}
 }
 
 private val BASE_ORDER = listOf(
@@ -136,6 +139,9 @@ fun EditorBaseButtons(formatter: EditorFormatter) {
                 context = linkCtx,
                 onConfirm = { text, url -> formatter.applyLink(linkCtx, text, url); showLink = false },
                 onDismiss = { showLink = false },
+                onUnlink = if (linkCtx.editing) {
+                    { formatter.removeLink(linkCtx); showLink = false }
+                } else null,
             )
         }
     }

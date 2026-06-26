@@ -22,7 +22,16 @@ import org.signal.libsignal.zkgroup.groups.GroupMasterKey
 import org.signal.libsignal.zkgroup.groups.GroupSecretParams
 import org.signal.libsignal.zkgroup.groups.ClientZkGroupCipher
 import org.signal.libsignal.zkgroup.groups.UuidCiphertext
+import org.signal.libsignal.zkgroup.profiles.ClientZkProfileOperations
+import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredentialResponse
+import org.signal.libsignal.zkgroup.profiles.ProfileKey
 import org.signal.libsignal.protocol.ServiceId
+import com.google.protobuf.ByteString
+import com.vayunmathur.messages.signal.proto.AccessControl as AccessControlProto
+import com.vayunmathur.messages.signal.proto.GroupChange as GroupChangeProto
+import com.vayunmathur.messages.signal.proto.Member as MemberProto
+import com.vayunmathur.messages.signal.proto.MemberBanned
+import com.vayunmathur.messages.signal.proto.MemberPendingProfileKey
 
 class GroupManager(
     private val ws: SignalWebSocket,
@@ -34,79 +43,295 @@ class GroupManager(
 ) {
     
 
-    suspend fun setGroupName(groupId: String, newName: String): Boolean {
-        Log.w(TAG, "setGroupName: group encryption operations not available")
-        return false
+    // Builds a GroupChange.Actions with version = currentRevision + 1, lets [build] populate the
+    // change, then encrypts/auths and PATCHes /v2/groups. zkgroup field encryption uses
+    // ClientZkGroupCipher; auth + server signature handling lives in submitGroupChange.
+    // Ref signalmeow/groups.go EncryptAndSignGroupChange + patchGroup.
+    private suspend fun applyGroupChange(
+        groupId: String,
+        build: (ClientZkGroupCipher, GroupChangeProto.Actions.Builder) -> Boolean,
+    ): Boolean {
+        return try {
+            val masterKey = groupStore.getMasterKeyByGroupId(groupId)
+            if (masterKey == null) {
+                Log.e(TAG, "No master key stored for group $groupId")
+                return false
+            }
+            val group = getOrFetchGroup(groupId, masterKey)
+            if (group == null) {
+                Log.e(TAG, "Could not load group $groupId for mutation")
+                return false
+            }
+            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(GroupMasterKey(masterKey))
+            val cipher = ClientZkGroupCipher(groupSecretParams)
+            val actions = GroupChangeProto.Actions.newBuilder()
+                .setVersion(group.revision + 1)
+            if (!build(cipher, actions)) return false
+            val auth = getGroupAuth(masterKey) ?: return false
+            submitGroupChange(groupId, masterKey, auth, actions.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to apply group change for $groupId", e)
+            false
+        }
     }
 
+    private fun parseServiceId(serviceId: String): ServiceId {
+        return if (serviceId.startsWith("PNI:")) {
+            ServiceId.Pni(UUID.fromString(serviceId.removePrefix("PNI:")))
+        } else {
+            ServiceId.Aci(UUID.fromString(serviceId))
+        }
+    }
+
+    private fun ClientZkGroupCipher.encryptServiceIdBytes(serviceId: ServiceId): ByteString =
+        ByteString.copyFrom(encrypt(serviceId).serialize())
+
+    private fun ClientZkGroupCipher.encryptAttribute(blob: GroupAttributeBlob): ByteString =
+        ByteString.copyFrom(encryptBlob(blob.toByteArray()))
+
+    suspend fun setGroupName(groupId: String, newName: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            val blob = GroupAttributeBlob.newBuilder().setTitle(newName).build()
+            actions.setModifyTitle(
+                GroupChangeProto.Actions.ModifyTitleAction.newBuilder()
+                    .setTitle(cipher.encryptAttribute(blob)).build()
+            )
+            true
+        }
+
+    // Adds a member directly as a full group member using their expiring profile-key credential
+    // presentation (requires us to know their profile key). Falls back to a pending invite (the
+    // invitee promotes themselves on accept) when no profile key / credential is available, e.g.
+    // for PNI-only invitees. Ref signalmeow/groups.go AddMembers + CreateExpiringProfileKeyCredentialPresentation.
     suspend fun inviteMember(groupId: String, serviceId: String, role: MemberRole = MemberRole.DEFAULT): Boolean {
-        Log.w(TAG, "inviteMember: group encryption operations not available")
-        return false
+        val masterKey = groupStore.getMasterKeyByGroupId(groupId)
+        if (masterKey != null && !serviceId.startsWith("PNI:")) {
+            val presentation = createExpiringProfileKeyPresentation(serviceId, masterKey)
+            if (presentation != null) {
+                val ok = applyGroupChange(groupId) { _, actions ->
+                    actions.addAddMembers(
+                        GroupChangeProto.Actions.AddMemberAction.newBuilder()
+                            .setAdded(
+                                MemberProto.newBuilder()
+                                    .setRole(MemberProto.Role.forNumber(role.value))
+                                    .setPresentation(ByteString.copyFrom(presentation))
+                                    .build()
+                            ).build()
+                    )
+                    true
+                }
+                if (ok) return true
+                Log.w(TAG, "Full-member add failed for $serviceId, falling back to pending invite")
+            }
+        }
+        // Fallback: invite as a pending member without a profile-key credential.
+        return applyGroupChange(groupId) { cipher, actions ->
+            val encUserId = cipher.encryptServiceIdBytes(parseServiceId(serviceId))
+            val encAddedBy = cipher.encryptServiceIdBytes(ServiceId.Aci(UUID.fromString(aci)))
+            val pending = MemberPendingProfileKey.newBuilder()
+                .setMember(
+                    MemberProto.newBuilder()
+                        .setUserId(encUserId)
+                        .setRole(MemberProto.Role.forNumber(role.value))
+                        .build()
+                )
+                .setAddedByUserId(encAddedBy)
+                .setTimestamp(System.currentTimeMillis())
+                .build()
+            actions.addAddMembersPendingProfileKey(
+                GroupChangeProto.Actions.AddMemberPendingProfileKeyAction.newBuilder()
+                    .setAdded(pending).build()
+            )
+            true
+        }
     }
 
-    suspend fun kickMember(groupId: String, memberAci: String): Boolean {
-        Log.w(TAG, "kickMember: group encryption operations not available")
-        return false
-    }
+    suspend fun kickMember(groupId: String, memberAci: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addDeleteMembers(
+                GroupChangeProto.Actions.DeleteMemberAction.newBuilder()
+                    .setDeletedUserId(cipher.encryptServiceIdBytes(parseServiceId(memberAci))).build()
+            )
+            true
+        }
 
-    suspend fun banMember(groupId: String, serviceId: String): Boolean {
-        Log.w(TAG, "banMember: group encryption operations not available")
-        return false
-    }
+    suspend fun banMember(groupId: String, serviceId: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addAddMembersBanned(
+                GroupChangeProto.Actions.AddMemberBannedAction.newBuilder()
+                    .setAdded(
+                        MemberBanned.newBuilder()
+                            .setUserId(cipher.encryptServiceIdBytes(parseServiceId(serviceId)))
+                            .setTimestamp(System.currentTimeMillis())
+                            .build()
+                    ).build()
+            )
+            true
+        }
 
     suspend fun leaveGroup(groupId: String): Boolean {
         return kickMember(groupId, aci)
     }
 
-    suspend fun unbanMember(groupId: String, serviceId: String): Boolean {
-        Log.w(TAG, "unbanMember: group encryption operations not available")
-        return false
-    }
+    suspend fun unbanMember(groupId: String, serviceId: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addDeleteMembersBanned(
+                GroupChangeProto.Actions.DeleteMemberBannedAction.newBuilder()
+                    .setDeletedUserId(cipher.encryptServiceIdBytes(parseServiceId(serviceId))).build()
+            )
+            true
+        }
 
+    // Promotes the invitee (normally self) from a pending profile-key member to a full member by
+    // presenting their expiring profile-key credential. Ref signalmeow/groups.go
+    // PromotePendingMembers. PNI->ACI promotion (invited by PNI) is not handled here.
     suspend fun acceptInvite(groupId: String, serviceId: String): Boolean {
-        Log.w(TAG, "acceptInvite: group encryption operations not available")
-        return false
+        val masterKey = groupStore.getMasterKeyByGroupId(groupId)
+        if (masterKey == null) {
+            Log.e(TAG, "No master key stored for group $groupId")
+            return false
+        }
+        if (serviceId.startsWith("PNI:")) {
+            Log.w(TAG, "acceptInvite: PNI->ACI promotion not implemented for $serviceId")
+            return false
+        }
+        val presentation = createExpiringProfileKeyPresentation(serviceId, masterKey)
+        if (presentation == null) {
+            Log.w(TAG, "acceptInvite: could not build profile-key credential presentation for $serviceId")
+            return false
+        }
+        return applyGroupChange(groupId) { _, actions ->
+            actions.addPromoteMembersPendingProfileKey(
+                GroupChangeProto.Actions.PromoteMemberPendingProfileKeyAction.newBuilder()
+                    .setPresentation(ByteString.copyFrom(presentation))
+                    .build()
+            )
+            true
+        }
     }
 
-    suspend fun revokeInvite(groupId: String, serviceId: String): Boolean {
-        Log.w(TAG, "revokeInvite: group encryption operations not available")
-        return false
+    var profileManager: com.vayunmathur.messages.signal.contacts.ProfileManager? = null
+
+    // Fetches the target's expiring profile-key credential and builds a group-scoped presentation.
+    // Mirrors signalmeow FetchExpiringProfileKeyCredentialById + CreateExpiringProfileKeyCredentialPresentation:
+    // build a credential request from the target's profile key, fetch the profile with that request,
+    // receive the credential, then create the presentation against this group's secret params.
+    // Returns null when we lack the profile key, ProfileManager, or the server omits the credential.
+    private suspend fun createExpiringProfileKeyPresentation(
+        targetAci: String,
+        masterKey: ByteArray,
+    ): ByteArray? {
+        return try {
+            val pm = profileManager
+            if (pm == null) {
+                Log.w(TAG, "No ProfileManager wired; cannot build profile-key credential")
+                return null
+            }
+            val profileKeyBytes = recipientStore.getRecipient(targetAci)?.profileKey
+            if (profileKeyBytes == null || profileKeyBytes.size != 32) {
+                Log.w(TAG, "No profile key for $targetAci; cannot build credential presentation")
+                return null
+            }
+            val serverPublicParams = ServerPublicParams(SERVER_PUBLIC_PARAMS)
+            val clientZkProfile = ClientZkProfileOperations(serverPublicParams)
+            val aciServiceId = ServiceId.Aci(UUID.fromString(targetAci))
+            val profileKey = ProfileKey(profileKeyBytes)
+            val requestContext = clientZkProfile.createProfileKeyCredentialRequestContext(aciServiceId, profileKey)
+            val credentialRequestHex = hexEncode(requestContext.request.serialize())
+            val profile = pm.fetchProfile(targetAci, profileKeyBytes, credentialRequestHex)
+            val credentialBytes = profile?.credential
+            if (credentialBytes == null) {
+                Log.w(TAG, "Profile fetch returned no expiring profile-key credential for $targetAci")
+                return null
+            }
+            val response = ExpiringProfileKeyCredentialResponse(credentialBytes)
+            val credential = clientZkProfile.receiveExpiringProfileKeyCredential(requestContext, response)
+            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(GroupMasterKey(masterKey))
+            val presentation = clientZkProfile.createProfileKeyCredentialPresentation(groupSecretParams, credential)
+            presentation.serialize()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create expiring profile-key credential presentation for $targetAci", e)
+            null
+        }
     }
 
-    suspend fun approveKnock(groupId: String, memberAci: String, role: MemberRole = MemberRole.DEFAULT): Boolean {
-        Log.w(TAG, "approveKnock: group encryption operations not available")
-        return false
-    }
+    suspend fun revokeInvite(groupId: String, serviceId: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addDeleteMembersPendingProfileKey(
+                GroupChangeProto.Actions.DeleteMemberPendingProfileKeyAction.newBuilder()
+                    .setDeletedUserId(cipher.encryptServiceIdBytes(parseServiceId(serviceId))).build()
+            )
+            true
+        }
 
-    suspend fun denyKnock(groupId: String, memberAci: String): Boolean {
-        Log.w(TAG, "denyKnock: group encryption operations not available")
-        return false
-    }
+    suspend fun approveKnock(groupId: String, memberAci: String, role: MemberRole = MemberRole.DEFAULT): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addPromoteMembersPendingAdminApproval(
+                GroupChangeProto.Actions.PromoteMemberPendingAdminApprovalAction.newBuilder()
+                    .setUserId(cipher.encryptServiceIdBytes(parseServiceId(memberAci)))
+                    .setRole(MemberProto.Role.forNumber(role.value))
+                    .build()
+            )
+            true
+        }
 
-    suspend fun setMemberRole(groupId: String, memberAci: String, role: MemberRole): Boolean {
-        Log.w(TAG, "setMemberRole: group encryption operations not available")
-        return false
-    }
+    suspend fun denyKnock(groupId: String, memberAci: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addDeleteMembersPendingAdminApproval(
+                GroupChangeProto.Actions.DeleteMemberPendingAdminApprovalAction.newBuilder()
+                    .setDeletedUserId(cipher.encryptServiceIdBytes(parseServiceId(memberAci))).build()
+            )
+            true
+        }
 
-    suspend fun setAnnouncementsOnly(groupId: String, announcementsOnly: Boolean): Boolean {
-        Log.w(TAG, "setAnnouncementsOnly: group encryption operations not available")
-        return false
-    }
+    suspend fun setMemberRole(groupId: String, memberAci: String, role: MemberRole): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            actions.addModifyMemberRoles(
+                GroupChangeProto.Actions.ModifyMemberRoleAction.newBuilder()
+                    .setUserId(cipher.encryptServiceIdBytes(parseServiceId(memberAci)))
+                    .setRole(MemberProto.Role.forNumber(role.value))
+                    .build()
+            )
+            true
+        }
 
-    suspend fun setAttributesAccess(groupId: String, access: AccessControl): Boolean {
-        Log.w(TAG, "setAttributesAccess: group encryption operations not available")
-        return false
-    }
+    suspend fun setAnnouncementsOnly(groupId: String, announcementsOnly: Boolean): Boolean =
+        applyGroupChange(groupId) { _, actions ->
+            actions.setModifyAnnouncementsOnly(
+                GroupChangeProto.Actions.ModifyAnnouncementsOnlyAction.newBuilder()
+                    .setAnnouncementsOnly(announcementsOnly).build()
+            )
+            true
+        }
 
-    suspend fun setMemberAccess(groupId: String, access: AccessControl): Boolean {
-        Log.w(TAG, "setMemberAccess: group encryption operations not available")
-        return false
-    }
+    suspend fun setAttributesAccess(groupId: String, access: AccessControl): Boolean =
+        applyGroupChange(groupId) { _, actions ->
+            actions.setModifyAttributesAccess(
+                GroupChangeProto.Actions.ModifyAttributesAccessControlAction.newBuilder()
+                    .setAttributesAccess(AccessControlProto.AccessRequired.forNumber(access.value)).build()
+            )
+            true
+        }
 
-    suspend fun setDisappearingTimer(groupId: String, expirationSeconds: Int): Boolean {
-        Log.w(TAG, "setDisappearingTimer: group encryption operations not available")
-        return false
-    }
+    suspend fun setMemberAccess(groupId: String, access: AccessControl): Boolean =
+        applyGroupChange(groupId) { _, actions ->
+            actions.setModifyMemberAccess(
+                GroupChangeProto.Actions.ModifyMembersAccessControlAction.newBuilder()
+                    .setMembersAccess(AccessControlProto.AccessRequired.forNumber(access.value)).build()
+            )
+            true
+        }
+
+    suspend fun setDisappearingTimer(groupId: String, expirationSeconds: Int): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            val blob = GroupAttributeBlob.newBuilder()
+                .setDisappearingMessagesDuration(expirationSeconds).build()
+            actions.setModifyDisappearingMessageTimer(
+                GroupChangeProto.Actions.ModifyDisappearingMessageTimerAction.newBuilder()
+                    .setTimer(cipher.encryptAttribute(blob)).build()
+            )
+            true
+        }
 
     private suspend fun submitGroupChange(
         groupId: String,
@@ -117,7 +342,7 @@ class GroupManager(
         val response = SignalHttpClient.request(
             host = SignalHttpClient.STORAGE_HOST,
             method = "PATCH",
-            path = "/v2/groups",
+            path = "/v2/groups/",
             body = actions.toByteArray(),
             contentType = "application/x-protobuf",
             username = auth.username,
@@ -508,14 +733,25 @@ class GroupManager(
         return false
     }
 
-    suspend fun setGroupDescription(groupId: String, newDescription: String): Boolean {
-        Log.w(TAG, "setGroupDescription: group encryption operations not available")
-        return false
-    }
+    suspend fun setGroupDescription(groupId: String, newDescription: String): Boolean =
+        applyGroupChange(groupId) { cipher, actions ->
+            val blob = GroupAttributeBlob.newBuilder().setDescriptionText(newDescription).build()
+            actions.setModifyDescription(
+                GroupChangeProto.Actions.ModifyDescriptionAction.newBuilder()
+                    .setDescription(cipher.encryptAttribute(blob)).build()
+            )
+            true
+        }
 
     private fun decryptGroupAvatar(encryptedAvatar: ByteArray, masterKey: ByteArray): ByteArray {
-        Log.w(TAG, "decryptGroupAvatar: group decryption operations not available")
-        return ByteArray(0)
+        return try {
+            val groupSecretParams = GroupSecretParams.deriveFromMasterKey(GroupMasterKey(masterKey))
+            val cipher = ClientZkGroupCipher(groupSecretParams)
+            GroupAttributeBlob.parseFrom(cipher.decryptBlob(encryptedAvatar)).avatar.toByteArray()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to decrypt group avatar", e)
+            ByteArray(0)
+        }
     }
 
     private data class GroupAuthResult(val username: String, val password: String)

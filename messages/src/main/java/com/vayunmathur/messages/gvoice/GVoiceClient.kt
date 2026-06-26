@@ -64,9 +64,16 @@ object GVoiceClient {
 
     private lateinit var appContext: Context
     @Volatile private var rpc: GVoiceRpcClient? = null
+    @Volatile private var waaSigner: WaaSigner? = null
     private var realtime: RealtimeChannel? = null
     private var backfillJob: Job? = null
     private const val AUTH_USER = "0"
+
+    // Incremental thread-list cursor. ListThreads echoes a versionToken
+    // (RespListThreads.versionToken); feeding it back on the next call
+    // returns only changed threads. Mirrors libgv ListThreads' versionToken
+    // parameter (client.go:132). Reset per session.
+    @Volatile private var versionToken: String = ""
 
     // Contact cache with 5-min TTL (matches Go's contactCache + fetchContactInfo)
     private data class CachedContact(
@@ -81,6 +88,8 @@ object GVoiceClient {
     private const val MIN_REFRESH_INTERVAL_MS = 10_000L
     private const val MIN_REFRESH_BURST = 5
     private const val BACKGROUND_REFRESH_INTERVAL_MS = 15L * 60L * 1000L
+    // Safety cap on backfill pagination (≈ MAX_BACKFILL_PAGES * count messages).
+    private const val MAX_BACKFILL_PAGES = 20
     private val refreshTokens = AtomicInteger(MIN_REFRESH_BURST)
     private val lastRefreshTime = AtomicLong(0L)
     private val fetchLock = Mutex()
@@ -124,6 +133,9 @@ object GVoiceClient {
         realtime = null
         rpc?.close()
         rpc = null
+        waaSigner?.destroy()
+        waaSigner = null
+        versionToken = ""
         lastEvents.clear()
         scope.launch { VoiceAuthData.clear(appContext) }
         _state.value = State.NeedsSetup
@@ -168,6 +180,9 @@ object GVoiceClient {
     /** Trigger a re-list of conversations. */
     fun forceResync() {
         if (_state.value !is State.Connected) return
+        // User-initiated full refresh: drop the incremental cursor so the
+        // next ListThreads returns every thread, not just the delta.
+        versionToken = ""
         kickoffBackfill()
     }
 
@@ -186,9 +201,7 @@ object GVoiceClient {
         if (_state.value !is State.Connected) return false
         val client = rpc ?: return false
         val webId = conversationId.substringAfter(':', conversationId)
-        val req = baseSendBuilder(webId)
-            .setText(body)
-            .build()
+        val req = buildSendReq(webId, emptyList()) { setText(body) }
         return doSend(client, webId, req)
     }
 
@@ -235,10 +248,10 @@ object GVoiceClient {
             fileName == caption -> null
             else -> caption
         }
-        val req = baseSendBuilder(webId)
-            .apply { effectiveCaption?.takeIf { it.isNotBlank() }?.let { setText(it) } }
-            .setMedia(media)
-            .build()
+        val req = buildSendReq(webId, emptyList()) {
+            effectiveCaption?.takeIf { it.isNotBlank() }?.let { setText(it) }
+            setMedia(media)
+        }
         return doSend(client, webId, req)
     }
 
@@ -301,21 +314,60 @@ object GVoiceClient {
         }
     }
 
-    // TODO: WAA/Electron signatures for TrackingData aren't available on Android.
-    // The Go bridge uses an Electron subprocess to generate request signatures
-    // (see electron.go). Without these signatures, the fallback "!" is used.
-    /** Common builder: txn ID + fallback TrackingData (matches Go's SendMessage). */
-    private fun baseSendBuilder(webId: String): Requests.ReqSendSMS.Builder =
-        Requests.ReqSendSMS.newBuilder()
-            .setThreadID(webId)
+    /**
+     * Build a [Requests.ReqSendSMS] with a random txn id and a real WAA
+     * `TrackingData` signature when available. Mirrors the Go bridge's
+     * `HandleMatrixMessage` (handlematrix.go:40-63): it asks the WAA
+     * signer for `TrackingData`, and only when that's unavailable does
+     * `Client.SendMessage` (client.go:101) fall back to "!".
+     *
+     * [threadId] is empty for new-thread sends; [recipients] is empty for
+     * existing-thread sends (we don't track per-thread participants here —
+     * see // UNVERIFIED note in [signTracking]).
+     */
+    private suspend fun buildSendReq(
+        threadId: String,
+        recipients: List<String>,
+        configure: Requests.ReqSendSMS.Builder.() -> Unit,
+    ): Requests.ReqSendSMS {
+        val txnId = kotlin.random.Random.nextLong(100_000_000_000_000L)
+        val tracking = signTracking(threadId, recipients, txnId)
+        val builder = Requests.ReqSendSMS.newBuilder()
             .setTransactionID(
-                Requests.ReqSendSMS.WrappedTxnID.newBuilder()
-                    .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
-                    .build()
+                Requests.ReqSendSMS.WrappedTxnID.newBuilder().setID(txnId).build()
             )
             .setTrackingData(
-                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
+                Requests.ReqSendSMS.TrackingData.newBuilder().setData(tracking).build()
             )
+        if (threadId.isNotEmpty()) builder.setThreadID(threadId)
+        if (recipients.isNotEmpty()) builder.addAllRecipients(recipients)
+        builder.configure()
+        return builder.build()
+    }
+
+    /**
+     * Returns the WAA tracking-data signature, or "!" as the fallback
+     * (matches Go's `SendMessage` default when no signature is produced).
+     *
+     * // UNVERIFIED: the WAA signer runs Google's interpreter JS in a
+     * WebView (see [WaaSigner]); that JS path is not runtime-verified in
+     * this environment, and existing-thread sends pass empty recipients
+     * because per-thread participant lists aren't tracked here (the Go
+     * bridge sources them from PortalMetadata.Participants).
+     */
+    private suspend fun signTracking(
+        threadId: String,
+        recipients: List<String>,
+        txnId: Long,
+    ): String {
+        val signer = waaSigner ?: return "!"
+        return try {
+            signer.sign(threadId, recipients, txnId) ?: "!"
+        } catch (t: Throwable) {
+            Log.w(TAG, "WAA sign failed, using fallback tracking: ${t.message}")
+            "!"
+        }
+    }
 
     // Issue 7: rate limit retry delay for 429 responses
     @Volatile private var rateLimitedUntil: Long = 0L
@@ -390,6 +442,33 @@ object GVoiceClient {
     }
 
     /**
+     * Boot the WAA signer for this session and send the readiness ping.
+     * Mirrors `electron.go`: CreateWaa → load interpreter → request a
+     * blank signature → PingWaa. On any failure the session continues
+     * with the "!" tracking-data fallback (matches the Go bridge running
+     * without Electron).
+     */
+    private suspend fun setupWaa() {
+        val signer = WaaSigner(appContext) { createWaa() }
+        val blank = try {
+            signer.signBlank()
+        } catch (t: Throwable) {
+            Log.w(TAG, "WAA setup failed: ${t.message}")
+            signer.destroy()
+            return
+        }
+        if (blank == null) {
+            Log.i(TAG, "WAA signer unavailable; sends will use fallback tracking data")
+            signer.destroy()
+            return
+        }
+        waaSigner = signer
+        // Revives pingWaa (electron.go "ready" → blank signature → PingWaa).
+        val pinged = pingWaa(blank, kotlin.random.Random.nextLong(2_000_000_000L))
+        Log.i(TAG, "WAA ping ${if (pinged) "ok" else "failed"}")
+    }
+
+    /**
      * Create a WAA challenge token. Mirrors `Client.CreateWaa` in
      * `pkg/libgv/client.go`.
      */
@@ -450,18 +529,7 @@ object GVoiceClient {
         if (recipients.isEmpty()) return null
         if (_state.value !is State.Connected) return null
         val client = rpc ?: return null
-        val req = Requests.ReqSendSMS.newBuilder()
-            .addAllRecipients(recipients)
-            .setText(body)
-            .setTransactionID(
-                Requests.ReqSendSMS.WrappedTxnID.newBuilder()
-                    .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
-                    .build()
-            )
-            .setTrackingData(
-                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
-            )
-            .build()
+        val req = buildSendReq(threadId = "", recipients = recipients) { setText(body) }
         return sendNewThreadInner(client, req)
     }
 
@@ -486,19 +554,10 @@ object GVoiceClient {
             .setType(mediaType)
             .setData(com.google.protobuf.ByteString.copyFrom(data))
             .build()
-        val req = Requests.ReqSendSMS.newBuilder()
-            .addAllRecipients(recipients)
-            .apply { caption?.takeIf { it.isNotBlank() }?.let { setText(it) } }
-            .setMedia(media)
-            .setTransactionID(
-                Requests.ReqSendSMS.WrappedTxnID.newBuilder()
-                    .setID(kotlin.random.Random.nextLong(100_000_000_000_000L))
-                    .build()
-            )
-            .setTrackingData(
-                Requests.ReqSendSMS.TrackingData.newBuilder().setData("!").build()
-            )
-            .build()
+        val req = buildSendReq(threadId = "", recipients = recipients) {
+            caption?.takeIf { it.isNotBlank() }?.let { setText(it) }
+            setMedia(media)
+        }
         return sendNewThreadInner(client, req)
     }
 
@@ -644,38 +703,46 @@ object GVoiceClient {
         }
     }
 
-    /** Load (or refresh) messages for a thread. */
+    /** Load (or refresh) messages for a thread, following pagination to backfill. */
     fun fetchMessages(conversationId: String, count: Int = 100, paginationToken: String = "") {
         if (_state.value !is State.Connected) return
         scope.launch {
             val client = rpc ?: return@launch
             val webId = conversationId.substringAfter(':', conversationId)
             Log.i(TAG, "fetchMessages threadId=$webId count=$count")
-            val req = Requests.ReqGetThread.newBuilder()
-                .setThreadID(webId)
-                .setMaybeMessageCount(count)
-                .setPaginationToken(paginationToken)
-                .setUnknownWrapper(
-                    Requests.UnknownWrapper.newBuilder()
-                        .setUnknownInt2(1)
-                        .setUnknownInt3(1)
-                )
-                .build()
-            val resp = try {
-                client.postPbLite(
-                    url = VoiceEndpoints.EndpointGetThread,
-                    body = req,
-                    responseTemplate = Responses.RespGetThread.getDefaultInstance(),
-                )
-            } catch (t: Throwable) {
-                Log.w(TAG, "GetThread failed: ${t.message}")
-                return@launch
-            }
-            if (!resp.hasThread()) return@launch
-            val thread = resp.thread
-            for (i in 0 until thread.messagesCount) {
-                emitMessage(thread.getID(), thread.getMessages(i), fromBackfill = true)
-            }
+            var token = paginationToken
+            var pages = 0
+            do {
+                val req = Requests.ReqGetThread.newBuilder()
+                    .setThreadID(webId)
+                    .setMaybeMessageCount(count)
+                    .setPaginationToken(token)
+                    .setUnknownWrapper(
+                        Requests.UnknownWrapper.newBuilder()
+                            .setUnknownInt2(1)
+                            .setUnknownInt3(1)
+                    )
+                    .build()
+                val resp = try {
+                    client.postPbLite(
+                        url = VoiceEndpoints.EndpointGetThread,
+                        body = req,
+                        responseTemplate = Responses.RespGetThread.getDefaultInstance(),
+                    )
+                } catch (t: Throwable) {
+                    Log.w(TAG, "GetThread failed: ${t.message}")
+                    return@launch
+                }
+                if (!resp.hasThread()) return@launch
+                val thread = resp.thread
+                for (i in 0 until thread.messagesCount) {
+                    emitMessage(thread.getID(), thread.getMessages(i), fromBackfill = true)
+                }
+                // Follow the next-page cursor (libgv connector/handlegvoice.go loops
+                // on thread.PaginationToken until empty); bound pages as a safety cap.
+                token = thread.paginationToken
+                pages++
+            } while (token.isNotEmpty() && pages < MAX_BACKFILL_PAGES)
         }
     }
 
@@ -723,6 +790,16 @@ object GVoiceClient {
             }
         }
         rpc = client
+
+        // Fresh session ⇒ full thread list on first ListThreads.
+        versionToken = ""
+
+        // Boot the WAA request signer (revives createWaa/pingWaa). Mirrors
+        // electron.go: create the Waa payload, load the interpreter, then
+        // send the readiness ping with a blank signature.
+        waaSigner?.destroy()
+        waaSigner = null
+        scope.launch { setupWaa() }
 
         scope.launch { loadInitialContacts() }
 
@@ -867,11 +944,16 @@ object GVoiceClient {
 
     private suspend fun doBackfill() {
         val client = rpc ?: return
-        Log.i(TAG, "ListThreads (ALL_THREADS)")
+        val token = versionToken
+        Log.i(TAG, "ListThreads (ALL_THREADS)${if (token.isNotEmpty()) " incremental" else ""}")
+        // Mirror libgv ListThreads (client.go:132): pass the previous
+        // versionToken for an incremental delta, and switch unknownInt2
+        // 20→10 when a token is present.
         val req = Requests.ReqListThreads.newBuilder()
             .setFolder(Threads.ThreadFolder.ALL_THREADS)
-            .setUnknownInt2(20)
+            .setUnknownInt2(if (token.isNotEmpty()) 10 else 20)
             .setUnknownInt3(15)
+            .setVersionToken(token)
             .setUnknownWrapper(
                 Requests.UnknownWrapper.newBuilder()
                     .setUnknownInt2(1)
@@ -888,6 +970,8 @@ object GVoiceClient {
             Log.w(TAG, "ListThreads failed: ${t.message}")
             return
         }
+        // Persist the new cursor so the next backfill only fetches changes.
+        resp.versionToken.takeIf { it.isNotEmpty() }?.let { versionToken = it }
         Log.i(TAG, "ListThreads: ${resp.threadsCount} threads")
         for (i in 0 until resp.threadsCount) {
             val thread = resp.getThreads(i)

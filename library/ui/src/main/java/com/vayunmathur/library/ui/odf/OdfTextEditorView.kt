@@ -1,6 +1,10 @@
 package com.vayunmathur.library.ui.odf
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -9,9 +13,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -42,6 +49,20 @@ internal fun headingSizeSp(style: ParagraphStyle): Float? = when (style) {
     else -> null
 }
 
+/** Default bullet glyph per nesting level: • → ◦ → ▪ (cycling). */
+private fun bulletForLevel(level: Int): String = when ((level - 1).coerceAtLeast(0) % 3) {
+    0 -> "\u2022"   // • filled disc
+    1 -> "\u25E6"   // ◦ hollow circle
+    else -> "\u25AA" // ▪ small square
+}
+
+/** Default number format + suffix per nesting level: 1. → a) → i) (cycling). */
+private fun numberStyleForLevel(level: Int): Pair<String, String> = when ((level - 1).coerceAtLeast(0) % 3) {
+    0 -> "1" to "."
+    1 -> "a" to ")"
+    else -> "i" to ")"
+}
+
 /** Visible list prefix (indent + bullet/number) for a paragraph. (A1/F42) */
 fun listPrefixFor(para: OdfParagraph): String {
     // Headings: show automatic outline numbering if present, else no generic prefix. (bugfix + Round 3)
@@ -52,10 +73,24 @@ fun listPrefixFor(para: OdfParagraph): String {
     if (para.listLevel <= 0 && para.style != ParagraphStyle.LIST_ITEM) return ""
     val level = maxOf(para.listLevel, 1)
     val indent = "    ".repeat(level - 1)
-    return if (para.listType == ListType.NUMBERED) {
-        indent + para.listNumberPrefix + formatListNumber(para.listItemIndex, para.listNumberFormat) + para.listNumberSuffix + "  "
-    } else {
-        indent + sanitizeBulletChar(para.listBulletChar) + "  "
+    return when (para.listType) {
+        ListType.NUMBERED -> {
+            // Default markdown numbering varies the style by nesting level (1. → a) → i) → …).
+            val defaultStyle = para.listNumberFormat == "1" && para.listNumberSuffix == "." && para.listNumberPrefix.isEmpty()
+            if (defaultStyle) {
+                val (fmt, suffix) = numberStyleForLevel(level)
+                indent + formatListNumber(para.listItemIndex, fmt) + suffix + "  "
+            } else {
+                indent + para.listNumberPrefix + formatListNumber(para.listItemIndex, para.listNumberFormat) + para.listNumberSuffix + "  "
+            }
+        }
+        ListType.CHECKBOX ->
+            indent + (if (para.listChecked) "\u2611" else "\u2610") + "  "
+        ListType.BULLET -> {
+            // Default markdown bullets vary the glyph by nesting level (• → ◦ → ▪).
+            val ch = if (para.listBulletChar == "\u2022") bulletForLevel(level) else sanitizeBulletChar(para.listBulletChar)
+            indent + ch + "  "
+        }
     }
 }
 
@@ -109,41 +144,114 @@ fun ContinuousParagraphEditor(
     fontSizeMultiplier: Float,
     onSelectionChange: (Int, Int, Int, Int) -> Unit,
     onTextChange: (Int, Int, String) -> Unit,
+    onEnter: (gPos: Int) -> Int? = { null },
+    onBackspace: (gPos: Int) -> Int? = { null },
+    onToggleCheckbox: ((globalParaIndex: Int) -> Unit)? = null,
+    onFocusChangedCb: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     val paras = (start..endInclusive).mapNotNull { (doc.content[it] as? OdfContentBlock.Paragraph)?.paragraph }
     val plainText = paras.joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
     var tfv by remember { mutableStateOf(TextFieldValue(plainText)) }
+    var pendingCaret by remember { mutableStateOf<Int?>(null) }
     if (tfv.text != plainText) {
-        val caret = tfv.selection.end.coerceIn(0, plainText.length)
+        val caret = (pendingCaret ?: tfv.selection.end).coerceIn(0, plainText.length)
         tfv = TextFieldValue(plainText, TextRange(caret))
     }
+    pendingCaret = null
     val onSurface = MaterialTheme.colorScheme.onSurface
     val prefixColor = MaterialTheme.colorScheme.onSurfaceVariant
     val lens = remember(paras) { paras.map { p -> p.spans.sumOf { it.text.length } } }
     val prefixes = remember(paras) { paras.map { listPrefixFor(it) } }
-    val transformation = remember(paras, fontSizeMultiplier, onSurface, prefixColor) {
-        VisualTransformation { buildDocTransformed(it.text, paras, lens, prefixes, onSurface, prefixColor, fontSizeMultiplier) }
+    // Recomputed every composition so list prefixes (e.g. renumbered ordered lists, checkbox state)
+    // are always reflected immediately, even when the underlying text is unchanged.
+    val transformation = VisualTransformation {
+        buildDocTransformed(it.text, paras, lens, prefixes, onSurface, prefixColor, fontSizeMultiplier)
     }
-    // Let Compose own the caret. The built-in cursor is positioned with the SAME internal
-    // (visually-transformed) TextLayoutResult and OffsetMapping that lay out the aligned glyphs,
-    // so getCursorRect reflects each paragraph's TextAlign (set via ParagraphStyle below) and the
-    // caret stays aligned with the displayed text for left/center/right/justified paragraphs.
-    // A manual caret has to reconstruct that layout/mapping in the outer draw scope and drifts out
-    // of alignment, so it is intentionally not used here. (caret-align fix)
-    BasicTextField(
-        value = tfv,
-        onValueChange = { nv ->
-            val textChanged = nv.text != tfv.text
-            tfv = nv
-            onSelectionChange(start, endInclusive, nv.selection.min, nv.selection.max)
-            if (textChanged) onTextChange(start, endInclusive, nv.text)
-        },
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = onSurface, lineHeight = (22f * fontSizeMultiplier).sp),
-        visualTransformation = transformation,
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = modifier
-    )
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Box(modifier) {
+        // Let Compose own the caret. The built-in cursor is positioned with the SAME internal
+        // (visually-transformed) TextLayoutResult and OffsetMapping that lay out the aligned glyphs,
+        // so getCursorRect reflects each paragraph's TextAlign (set via ParagraphStyle below) and the
+        // caret stays aligned with the displayed text for left/center/right/justified paragraphs.
+        BasicTextField(
+            value = tfv,
+            onValueChange = onValueChange@{ nv ->
+                val oldText = tfv.text
+                val oldSel = tfv.selection
+                // Smart list behavior: detect a single newline insertion (Enter) or single-char
+                // delete (Backspace) at a collapsed caret and offer it to the list handlers first.
+                val isEnter = nv.selection.collapsed && nv.text.length == oldText.length + 1 &&
+                    nv.selection.start in 1..nv.text.length && nv.text[nv.selection.start - 1] == '\n' &&
+                    nv.text.substring(0, nv.selection.start - 1) + nv.text.substring(nv.selection.start) == oldText
+                if (isEnter) {
+                    val newCaret = onEnter(nv.selection.start - 1)
+                    if (newCaret != null) { pendingCaret = newCaret; return@onValueChange }
+                }
+                val isBackspace = nv.selection.collapsed && oldSel.collapsed && nv.text.length == oldText.length - 1 &&
+                    oldText.substring(0, nv.selection.start) + oldText.substring(nv.selection.start + 1) == nv.text
+                if (isBackspace) {
+                    val newCaret = onBackspace(nv.selection.start + 1)
+                    if (newCaret != null) { pendingCaret = newCaret; return@onValueChange }
+                }
+                val textChanged = nv.text != oldText
+                tfv = nv
+                onSelectionChange(start, endInclusive, nv.selection.min, nv.selection.max)
+                if (textChanged) onTextChange(start, endInclusive, nv.text)
+            },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = onSurface, lineHeight = (22f * fontSizeMultiplier).sp),
+            visualTransformation = transformation,
+            onTextLayout = { layout = it },
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().onFocusChanged { onFocusChangedCb(it.isFocused) }
+        )
+        // Tappable overlays over each checkbox glyph so tapping toggles its checked state.
+        val lay = layout
+        if (onToggleCheckbox != null && lay != null) {
+            val sep = runSeparators(paras, lens)
+            val transStarts = runTransStarts(lens, prefixes, sep)
+            val density = LocalDensity.current
+            paras.forEachIndexed { pi, para ->
+                if (para.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.CHECKBOX) {
+                    val glyphOffset = transStarts[pi]
+                    val rect = runCatching { lay.getBoundingBox(glyphOffset) }.getOrNull() ?: return@forEachIndexed
+                    with(density) {
+                        Box(
+                            Modifier
+                                .offset(x = rect.left.toDp(), y = rect.top.toDp())
+                                .size(width = (rect.height).toDp(), height = rect.height.toDp())
+                                .clickable { onToggleCheckbox(start + pi) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun sameLayout(a: OdfParagraph, b: OdfParagraph): Boolean =
+    a.alignment == b.alignment && a.lineHeightPercent == b.lineHeightPercent &&
+        a.textIndent == 0f && b.textIndent == 0f
+
+/** '\n' separators emitted between paragraphs (mirrors [buildDocTransformed]). */
+private fun runSeparators(paras: List<OdfParagraph>, lens: List<Int>): IntArray {
+    val n = paras.size
+    val sep = IntArray(n)
+    for (i in 0 until n - 1) sep[i] = if (sameLayout(paras[i], paras[i + 1]) || lens[i + 1] == 0) 1 else 0
+    if (n > 0 && lens[0] == 0 && n > 1) sep[0] = 1
+    return sep
+}
+
+/** Transformed-text start offset (start of the injected prefix) for each paragraph. */
+private fun runTransStarts(lens: List<Int>, prefixes: List<String>, sep: IntArray): IntArray {
+    val n = lens.size
+    val transStarts = IntArray(n)
+    var t = 0
+    for (i in 0 until n) {
+        transStarts[i] = t
+        t += prefixes[i].length + lens[i] + sep[i]
+    }
+    return transStarts
 }
 
 private fun buildDocTransformed(

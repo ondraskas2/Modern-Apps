@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.plus
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -122,6 +124,11 @@ fun NotePage(
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    val noteController = key(noteID) {
+        com.vayunmathur.library.ui.rememberOdfMarkdownEditorController(initialMarkdown = note.content) { content ->
+            note = note.copy(content = content)
+        }
+    }
 
     LaunchedEffect(notesViewModel) {
         notesViewModel.shareUris.collect { uri ->
@@ -211,6 +218,10 @@ fun NotePage(
                 }
             }
         }
+    }, bottomBar = {
+        if (!showSearchBar && noteController.focused) {
+            com.vayunmathur.library.ui.OdfMarkdownEditorToolbar(noteController)
+        }
     }) { paddingValues ->
         Column(
             Modifier
@@ -237,15 +248,14 @@ fun NotePage(
             )
             Spacer(Modifier.height(8.dp))
             // Edit the note's markdown through the shared ODF editor. The stored content stays
-            // markdown; the editor converts to/from an in-memory ODF document. key(noteID) gives a
-            // fresh editor when navigating between notes.
-            key(noteID) {
-                com.vayunmathur.library.ui.OdfMarkdownEditor(
-                    initialMarkdown = note.content,
-                    onMarkdownChanged = { note = note.copy(content = it) },
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                )
-            }
+            // markdown; the editor converts to/from an in-memory ODF document.
+            com.vayunmathur.library.ui.OdfMarkdownEditorField(
+                controller = noteController,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            )
         }
     }
 }

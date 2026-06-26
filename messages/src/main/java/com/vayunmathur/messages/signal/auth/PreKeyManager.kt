@@ -64,18 +64,20 @@ object PreKeyManager {
 
     suspend fun generateAndUploadPreKeys(
         ws: SignalWebSocket,
-        preKeyStore: SignalPreKeyStore,
+        aciPreKeyStore: SignalPreKeyStore,
+        pniPreKeyStore: SignalPreKeyStore,
         aciIdentityKeyPair: IdentityKeyPair,
         pniIdentityKeyPair: IdentityKeyPair,
     ) {
-        uploadKeysForIdentity(ws, preKeyStore, "aci", aciIdentityKeyPair)
-        uploadKeysForIdentity(ws, preKeyStore, "pni", pniIdentityKeyPair)
+        uploadKeysForIdentity(ws, aciPreKeyStore, "aci", aciIdentityKeyPair)
+        uploadKeysForIdentity(ws, pniPreKeyStore, "pni", pniIdentityKeyPair)
         Log.d(TAG, "Pre-keys uploaded for both identities")
     }
 
     suspend fun checkAndRefreshIfNeeded(
         ws: SignalWebSocket,
-        preKeyStore: SignalPreKeyStore,
+        aciPreKeyStore: SignalPreKeyStore,
+        pniPreKeyStore: SignalPreKeyStore,
         aciIdentityKeyPair: IdentityKeyPair,
         pniIdentityKeyPair: IdentityKeyPair,
     ) {
@@ -94,16 +96,17 @@ object PreKeyManager {
         }
 
         if (aciNeedsUpload) {
-            uploadKeysForIdentity(ws, preKeyStore, "aci", aciIdentityKeyPair)
+            uploadKeysForIdentity(ws, aciPreKeyStore, "aci", aciIdentityKeyPair)
         }
         if (pniNeedsUpload) {
-            uploadKeysForIdentity(ws, preKeyStore, "pni", pniIdentityKeyPair)
+            uploadKeysForIdentity(ws, pniPreKeyStore, "pni", pniIdentityKeyPair)
         }
     }
 
     suspend fun keyCheckLoop(
         ws: SignalWebSocket,
-        preKeyStore: SignalPreKeyStore,
+        aciPreKeyStore: SignalPreKeyStore,
+        pniPreKeyStore: SignalPreKeyStore,
         aciIdentityKeyPair: IdentityKeyPair,
         pniIdentityKeyPair: IdentityKeyPair,
     ) {
@@ -123,7 +126,7 @@ object PreKeyManager {
                 delay(waitMinutes * 60_000L)
             }
             try {
-                checkAndRefreshIfNeeded(ws, preKeyStore, aciIdentityKeyPair, pniIdentityKeyPair)
+                checkAndRefreshIfNeeded(ws, aciPreKeyStore, pniPreKeyStore, aciIdentityKeyPair, pniIdentityKeyPair)
                 // After success, check again in 36–60 hours
                 windowStartMinutes = 36 * 60
                 windowSizeMinutes = 24 * 60

@@ -303,12 +303,8 @@ object GMessagesClient {
                     result.qrUrl
                 } else {
                     val result = PairFlow.refreshPhoneRelay(rpc, auth)
-                    val ttlUs = result.tachyonTtlUs.let { if (it == 0L) DEFAULT_TTL_US else it }
-                    auth = auth.copy(
-                        tachyonAuthTokenB64 = android.util.Base64.encodeToString(result.tachyonToken, android.util.Base64.NO_WRAP),
-                        tachyonTtlUs = ttlUs,
-                        tachyonExpiryMs = System.currentTimeMillis() + (ttlUs / 1000),
-                    )
+                    // RefreshPhoneRelay does not issue a new tachyon token; keep the
+                    // existing one and only surface the regenerated QR URL.
                     result.qrUrl
                 }
             }
@@ -568,6 +564,21 @@ object GMessagesClient {
     /** Stop-typing: Go skips this entirely (returns nil), so we do the same (1.4). */
     @Suppress("UNUSED_PARAMETER")
     suspend fun sendStopTyping(conversationId: String): Boolean = true
+
+    /**
+     * Pushes a settings update to the relay (currently the push-notifications enabled flag).
+     * Fire-and-forget SETTINGS_UPDATE action, mirroring libgm Client.UpdateSettings. // UNVERIFIED runtime
+     */
+    suspend fun updateSettings(pushEnabled: Boolean): Boolean {
+        if (_state.value !is State.Connected) return false
+        val req = client.Client.SettingsUpdateRequest.newBuilder()
+            .setPushSettings(
+                client.Client.SettingsUpdateRequest.PushSettings.newBuilder()
+                    .setEnabled(pushEnabled)
+            )
+            .build()
+        return sessionHandler.sendNoWait(ActionType.SETTINGS_UPDATE, req)
+    }
 
     /**
      * Delete a single message via DELETE_MESSAGE. The relay echoes the
@@ -1572,17 +1583,32 @@ object GMessagesClient {
                     info.hasMessageContent() -> info.messageContent.content
                     info.hasMediaContent() -> {
                         val mc = info.mediaContent
-                        if (mc.mediaID.isNotBlank() && mc.decryptionKey.size() > 0) {
+                        // Prefer the full-size attachment; fall back to the thumbnail when the full
+                        // media is unavailable or its download fails. Ref libgm DownloadMedia +
+                        // thumbnail handling (MediaContent.thumbnailMediaID/thumbnailDecryptionKey).
+                        val full = if (mc.mediaID.isNotBlank() && mc.decryptionKey.size() > 0) {
                             try {
-                                val downloaded = media.download(mc.mediaID, mc.decryptionKey.toByteArray())
-                                mediaBytes = downloaded
-                                mediaMime = mc.mimeType
-                                mediaName = mc.mediaName.takeIf { it.isNotBlank() }
-                                mc.mediaName.takeIf { it.isNotBlank() } ?: "[media]"
+                                media.download(mc.mediaID, mc.decryptionKey.toByteArray())
                             } catch (e: Exception) {
                                 Log.w(TAG, "media download failed: ${e.message}")
-                                mediaLabel(mc)
+                                null
                             }
+                        } else null
+                        val downloaded = full ?: run {
+                            if (mc.thumbnailMediaID.isNotBlank() && mc.thumbnailDecryptionKey.size() > 0) {
+                                try {
+                                    media.download(mc.thumbnailMediaID, mc.thumbnailDecryptionKey.toByteArray())
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "thumbnail download failed: ${e.message}")
+                                    null
+                                }
+                            } else null
+                        }
+                        if (downloaded != null) {
+                            mediaBytes = downloaded
+                            mediaMime = mc.mimeType
+                            mediaName = mc.mediaName.takeIf { it.isNotBlank() }
+                            mc.mediaName.takeIf { it.isNotBlank() } ?: "[media]"
                         } else {
                             mediaLabel(mc)
                         }

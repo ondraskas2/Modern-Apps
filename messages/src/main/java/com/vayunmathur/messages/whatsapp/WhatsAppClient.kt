@@ -6,6 +6,8 @@ import android.util.Log
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.gmessages.GMEvent
 import com.vayunmathur.messages.util.ContactSuggestion
+import com.vayunmathur.messages.whatsapp.e2e.WhatsAppE2E
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,10 +22,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import org.signal.libsignal.protocol.state.PreKeyBundle
 import java.security.SecureRandom
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -65,8 +69,12 @@ object WhatsAppClient {
     // network stack which is indistinguishable from Chrome browser.
     private var webSocket: WebViewWebSocket? = null
     private var db: WhatsAppDatabase? = null
+    private var e2e: WhatsAppE2E? = null
     private var backfillJob: Job? = null
     private var qrJob: Job? = null
+
+    // Pending IQ request/response correlation (by stanza id) for prekey fetch/upload/count.
+    private val pendingIqs = ConcurrentHashMap<String, CompletableDeferred<WhatsAppProtocol.Node>>()
 
     private val nameCache = ConcurrentHashMap<String, String>()
     private val lidToPhoneMap = ConcurrentHashMap<String, String>()
@@ -76,6 +84,8 @@ object WhatsAppClient {
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
     private val pollSecrets = ConcurrentHashMap<String, ByteArray>()
+    // Cached media upload connection (host, auth, expiryEpochMs) from the w:m media_conn IQ.
+    private var mediaConnCache: Triple<String, String, Long>? = null
 
     private const val MAX_RECONNECT_ATTEMPTS = 10
     private const val INITIAL_RECONNECT_DELAY_MS = 1000L
@@ -158,27 +168,67 @@ object WhatsAppClient {
         }
     }
 
+    private class ProvisioningKeys(
+        val noisePriv: ByteArray,
+        val noisePub: ByteArray,
+        val identityPriv: ByteArray,
+        val identityPub: ByteArray,
+        val advSecretKey: ByteArray,
+        val registrationId: Int,
+        val signedPreKeyId: Int,
+        val signedPreKeyPriv: ByteArray,
+        val signedPreKeyPub: ByteArray,
+        val signedPreKeySig: ByteArray,
+    )
+
+    private var provisioning: ProvisioningKeys? = null
+
     fun startProvisioning() {
         _state.value = State.Connecting
         qrJob?.cancel()
         qrJob = scope.launch {
             try {
-                // 1. Generate real X25519 key pairs for Noise and identity
+                // 1. Generate Noise + identity X25519 key pairs, signed prekey (with real
+                //    signature), registration id and ADV secret — stable for the QR lifetime.
                 val (noisePriv, noisePub) = WhatsAppProtocol.generateX25519KeyPair()
                 val (identityPriv, identityPub) = WhatsAppProtocol.generateX25519KeyPair()
+                val (spkPriv, spkPub) = WhatsAppProtocol.generateX25519KeyPair()
                 val advSecretKey = ByteArray(32).apply { random.nextBytes(this) }
-                
-                // 2. Connect WebSocket and wait for Noise handshake to complete
-                webSocket = WebViewWebSocket(appContext, null).apply {
-                    val ws = this
+                val registrationId = random.nextInt(0x3FFF) + 1
+                val signedPreKeySig = WhatsAppE2E.signSignedPreKey(identityPriv, spkPub)
+                provisioning = ProvisioningKeys(
+                    noisePriv, noisePub, identityPriv, identityPub, advSecretKey,
+                    registrationId, 1, spkPriv, spkPub, signedPreKeySig,
+                )
+
+                // 2. Connect the provisioning socket. The server will send a pair-device IQ
+                //    carrying the QR ref once the Noise handshake completes.
+                webSocket = WebViewWebSocket(
+                    appContext,
+                    null,
+                    WebViewWebSocket.RegistrationData(
+                        noisePrivateKey = noisePriv,
+                        noisePublicKey = noisePub,
+                        registrationId = registrationId,
+                        identityPublicKey = identityPub,
+                        signedPreKeyId = 1,
+                        signedPreKeyPublic = spkPub,
+                        signedPreKeySignature = signedPreKeySig,
+                    ),
+                ).apply {
                     scope.launch {
                         connectionState.collect { connState ->
                             when (connState) {
-                                is WebViewWebSocket.ConnectionState.Connected -> {
-                                    Log.i(TAG, "WebSocket connected, waiting for ref from server")
-                                }
+                                is WebViewWebSocket.ConnectionState.Connected ->
+                                    Log.i(TAG, "Provisioning socket connected, awaiting pair-device ref")
                                 is WebViewWebSocket.ConnectionState.Disconnected -> {
-                                    if (_state.value is State.AwaitingQrScan || _state.value is State.Connecting) {
+                                    val pairedAuth = authData
+                                    if (pairedAuth != null) {
+                                        // Pairing completed: the server drops the provisioning
+                                        // socket; reconnect as the registered device (login payload).
+                                        Log.i(TAG, "Provisioning socket closed post-pair; reconnecting as registered device")
+                                        connect(pairedAuth)
+                                    } else if (_state.value is State.AwaitingQrScan || _state.value is State.Connecting) {
                                         _state.value = State.Disconnected(connState.reason)
                                     }
                                 }
@@ -186,79 +236,406 @@ object WhatsAppClient {
                             }
                         }
                     }
-                    
                     scope.launch {
-                        messages.collect { data ->
-                            handleProvisioningMessage(data, noisePriv, noisePub, identityPriv, identityPub, advSecretKey)
-                        }
+                        messages.collect { data -> handleProvisioningMessage(data) }
                     }
-                    
                     connect()
                 }
-                
-                // 3. Generate QR data with real keys
-                // Go format: https://wa.me/settings/linked_devices#ref,noise,identity,adv,clientType
-                // Use a placeholder ref until the server sends one via pair-device IQ
-                val refBytes = ByteArray(16).apply { random.nextBytes(this) }
-                val ref = Base64.encodeToString(refBytes, Base64.NO_WRAP)
-                val qrData = "https://wa.me/settings/linked_devices#" + listOf(
-                    ref,
-                    Base64.encodeToString(noisePub, Base64.NO_WRAP),
-                    Base64.encodeToString(identityPub, Base64.NO_WRAP),
-                    Base64.encodeToString(advSecretKey, Base64.NO_WRAP),
-                    "1" // PairClientChrome (from whatsmeow/pair-code.go)
-                ).joinToString(",")
-                _state.value = State.AwaitingQrScan(qrData)
-                
-                Log.i(TAG, "QR code generated, waiting for phone to scan")
-
             } catch (e: Exception) {
                 Log.e(TAG, "Provisioning failed", e)
                 _state.value = State.Disconnected("Provisioning failed: ${e.message}")
             }
         }
     }
-    
-    private fun handleProvisioningMessage(
-        data: ByteArray,
-        noisePriv: ByteArray,
-        noisePub: ByteArray,
-        identityPriv: ByteArray,
-        identityPub: ByteArray,
-        advSecretKey: ByteArray,
-    ) {
+
+    private fun handleProvisioningMessage(data: ByteArray) {
         scope.launch {
             try {
                 val node = WhatsAppProtocol.decodeNode(data)
                 Log.d(TAG, "Provisioning message: tag=${node.tag}")
-                
-                if (node.tag == "success") {
-                    val wid = node.attrs["wid"] ?: ""
-                    val signedPreKP = WhatsAppProtocol.generateX25519KeyPair()
-                    val auth = WhatsAppAuthData(
-                        phoneNumber = wid.substringBefore("@"),
-                        pushName = node.attrs["pushname"] ?: "User",
-                        wid = wid,
-                        noisePrivateKey = Base64.encodeToString(noisePriv, Base64.NO_WRAP),
-                        noisePublicKey = Base64.encodeToString(noisePub, Base64.NO_WRAP),
-                        identityPrivateKey = Base64.encodeToString(identityPriv, Base64.NO_WRAP),
-                        identityPublicKey = Base64.encodeToString(identityPub, Base64.NO_WRAP),
-                        registrationId = random.nextInt(),
-                        signedPreKeyId = 1,
-                        signedPreKeyPublic = Base64.encodeToString(signedPreKP.second, Base64.NO_WRAP),
-                        signedPreKeyPrivate = Base64.encodeToString(signedPreKP.first, Base64.NO_WRAP),
-                        signedPreKeySignature = Base64.encodeToString(ByteArray(64), Base64.NO_WRAP),
-                        advSecretKey = Base64.encodeToString(advSecretKey, Base64.NO_WRAP),
-                    )
-                    WhatsAppAuthData.save(appContext, auth)
-                    authData = auth
-                    _state.value = State.Connected
-                    kickoffBackfill()
+                if (node.tag != "iq") return@launch
+                val child = node.getChildren().firstOrNull() ?: return@launch
+                when (child.tag) {
+                    "pair-device" -> handlePairDevice(node, child)
+                    "pair-success" -> handlePairSuccess(node, child)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to handle provisioning message", e)
             }
         }
+    }
+
+    /** Ack the pair-device IQ and surface the QR ref. Ref whatsmeow pair.go handlePairDevice. */
+    private fun handlePairDevice(node: WhatsAppProtocol.Node, pairDevice: WhatsAppProtocol.Node) {
+        val keys = provisioning ?: return
+        val from = node.attrs["from"] ?: "s.whatsapp.net"
+        val id = node.attrs["id"] ?: return
+        // Ack
+        webSocket?.send(
+            WhatsAppProtocol.encodeNode(
+                WhatsAppProtocol.Node(
+                    tag = "iq",
+                    attrs = mapOf("to" to from, "id" to id, "type" to "result"),
+                )
+            )
+        )
+        val refNode = pairDevice.getChildren().firstOrNull { it.tag == "ref" } ?: return
+        val ref = refNode.data?.toString(Charsets.UTF_8) ?: return
+        val qrData = "https://wa.me/settings/linked_devices#" + listOf(
+            ref,
+            Base64.encodeToString(keys.noisePub, Base64.NO_WRAP),
+            Base64.encodeToString(keys.identityPub, Base64.NO_WRAP),
+            Base64.encodeToString(keys.advSecretKey, Base64.NO_WRAP),
+            "1", // PairClientChrome (whatsmeow pair-code.go)
+        ).joinToString(",")
+        _state.value = State.AwaitingQrScan(qrData)
+        Log.i(TAG, "QR ref received, awaiting phone scan")
+    }
+
+    /**
+     * Verify the ADV device identity, sign it, persist auth, and confirm with
+     * pair-device-sign. Ref whatsmeow pair.go handlePairSuccess/handlePair.
+     */
+    private suspend fun handlePairSuccess(node: WhatsAppProtocol.Node, pairSuccess: WhatsAppProtocol.Node) {
+        val keys = provisioning ?: return
+        val reqId = node.attrs["id"] ?: return
+        val from = node.attrs["from"] ?: "s.whatsapp.net"
+        try {
+            val deviceIdentityBytes = pairSuccess.getChildByTag("device-identity")?.data
+                ?: throw IllegalStateException("missing device-identity")
+            val deviceNode = pairSuccess.getChildByTag("device")
+            val jid = deviceNode?.attrs?.get("jid") ?: throw IllegalStateException("missing device jid")
+            val lid = deviceNode.attrs["lid"] ?: ""
+
+            val container = com.vayunmathur.messages.whatsapp.proto.WhatsAppAdvProto
+                .ADVSignedDeviceIdentityHMAC.parseFrom(deviceIdentityBytes)
+            val details = container.details.toByteArray()
+
+            // HMAC check (E2EE account type; hosted accounts use a different prefix).
+            val expectedHmac = WhatsAppProtocol.hmacSha256(keys.advSecretKey, details)
+            if (!expectedHmac.contentEquals(container.getHMAC().toByteArray())) {
+                Log.e(TAG, "ADV HMAC mismatch")
+                sendPairError(from, reqId, 401, "hmac-mismatch")
+                _state.value = State.Disconnected("Pairing failed: HMAC mismatch")
+                return
+            }
+
+            val deviceIdentity = com.vayunmathur.messages.whatsapp.proto.WhatsAppAdvProto
+                .ADVSignedDeviceIdentity.parseFrom(details)
+            val accountSignatureKey = deviceIdentity.accountSignatureKey.toByteArray()
+            val accountSignature = deviceIdentity.accountSignature.toByteArray()
+            val deviceDetails = com.vayunmathur.messages.whatsapp.proto.WhatsAppAdvProto
+                .ADVDeviceIdentity.parseFrom(deviceIdentity.details.toByteArray())
+
+            // Verify account signature over {6,0} || details || ownIdentityPub.
+            val accountMsg = concat(byteArrayOf(6, 0), deviceIdentity.details.toByteArray(), keys.identityPub)
+            val accountKey = org.signal.libsignal.protocol.ecc.ECPublicKey.fromPublicKeyBytes(accountSignatureKey)
+            if (accountSignatureKey.size != 32 || accountSignature.size != 64 ||
+                !accountKey.verifySignature(accountMsg, accountSignature)
+            ) {
+                Log.e(TAG, "ADV account signature invalid")
+                sendPairError(from, reqId, 401, "signature-mismatch")
+                _state.value = State.Disconnected("Pairing failed: signature mismatch")
+                return
+            }
+
+            // Device signature over {6,1} || details || ownIdentityPub || accountSignatureKey.
+            val deviceMsg = concat(byteArrayOf(6, 1), deviceIdentity.details.toByteArray(), keys.identityPub, accountSignatureKey)
+            val deviceSignature = org.signal.libsignal.protocol.ecc.ECPrivateKey(keys.identityPriv)
+                .calculateSignature(deviceMsg)
+
+            val signedIdentity = deviceIdentity.toBuilder()
+                .setDeviceSignature(com.google.protobuf.ByteString.copyFrom(deviceSignature))
+                .build()
+            // Account (full, used in device-identity node for pkmsg sends).
+            val accountFull = signedIdentity.toByteArray()
+            // Self-signed (account signature key cleared) for the confirmation node.
+            val selfSigned = signedIdentity.toBuilder().clearAccountSignatureKey().build().toByteArray()
+
+            val deviceId = jid.substringBefore("@").substringAfter(":", "0").toIntOrNull() ?: 0
+            val auth = WhatsAppAuthData(
+                phoneNumber = jid.substringBefore("@").substringBefore(":"),
+                pushName = pairSuccess.getChildByTag("platform")?.attrs?.get("name") ?: "User",
+                wid = jid,
+                noisePrivateKey = Base64.encodeToString(keys.noisePriv, Base64.NO_WRAP),
+                noisePublicKey = Base64.encodeToString(keys.noisePub, Base64.NO_WRAP),
+                identityPrivateKey = Base64.encodeToString(keys.identityPriv, Base64.NO_WRAP),
+                identityPublicKey = Base64.encodeToString(keys.identityPub, Base64.NO_WRAP),
+                registrationId = keys.registrationId,
+                signedPreKeyId = keys.signedPreKeyId,
+                signedPreKeyPublic = Base64.encodeToString(keys.signedPreKeyPub, Base64.NO_WRAP),
+                signedPreKeyPrivate = Base64.encodeToString(keys.signedPreKeyPriv, Base64.NO_WRAP),
+                signedPreKeySignature = Base64.encodeToString(keys.signedPreKeySig, Base64.NO_WRAP),
+                advSecretKey = Base64.encodeToString(keys.advSecretKey, Base64.NO_WRAP),
+                deviceId = deviceId,
+                lid = lid,
+                accountSignedDeviceIdentity = Base64.encodeToString(accountFull, Base64.NO_WRAP),
+            )
+            WhatsAppAuthData.save(appContext, auth)
+            authData = auth
+
+            // Confirm pairing: pair-device-sign with the self-signed identity.
+            val keyIndex = if (deviceDetails.hasKeyIndex()) deviceDetails.keyIndex else 0
+            val confirm = WhatsAppProtocol.Node(
+                tag = "iq",
+                attrs = mapOf("to" to from, "type" to "result", "id" to reqId),
+                content = listOf(
+                    WhatsAppProtocol.Node(
+                        tag = "pair-device-sign",
+                        content = listOf(
+                            WhatsAppProtocol.Node(
+                                tag = "device-identity",
+                                attrs = mapOf("key-index" to keyIndex.toString()),
+                                data = selfSigned,
+                            )
+                        ),
+                    )
+                ),
+            )
+            webSocket?.send(WhatsAppProtocol.encodeNode(confirm))
+            provisioning = null
+            Log.i(TAG, "Pairing confirmed for $jid; awaiting reconnect with credentials")
+            // The server disconnects after this; reconnect() / start() will connect as the
+            // registered device and prekeys will be uploaded on the Connected event.
+        } catch (e: Exception) {
+            Log.e(TAG, "Pairing failed", e)
+            sendPairError(from, reqId, 500, "internal-error")
+            _state.value = State.Disconnected("Pairing failed: ${e.message}")
+        }
+    }
+
+    private fun sendPairError(to: String, id: String, code: Int, text: String) {
+        webSocket?.send(
+            WhatsAppProtocol.encodeNode(
+                WhatsAppProtocol.Node(
+                    tag = "iq",
+                    attrs = mapOf("to" to to, "type" to "error", "id" to id),
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "error",
+                            attrs = mapOf("code" to code.toString(), "text" to text),
+                        )
+                    ),
+                )
+            )
+        )
+    }
+
+    private fun concat(vararg parts: ByteArray): ByteArray {
+        val out = ByteArray(parts.sumOf { it.size })
+        var off = 0
+        for (p in parts) {
+            System.arraycopy(p, 0, out, off, p.size)
+            off += p.size
+        }
+        return out
+    }
+
+    private fun ensureE2E(auth: WhatsAppAuthData): WhatsAppE2E? {
+        val database = db ?: return null
+        var inst = e2e
+        if (inst == null) {
+            inst = WhatsAppE2E(database, auth)
+            inst.ensureSignedPreKeyStored()
+            e2e = inst
+        }
+        return inst
+    }
+
+    /**
+     * Send an <iq> stanza and await its result/error response by id.
+     * Returns the response node, or null on timeout.
+     */
+    private suspend fun sendIqAndWait(node: WhatsAppProtocol.Node, timeoutMs: Long = 30_000): WhatsAppProtocol.Node? {
+        val ws = webSocket ?: return null
+        val id = node.attrs["id"] ?: return null
+        val deferred = CompletableDeferred<WhatsAppProtocol.Node>()
+        pendingIqs[id] = deferred
+        return try {
+            if (!ws.send(WhatsAppProtocol.encodeNode(node))) {
+                pendingIqs.remove(id)
+                return null
+            }
+            withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } finally {
+            pendingIqs.remove(id)
+        }
+    }
+
+    /**
+     * Upload one-time + signed prekeys to the server.
+     * Ref whatsmeow prekeys.go uploadPreKeys. [initialUpload] uploads a large batch after pair.
+     */
+    /**
+     * Upload prekeys on connect if the server is likely low. Does an initial large batch
+     * when the local prekey store is empty (freshly paired). Ref whatsmeow prekeys.go.
+     */
+    private suspend fun maybeUploadPreKeys() {
+        val database = db ?: return
+        val count = try { database.e2ePreKeyDao().getCount() } catch (e: Exception) { return }
+        val unuploaded = try { database.e2ePreKeyDao().getUnuploaded().size } catch (e: Exception) { 0 }
+        when {
+            count == 0 -> uploadPreKeys(initialUpload = true)
+            unuploaded > 0 -> uploadPreKeys(initialUpload = false)
+        }
+    }
+
+    /**
+     * Upload one-time + signed prekeys to the server.
+     * Ref whatsmeow prekeys.go uploadPreKeys. [initialUpload] uploads a large batch after pair.
+     */
+    private suspend fun uploadPreKeys(initialUpload: Boolean) {
+        val auth = authData ?: return
+        val crypto = ensureE2E(auth) ?: return
+        val content = crypto.buildPreKeyUploadContent(initialUpload)
+        val iq = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to generateMessageId(),
+                "type" to "set",
+                "xmlns" to "encrypt",
+                "to" to "s.whatsapp.net",
+            ),
+            content = content,
+        )
+        val resp = sendIqAndWait(iq)
+        if (resp != null && resp.attrs["type"] != "error") {
+            crypto.markPreKeysUploaded()
+            Log.i(TAG, "Uploaded prekeys (initial=$initialUpload)")
+        } else {
+            Log.w(TAG, "Prekey upload failed or timed out")
+        }
+    }
+
+    /**
+     * Fetch a peer's prekey bundle and establish an outbound session if none exists.
+     * Ref whatsmeow prekeys.go fetchPreKeys + send.go encryptMessageForDevice.
+     */
+    private suspend fun ensureSession(jid: String): Boolean {
+        val auth = authData ?: return false
+        val crypto = ensureE2E(auth) ?: return false
+        if (crypto.hasSession(jid)) return true
+
+        val device = jid.substringBefore("@").substringAfter(":", "0").toIntOrNull() ?: 0
+        val iq = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to generateMessageId(),
+                "type" to "get",
+                "xmlns" to "encrypt",
+                "to" to "s.whatsapp.net",
+            ),
+            content = listOf(
+                WhatsAppProtocol.Node(
+                    tag = "key",
+                    content = listOf(
+                        WhatsAppProtocol.Node(
+                            tag = "user",
+                            attrs = mapOf("jid" to jid, "reason" to "identity"),
+                        )
+                    ),
+                )
+            ),
+        )
+        val resp = sendIqAndWait(iq) ?: return false
+        val list = resp.getChildByTag("list") ?: return false
+        val userNode = list.getChildren().firstOrNull { it.tag == "user" } ?: return false
+        val bundle: PreKeyBundle = crypto.parsePreKeyBundleNode(device, userNode) ?: return false
+        return try {
+            crypto.processPreKeyBundle(jid, bundle)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to process prekey bundle for $jid", e)
+            false
+        }
+    }
+
+    /**
+     * Resolve the device list for the given (bare) user JIDs via a usync query.
+     * Ref whatsmeow user.go GetUserDevices. Returns wire device JIDs ("user@server" for device 0,
+     * "user:N@server" otherwise). Returns empty on failure (callers fall back to the bare JID).
+     */
+    private suspend fun getUserDevices(userJids: List<String>): List<String> {
+        if (userJids.isEmpty()) return emptyList()
+        val bareUsers = userJids.map { it.substringBefore(":").let { u -> if (u.contains("@")) u else "$u@s.whatsapp.net" } }
+        val iq = WhatsAppProtocol.buildUsyncDevicesQuery(bareUsers, generateMessageId(), generateMessageId())
+        val resp = sendIqAndWait(iq) ?: return emptyList()
+        val list = resp.getChildByTag("usync")?.getChildByTag("list") ?: return emptyList()
+        val devices = mutableListOf<String>()
+        list.getChildren().filter { it.tag == "user" }.forEach { user ->
+            val userJid = user.attrs["jid"] ?: return@forEach
+            val bareUser = userJid.substringBefore("@").substringBefore(":")
+            val server = userJid.substringAfter("@", "s.whatsapp.net")
+            val deviceList = user.getChildByTag("devices")?.getChildByTag("device-list") ?: return@forEach
+            deviceList.getChildren().filter { it.tag == "device" }.forEach { d ->
+                if (d.attrs["is_hosted"] == "true") return@forEach
+                val devId = d.attrs["id"]?.toIntOrNull() ?: return@forEach
+                devices.add(if (devId == 0) "$bareUser@$server" else "$bareUser:$devId@$server")
+            }
+        }
+        return devices
+    }
+
+    /**
+     * Query a group's participant JIDs via an interactive w:g2 query.
+     * Ref whatsmeow group.go getGroupInfo.
+     */
+    private suspend fun queryGroupParticipants(groupJid: String): List<String> {
+        val iq = WhatsAppProtocol.buildGroupParticipantsQuery(groupJid, generateMessageId())
+        val resp = sendIqAndWait(iq) ?: return emptyList()
+        val group = resp.getChildByTag("group") ?: return emptyList()
+        return group.getChildren().filter { it.tag == "participant" }.mapNotNull { it.attrs["jid"] }
+    }
+
+    /**
+     * Fetch (and cache) the media upload host + auth token via the w:m media_conn IQ.
+     * Ref whatsmeow mediaconn.go queryMediaConn. Returns (host, auth) or null.
+     */
+    private suspend fun mediaConn(): Pair<String, String>? {
+        mediaConnCache?.let { if (System.currentTimeMillis() < it.third) return it.first to it.second }
+        val iq = WhatsAppProtocol.buildMediaConnQuery(generateMessageId())
+        val resp = sendIqAndWait(iq) ?: return null
+        val mc = resp.getChildByTag("media_conn") ?: return null
+        val auth = mc.attrs["auth"] ?: return null
+        val ttl = mc.attrs["ttl"]?.toLongOrNull() ?: 300L
+        val host = mc.getChildren().firstOrNull { it.tag == "host" }?.attrs?.get("hostname") ?: return null
+        mediaConnCache = Triple(host, auth, System.currentTimeMillis() + ttl * 1000)
+        return host to auth
+    }
+
+    /**
+     * Establish sessions and Signal-encrypt a (padded) plaintext for each device, skipping our own
+     * current device. Own other devices get [dsmPlaintextPadded] (the DeviceSentMessage); everyone
+     * else gets [msgPlaintextPadded]. Mirrors whatsmeow send.go encryptMessageForDevices.
+     */
+    private suspend fun encryptForDevices(
+        crypto: WhatsAppE2E,
+        devices: List<String>,
+        ownUser: String,
+        ownDeviceJid: String,
+        msgPlaintextPadded: ByteArray,
+        dsmPlaintextPadded: ByteArray?,
+    ): Pair<List<WhatsAppProtocol.ParticipantEnc>, Boolean> {
+        val encs = mutableListOf<WhatsAppProtocol.ParticipantEnc>()
+        var includeIdentity = false
+        for (dev in devices.distinct()) {
+            if (dev == ownDeviceJid) continue
+            val devUser = dev.substringBefore("@").substringBefore(":")
+            val plaintext = if (devUser == ownUser && dsmPlaintextPadded != null) dsmPlaintextPadded else msgPlaintextPadded
+            if (!ensureSession(dev)) {
+                Log.w(TAG, "No session for device $dev; skipping in fan-out")
+                continue
+            }
+            val enc = try {
+                crypto.encryptDM(dev, plaintext)
+            } catch (e: Exception) {
+                Log.w(TAG, "Encrypt failed for device $dev", e)
+                continue
+            }
+            if (enc.type == "pkmsg") includeIdentity = true
+            encs.add(WhatsAppProtocol.ParticipantEnc(dev, enc.type, enc.data))
+        }
+        return encs to includeIdentity
     }
 
     private suspend fun connect(auth: WhatsAppAuthData) {
@@ -270,11 +647,13 @@ object WhatsAppClient {
                 connectionState.collect { state ->
                     when (state) {
                         is WebViewWebSocket.ConnectionState.Connected -> {
+                            // Noise transport is up, but the server still must send <success>
+                            // before we are authenticated. The post-connect routine (active IQ,
+                            // prekey upload, presence, backfill) runs in handleConnectSuccess on
+                            // <success>, matching whatsmeow connectionevents.go handleConnectSuccess.
                             reconnectAttempts = 0
                             _state.value = State.Connected
-                            // Go Connected event sends PresenceUnavailable
-                            sendUnavailablePresence()
-                            kickoffBackfill()
+                            ensureE2E(auth)
                         }
                         is WebViewWebSocket.ConnectionState.Disconnected -> {
                             if (authData != null) {
@@ -316,6 +695,16 @@ object WhatsAppClient {
                     webSocket?.send(WhatsAppProtocol.encodeNode(ack))
                 }
 
+                // Complete any pending IQ request awaiting this response (prekey fetch/upload).
+                if (node.tag == "iq") {
+                    val iqId = node.attrs["id"]
+                    val pending = if (iqId != null) pendingIqs.remove(iqId) else null
+                    if (pending != null) {
+                        pending.complete(node)
+                        return@launch
+                    }
+                }
+
                 // Handle connection failure events (Go handleWALogout, ClientOutdated, TemporaryBan)
                 if (node.tag == "failure") {
                     val reason = node.attrs["reason"] ?: "unknown"
@@ -337,6 +726,14 @@ object WhatsAppClient {
                     val errorNode = node.content.firstOrNull()
                     Log.e(TAG, "Stream error: ${errorNode?.tag ?: "unknown"}")
                     _state.value = State.Disconnected("Stream error")
+                    return@launch
+                }
+
+                // Handle the server <success> stanza — the real authentication signal
+                // (Go connectionevents.go handleConnectSuccess). Until this arrives the Noise
+                // transport is up but the login is not yet authenticated.
+                if (node.tag == "success") {
+                    handleConnectSuccess(node)
                     return@launch
                 }
 
@@ -367,7 +764,48 @@ object WhatsAppClient {
                     return@launch
                 }
 
-                val message = WhatsAppProtocol.parseMessage(node) ?: return@launch
+                val crypto = authData?.let { ensureE2E(it) }
+                var decryptFailed = false
+                val message = WhatsAppProtocol.parseMessage(node) { senderJid, encType, data ->
+                    if (crypto == null) {
+                        decryptFailed = true
+                        return@parseMessage null
+                    }
+                    val result = try {
+                        when (encType) {
+                            "pkmsg" -> crypto.decryptDM(senderJid, isPreKey = true, ciphertext = data)
+                            "msg" -> crypto.decryptDM(senderJid, isPreKey = false, ciphertext = data)
+                            "skmsg" -> crypto.decryptGroup(senderJid, data)
+                            else -> null
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "E2E decrypt failed ($encType) from $senderJid", e)
+                        null
+                    }
+                    if (result == null) decryptFailed = true
+                    result
+                } ?: return@launch
+
+                // Decrypt failure: ask the sender to re-encrypt (Go decryptMessages -> sendRetryReceipt).
+                if (decryptFailed) {
+                    sendRetryReceipt(node)
+                    return@launch
+                }
+
+                // Process inbound sender-key distribution so future group skmsg decrypt.
+                // UNVERIFIED: group sender-key wire mapping not runtime-tested.
+                val skdm = message.e2eMessage?.takeIf { it.hasSenderKeyDistributionMessage() }
+                    ?.senderKeyDistributionMessage
+                if (skdm != null && crypto != null) {
+                    try {
+                        crypto.processSenderKeyDistribution(
+                            message.participant ?: message.from,
+                            skdm.axolotlSenderKeyDistributionMessage.toByteArray(),
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to process SKDM", e)
+                    }
+                }
 
                 // Skip status broadcasts (Go handleWAMessage status@broadcast check)
                 if (message.from.startsWith("status@broadcast")) {
@@ -827,6 +1265,31 @@ object WhatsAppClient {
     }
 
     /**
+     * Send a retry receipt asking the sender to re-encrypt an undecryptable message.
+     * Ref whatsmeow retry.go sendRetryReceipt. Retries are capped at 5; the identity/prekey <keys>
+     * node is included from the 2nd retry onward.
+     */
+    private suspend fun sendRetryReceipt(node: WhatsAppProtocol.Node) {
+        val auth = authData ?: return
+        val crypto = ensureE2E(auth) ?: return
+        val ws = webSocket ?: return
+        val msgId = node.attrs["id"] ?: return
+        val count = undecryptableTracker.merge("retry:$msgId", 1) { a, b -> a + b } ?: 1
+        if (count > 5) {
+            Log.w(TAG, "Not sending more retry receipts for $msgId")
+            return
+        }
+        val keysNode = if (count > 1) {
+            try { crypto.buildRetryReceiptKeysNode(accountDeviceIdentity()) } catch (e: Exception) {
+                Log.w(TAG, "Failed to build retry keys node", e); null
+            }
+        } else null
+        val receipt = WhatsAppProtocol.buildRetryReceipt(node, auth.registrationId, count, keysNode)
+        ws.send(WhatsAppProtocol.encodeNode(receipt))
+        Log.d(TAG, "Sent retry receipt #$count for $msgId")
+    }
+
+    /**
      * Track undecryptable messages.
      * From Go handleWAUndecryptableMessage / trackUndecryptable.
      */
@@ -921,14 +1384,114 @@ object WhatsAppClient {
 
         val to = extractJid(conversationId) ?: return false
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+
+        val node = buildEncryptedTextNode(to, id, body) ?: return false
         pendingMessageIDs.add(id)
-
-        val node = WhatsAppProtocol.buildTextMessage(to, id, body)
-        val data = WhatsAppProtocol.encodeNode(node)
-
-        val sent = ws.send(data)
+        val sent = ws.send(WhatsAppProtocol.encodeNode(node))
         if (!sent) pendingMessageIDs.remove(id)
         return sent
+    }
+
+    /**
+     * Build a Signal-encrypted text message node for a recipient, fanning out to all of the
+     * recipient's devices and our own other devices (via usync), establishing sessions as needed.
+     * Group recipients (@g.us) use the sender-key (skmsg) path. Returns null on failure.
+     */
+    private suspend fun buildEncryptedTextNode(to: String, id: String, body: String): WhatsAppProtocol.Node? {
+        val auth = authData ?: return null
+        val crypto = ensureE2E(auth) ?: return null
+        if (to.contains("@g.us")) {
+            return buildEncryptedGroupTextNode(to, id, body)
+        }
+        val msg = WhatsAppProtocol.buildConversationMessage(body)
+        val msgPlaintext = WhatsAppProtocol.padMessage(msg.toByteArray())
+        val dsmPlaintext = WhatsAppProtocol.padMessage(WhatsAppProtocol.deviceSentPlaintext(to, msg))
+        val ownUser = auth.wid.substringBefore("@").substringBefore(":")
+
+        // Fan out to the recipient's devices + our own other devices; fall back to the bare JID
+        // if usync is unavailable so 1:1 to the primary device still works.
+        val recipientDevices = getUserDevices(listOf(to)).ifEmpty { listOf(to) }
+        val ownDevices = getUserDevices(listOf("$ownUser@s.whatsapp.net"))
+        val allDevices = (recipientDevices + ownDevices).distinct()
+
+        val (encs, includeIdentity) = encryptForDevices(
+            crypto, allDevices, ownUser, auth.wid, msgPlaintext, dsmPlaintext,
+        )
+        if (encs.isEmpty()) {
+            Log.e(TAG, "No devices could be encrypted for $to")
+            return null
+        }
+        val deviceIdentity = if (includeIdentity) accountDeviceIdentity() else null
+        return WhatsAppProtocol.buildFanOutMessageNode(
+            to = to,
+            id = id,
+            type = "text",
+            participantEncs = encs,
+            includeDeviceIdentity = includeIdentity,
+            deviceIdentity = deviceIdentity,
+        )
+    }
+
+    /**
+     * Build a group text message: sender-key encrypt the content (skmsg) and 1:1 fan out the
+     * SenderKeyDistributionMessage to every member device. Mirrors whatsmeow send.go sendGroup.
+     * UNVERIFIED: libsignal-client's sender-key wire format (distribution UUID + versioned
+     * SenderKeyMessage) differs from WhatsApp's legacy libsignal sender-key format, so group
+     * skmsg crypto interop is not runtime-verified.
+     */
+    private suspend fun buildEncryptedGroupTextNode(groupJid: String, id: String, body: String): WhatsAppProtocol.Node? {
+        val auth = authData ?: return null
+        val crypto = ensureE2E(auth) ?: return null
+        val msg = WhatsAppProtocol.buildConversationMessage(body)
+        val contentPadded = WhatsAppProtocol.padMessage(msg.toByteArray())
+
+        val skmsgCiphertext = try {
+            crypto.encryptGroup(groupJid, contentPadded)
+        } catch (e: Exception) {
+            Log.e(TAG, "Group sender-key encrypt failed for $groupJid", e)
+            return null
+        }
+        val skdmBytes = crypto.createSenderKeyDistribution(groupJid).serialize()
+        val skdmPlaintext = WhatsAppProtocol.padMessage(
+            WhatsAppProtocol.senderKeyDistributionPlaintext(groupJid, skdmBytes)
+        )
+
+        val participants = queryGroupParticipants(groupJid)
+        if (participants.isEmpty()) {
+            Log.w(TAG, "No participants resolved for group $groupJid; cannot fan out SKDM")
+            return null
+        }
+        val devices = getUserDevices(participants).ifEmpty { participants }
+        val ownUser = auth.wid.substringBefore("@").substringBefore(":")
+        val (encs, includeIdentity) = encryptForDevices(
+            crypto, devices, ownUser, auth.wid, skdmPlaintext, null,
+        )
+        if (encs.isEmpty()) {
+            Log.e(TAG, "No group devices could be encrypted for $groupJid")
+            return null
+        }
+        val skMsg = WhatsAppProtocol.Node(
+            tag = "enc",
+            attrs = mapOf("v" to "2", "type" to "skmsg"),
+            data = skmsgCiphertext,
+        )
+        val deviceIdentity = if (includeIdentity) accountDeviceIdentity() else null
+        return WhatsAppProtocol.buildFanOutMessageNode(
+            to = groupJid,
+            id = id,
+            type = "text",
+            participantEncs = encs,
+            includeDeviceIdentity = includeIdentity,
+            deviceIdentity = deviceIdentity,
+            extraEnc = skMsg,
+        )
+    }
+
+    // The self-signed ADV device identity sent in the device-identity node for pkmsg sends.
+    // UNVERIFIED: stored at pair time; null until paired with the new pairing flow.
+    private fun accountDeviceIdentity(): ByteArray? {
+        val b64 = authData?.accountSignedDeviceIdentity?.takeIf { it.isNotEmpty() } ?: return null
+        return try { Base64.decode(b64, Base64.NO_WRAP) } catch (e: Exception) { null }
     }
 
     private data class MediaUploadResult(
@@ -941,7 +1504,12 @@ object WhatsAppClient {
         mediaType: String,
         token: String,
     ): MediaUploadResult = withContext(Dispatchers.IO) {
-        val uploadUrl = "https://mmg.whatsapp.net/mms/$mediaType/$token"
+        val conn = mediaConn() ?: throw Exception("media_conn unavailable (no upload host/auth)")
+        val (host, auth) = conn
+        // whatsmeow upload.go: mmsType "image"/"video"/"audio"/"document"; stickers use the image bucket.
+        val mmsType = if (mediaType == "sticker") "image" else mediaType
+        val encAuth = java.net.URLEncoder.encode(auth, "UTF-8")
+        val uploadUrl = "https://$host/mms/$mmsType/$token?auth=$encAuth&token=$token"
         val requestBody = encryptedData.toRequestBody(null)
         val request = Request.Builder()
             .url(uploadUrl)
@@ -1124,6 +1692,47 @@ object WhatsAppClient {
         val isAudio = typingType == TypingType.RECORDING_AUDIO
         val node = WhatsAppProtocol.buildChatPresence(chatJid, isTyping, isAudio, authData?.wid ?: "")
         ws.send(WhatsAppProtocol.encodeNode(node))
+    }
+
+    /**
+     * Handle the server <success> stanza: the point at which login is actually authenticated.
+     * Mirrors whatsmeow connectionevents.go handleConnectSuccess — persists the server-assigned
+     * LID, sends SetPassive(false) so the companion leaves passive mode and receives the full
+     * event stream, then uploads prekeys if low, sends unavailable presence and starts backfill.
+     */
+    private suspend fun handleConnectSuccess(node: WhatsAppProtocol.Node) {
+        Log.i(TAG, "Authenticated (<success>)")
+        val lid = node.attrs["lid"]
+        val current = authData
+        if (!lid.isNullOrEmpty() && current != null && current.lid.isEmpty()) {
+            val updated = current.copy(lid = lid)
+            authData = updated
+            WhatsAppAuthData.save(appContext, updated)
+        }
+        setPassiveActive()
+        scope.launch { maybeUploadPreKeys() }
+        sendUnavailablePresence()
+        kickoffBackfill()
+    }
+
+    /**
+     * Tell the server this device is active (not passive) so it pushes the full event stream.
+     * Ref whatsmeow connectionevents.go SetPassive(false):
+     * <iq xmlns="passive" type="set"><active/></iq>. Login sends passive=true, so this is
+     * required after <success> or the companion never receives messages.
+     */
+    private suspend fun setPassiveActive() {
+        val node = WhatsAppProtocol.Node(
+            tag = "iq",
+            attrs = mapOf(
+                "id" to generateMessageId(),
+                "type" to "set",
+                "xmlns" to "passive",
+                "to" to "s.whatsapp.net",
+            ),
+            content = listOf(WhatsAppProtocol.Node(tag = "active")),
+        )
+        sendIqAndWait(node, timeoutMs = 10_000)
     }
 
     /**
@@ -1467,8 +2076,8 @@ object WhatsAppClient {
         val ws = webSocket ?: return null
         val jid = if (recipientJid.contains("@")) recipientJid else "$recipientJid@s.whatsapp.net"
         val id = WhatsAppProtocol.generateMessageId(authData?.wid)
+        val node = buildEncryptedTextNode(jid, id, body) ?: return null
         pendingMessageIDs.add(id)
-        val node = WhatsAppProtocol.buildTextMessage(jid, id, body)
         val sent = ws.send(WhatsAppProtocol.encodeNode(node))
         if (!sent) pendingMessageIDs.remove(id)
         return if (sent) "wa:$jid" else null

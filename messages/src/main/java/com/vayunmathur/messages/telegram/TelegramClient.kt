@@ -14,6 +14,8 @@ import com.vayunmathur.messages.telegram.mtproto.tl.TlObject
 import com.vayunmathur.messages.util.ContactSuggestion
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -57,6 +59,11 @@ object TelegramClient {
     private val peerCache = ConcurrentHashMap<Long, TlObject>()
     private val userNameCache = ConcurrentHashMap<Long, String>()
     private val channelMetaCache = ConcurrentHashMap<Long, Channel>()
+    // peer id -> profile photo (photo_id + dc_id), captured during TL decode
+    private val photoCache = ConcurrentHashMap<Long, ProfilePhoto>()
+    // dc id -> authorized secondary client for cross-DC file downloads
+    private val dcClients = ConcurrentHashMap<Int, TelegramApiClient>()
+    private val avatarPathCache = ConcurrentHashMap<Long, String>()
     private var reconnectAttempt = 0
     private var isPremium = false
 
@@ -72,6 +79,13 @@ object TelegramClient {
     private var currentQts = 0
     private var currentDate = 0
     private var currentSeq = 0
+    // per-channel pts for channel update gap detection
+    private val channelPts = ConcurrentHashMap<Long, Int>()
+    // guards against overlapping getDifference / getChannelDifference runs
+    private val gapRecovering = AtomicBoolean(false)
+    private val channelGapRecovering = ConcurrentHashMap<Long, Boolean>()
+
+    private enum class PtsAction { APPLY, SKIP, GAP }
 
     fun init(context: Context) {
         if (!initialized.compareAndSet(false, true)) return
@@ -106,12 +120,17 @@ object TelegramClient {
             runCatching { apiClient?.invoke(AuthLogOut) { TlRegistry.decode(it) } }
             apiClient?.disconnect()
             apiClient = null
+            dcClients.values.forEach { runCatching { it.disconnect() } }
+            dcClients.clear()
         }
         pendingPhone = null
         phoneCodeHash = null
         peerCache.clear()
         userNameCache.clear()
         channelMetaCache.clear()
+        photoCache.clear()
+        avatarPathCache.clear()
+        channelPts.clear()
         scope.launch { TelegramAuthData.clear(appContext) }
         _state.value = State.NeedsSetup
     }
@@ -250,6 +269,37 @@ object TelegramClient {
         }
     }
 
+    // Uploads a file's parts concurrently over the single MTProto connection. Each part is an
+    // independent RPC (its own msg_id), so several can be in flight at once; a semaphore caps the
+    // fan-out to avoid flooding the connection. Mirrors the parallel upload.saveFilePart behaviour
+    // of the Go telegram bridge. Returns the number of parts uploaded. // UNVERIFIED runtime
+    private suspend fun uploadFileParts(
+        client: TelegramApiClient,
+        fileId: Long,
+        bytes: ByteArray,
+        useBig: Boolean,
+        partSize: Int = 512 * 1024,
+        maxParallel: Int = 4,
+    ): Int = coroutineScope {
+        val parts = (bytes.size + partSize - 1) / partSize
+        val semaphore = Semaphore(maxParallel)
+        (0 until parts).map { i ->
+            async {
+                semaphore.withPermit {
+                    val start = i * partSize
+                    val end = minOf(start + partSize, bytes.size)
+                    val chunk = bytes.copyOfRange(start, end)
+                    if (useBig) {
+                        client.invoke(UploadSaveBigFilePart(fileId, i, parts, chunk)) { TlRegistry.decode(it) }
+                    } else {
+                        client.invoke(UploadSaveFilePart(fileId, i, chunk)) { TlRegistry.decode(it) }
+                    }
+                }
+            }
+        }.awaitAll()
+        parts
+    }
+
     suspend fun sendMedia(
         conversationId: String,
         bytes: ByteArray,
@@ -272,20 +322,8 @@ object TelegramClient {
 
         return try {
             val fileId = random.nextLong()
-            val partSize = 512 * 1024
-            val parts = (bytes.size + partSize - 1) / partSize
             val useBig = bytes.size > 10 * 1024 * 1024
-
-            for (i in 0 until parts) {
-                val start = i * partSize
-                val end = minOf(start + partSize, bytes.size)
-                val chunk = bytes.copyOfRange(start, end)
-                if (useBig) {
-                    client.invoke(UploadSaveBigFilePart(fileId, i, parts, chunk)) { TlRegistry.decode(it) }
-                } else {
-                    client.invoke(UploadSaveFilePart(fileId, i, chunk)) { TlRegistry.decode(it) }
-                }
-            }
+            val parts = uploadFileParts(client, fileId, bytes, useBig)
 
             val inputFile: TlObject = if (useBig) InputFileBig(fileId, parts, fileName)
             else InputFile(fileId, parts, fileName)
@@ -573,10 +611,14 @@ object TelegramClient {
             users.filterIsInstance<User>().mapNotNull { user ->
                 val name = "${user.firstName} ${user.lastName}".trim()
                 if (name.isBlank()) return@mapNotNull null
+                // Cache peer + photo so the avatar download can resolve the InputPeer.
+                peerCache[user.id] = InputPeerUser(user.id, user.accessHash)
+                if (user.photoId != 0L) photoCache[user.id] = ProfilePhoto(user.photoId, user.photoDcId)
+                val avatar = runCatching { downloadPeerAvatar(user.id) }.getOrNull()
                 ContactSuggestion(
                     displayName = name,
                     phoneE164 = user.phone.takeIf { it.isNotBlank() }?.let { "+$it" },
-                    avatarUrl = null,
+                    avatarUrl = avatar,
                     source = MessageSource.TELEGRAM,
                     username = user.username.takeIf { it.isNotBlank() },
                 )
@@ -696,108 +738,189 @@ object TelegramClient {
     private suspend fun handleUpdate(update: TlObject) {
         when (update) {
             is Updates -> {
+                if (!checkSeq(update.seq, update.seq)) return
                 cacheUsers(update.users)
                 cacheChats(update.chats)
                 for (u in update.updates) handleSingleUpdate(u)
                 currentDate = update.date
-                currentSeq = update.seq
             }
             is UpdatesCombined -> {
+                if (!checkSeq(update.seqStart, update.seq)) return
                 cacheUsers(update.users)
                 cacheChats(update.chats)
                 for (u in update.updates) handleSingleUpdate(u)
                 currentDate = update.date
-                currentSeq = update.seq
             }
-            is UpdateShort -> handleSingleUpdate(update.update)
+            is UpdateShort -> {
+                handleSingleUpdate(update.update)
+                currentDate = update.date
+            }
             is UpdateShortMessage -> {
-                val chatId = update.userId.toString()
-                val msgId = "${chatId}_${update.id}"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, null))
-                if (!update.out) {
-                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.userId], null, update.date.toLong() * 1000))
+                when (checkCommonPts(update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleGapRecovery()
+                    PtsAction.APPLY -> {
+                        val chatId = update.userId.toString()
+                        val msgId = "${chatId}_${update.id}"
+                        _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, null))
+                        if (!update.out) {
+                            _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.userId], null, update.date.toLong() * 1000))
+                        }
+                    }
                 }
-                currentPts = update.pts
             }
             is UpdateShortChatMessage -> {
-                val chatId = update.chatId.toString()
-                val msgId = "${chatId}_${update.id}"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId]))
-                if (!update.out) {
-                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.fromId], null, update.date.toLong() * 1000))
+                when (checkCommonPts(update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleGapRecovery()
+                    PtsAction.APPLY -> {
+                        val chatId = update.chatId.toString()
+                        val msgId = "${chatId}_${update.id}"
+                        _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId]))
+                        if (!update.out) {
+                            _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.fromId], null, update.date.toLong() * 1000))
+                        }
+                    }
                 }
-                currentPts = update.pts
             }
-            is UpdatesTooLong -> {
-                scope.launch { recoverGap() }
-            }
+            is UpdatesTooLong -> scheduleGapRecovery()
         }
     }
 
-    private suspend fun handleSingleUpdate(update: TlObject) {
+    /**
+     * Common-state seq gap check for Updates/UpdatesCombined containers.
+     * Returns true if the container should be applied. On a gap it triggers getDifference.
+     */
+    private fun checkSeq(seqStart: Int, seq: Int): Boolean {
+        if (seq == 0) return true // seq=0 => no sequencing (apply, don't bump local seq)
+        return when {
+            currentSeq != 0 && seqStart > currentSeq + 1 -> { scheduleGapRecovery(); false } // gap
+            seq <= currentSeq -> false // already applied
+            else -> { currentSeq = seq; true }
+        }
+    }
+
+    private fun checkCommonPts(pts: Int, ptsCount: Int): PtsAction {
+        if (currentPts == 0) { currentPts = pts; return PtsAction.APPLY }
+        val expected = currentPts + ptsCount
+        return when {
+            expected == pts -> { currentPts = pts; PtsAction.APPLY }
+            expected > pts -> PtsAction.SKIP // duplicate / already applied
+            else -> PtsAction.GAP // local_pts + pts_count < pts => missing updates
+        }
+    }
+
+    private fun checkChannelPts(channelId: Long, pts: Int, ptsCount: Int): PtsAction {
+        val local = channelPts[channelId] ?: 0
+        if (local == 0) { channelPts[channelId] = pts; return PtsAction.APPLY }
+        val expected = local + ptsCount
+        return when {
+            expected == pts -> { channelPts[channelId] = pts; PtsAction.APPLY }
+            expected > pts -> PtsAction.SKIP
+            else -> PtsAction.GAP
+        }
+    }
+
+    private fun scheduleGapRecovery() {
+        scope.launch { recoverGap() }
+    }
+
+    private fun scheduleChannelGapRecovery(channelId: Long) {
+        scope.launch { recoverChannelGap(channelId) }
+    }
+
+    private suspend fun handleSingleUpdate(update: TlObject, fromDiff: Boolean = false) {
         when (update) {
             is UpdateNewMessage -> {
-                when (val msg = update.message) {
-                    is Message -> {
-                        val chatId = peerToId(msg.peerId)
-                        _events.emit(msg.toMessageUpdate(chatId))
-                        if (!msg.out) {
-                            _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                when (if (fromDiff) PtsAction.APPLY else checkCommonPts(update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleGapRecovery()
+                    PtsAction.APPLY -> when (val msg = update.message) {
+                        is Message -> {
+                            val chatId = peerToId(msg.peerId)
+                            _events.emit(msg.toMessageUpdate(chatId))
+                            launchMediaFetch(msg, chatId)
+                            if (!msg.out) {
+                                _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                            }
+                        }
+                        is MessageService -> {
+                            val chatId = peerToId(msg.peerId)
+                            handleServiceMessageEvent(msg, chatId)
                         }
                     }
-                    is MessageService -> {
-                        val chatId = peerToId(msg.peerId)
-                        handleServiceMessageEvent(msg, chatId)
-                    }
                 }
-                currentPts = update.pts
             }
             is UpdateNewChannelMessage -> {
-                when (val msg = update.message) {
-                    is Message -> {
-                        val chatId = peerToId(msg.peerId)
-                        _events.emit(msg.toMessageUpdate(chatId))
-                        if (!msg.out) {
-                            _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                val channelId = channelIdOfMessage(update.message)
+                when (if (fromDiff || channelId == null) PtsAction.APPLY else checkChannelPts(channelId, update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> if (channelId != null) scheduleChannelGapRecovery(channelId)
+                    PtsAction.APPLY -> when (val msg = update.message) {
+                        is Message -> {
+                            val chatId = peerToId(msg.peerId)
+                            _events.emit(msg.toMessageUpdate(chatId))
+                            launchMediaFetch(msg, chatId)
+                            if (!msg.out) {
+                                _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                            }
+                        }
+                        is MessageService -> {
+                            val chatId = peerToId(msg.peerId)
+                            handleServiceMessageEvent(msg, chatId)
                         }
                     }
-                    is MessageService -> {
-                        val chatId = peerToId(msg.peerId)
-                        handleServiceMessageEvent(msg, chatId)
-                    }
                 }
-                currentPts = update.pts
             }
             is UpdateDeleteMessages -> {
-                for (id in update.messages) {
-                    _events.emit(GMEvent.MessageDeleted(source, id.toString()))
+                when (if (fromDiff) PtsAction.APPLY else checkCommonPts(update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleGapRecovery()
+                    PtsAction.APPLY -> for (id in update.messages) {
+                        _events.emit(GMEvent.MessageDeleted(source, id.toString()))
+                    }
                 }
-                currentPts = update.pts
             }
             is UpdateDeleteChannelMessages -> {
-                val chatId = update.channelId.toString()
-                for (id in update.messages) {
-                    _events.emit(GMEvent.MessageDeleted(source, "${chatId}_$id"))
+                when (if (fromDiff) PtsAction.APPLY else checkChannelPts(update.channelId, update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleChannelGapRecovery(update.channelId)
+                    PtsAction.APPLY -> {
+                        val chatId = update.channelId.toString()
+                        for (id in update.messages) {
+                            _events.emit(GMEvent.MessageDeleted(source, "${chatId}_$id"))
+                        }
+                    }
                 }
-                currentPts = update.pts
             }
             is UpdateEditMessage -> {
-                val msg = update.message as? Message ?: return
-                val chatId = peerToId(msg.peerId)
-                if (msg.editDate > 0) {
-                    _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                when (if (fromDiff) PtsAction.APPLY else checkCommonPts(update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> scheduleGapRecovery()
+                    PtsAction.APPLY -> {
+                        val msg = update.message as? Message ?: return
+                        val chatId = peerToId(msg.peerId)
+                        if (msg.editDate > 0) {
+                            _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                        }
+                        _events.emit(msg.toMessageUpdate(chatId))
+                    }
                 }
-                _events.emit(msg.toMessageUpdate(chatId))
-                currentPts = update.pts
             }
             is UpdateEditChannelMessage -> {
-                val msg = update.message as? Message ?: return
-                val chatId = peerToId(msg.peerId)
-                if (msg.editDate > 0) {
-                    _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                val channelId = channelIdOfMessage(update.message)
+                when (if (fromDiff || channelId == null) PtsAction.APPLY else checkChannelPts(channelId, update.pts, update.ptsCount)) {
+                    PtsAction.SKIP -> {}
+                    PtsAction.GAP -> if (channelId != null) scheduleChannelGapRecovery(channelId)
+                    PtsAction.APPLY -> {
+                        val msg = update.message as? Message ?: return
+                        val chatId = peerToId(msg.peerId)
+                        if (msg.editDate > 0) {
+                            _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
+                        }
+                        _events.emit(msg.toMessageUpdate(chatId))
+                    }
                 }
-                _events.emit(msg.toMessageUpdate(chatId))
-                currentPts = update.pts
             }
             is UpdateReadHistoryInbox -> {
                 val chatId = peerToId(update.peer)
@@ -1108,13 +1231,15 @@ object TelegramClient {
                         else -> "Telegram"
                     }
 
-                    _events.emit(
+                    val peerNumericId = peerNumericId(dialog.peer)
+
+                    fun emitConv(avatar: String?) = _events.tryEmit(
                         GMEvent.ConversationUpdate(
                             source = source,
                             conversationId = chatId,
                             peerName = name,
                             peerPhone = null,
-                            avatarUrl = null,
+                            avatarUrl = avatar,
                             lastPreview = preview,
                             lastTimestamp = tsMs,
                             unreadCount = dialog.unreadCount,
@@ -1123,7 +1248,21 @@ object TelegramClient {
                         )
                     )
 
+                    // Emit immediately (with any already-cached avatar), then fetch the avatar
+                    // asynchronously and re-emit so the conversation list isn't blocked on downloads.
+                    val pid = peerNumericId
+                    emitConv(pid?.let { avatarPathCache[it] })
+                    if (pid != null && photoCache[pid] != null) {
+                        scope.launch {
+                            val avatar = runCatching { downloadPeerAvatar(pid) }.getOrNull()
+                            if (avatar != null) emitConv(avatar)
+                        }
+                    }
+
                     cachePeerFromDialog(dialog.peer)
+                    if (dialog.peer is PeerChannel && dialog.pts > 0) {
+                        channelPts[dialog.peer.channelId] = dialog.pts
+                    }
                 }
 
                 for (dialog in dialogs) {
@@ -1165,7 +1304,8 @@ object TelegramClient {
 
     private suspend fun recoverGap() {
         if (currentPts == 0) return
-        val client = apiClient ?: return
+        if (!gapRecovering.compareAndSet(false, true)) return // already recovering
+        val client = apiClient ?: run { gapRecovering.set(false); return }
         try {
             var fetching = true
             while (fetching) {
@@ -1201,6 +1341,67 @@ object TelegramClient {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "recoverGap failed: ${t.message}")
+        } finally {
+            gapRecovering.set(false)
+        }
+    }
+
+    /**
+     * Per-channel gap recovery via channels.getChannelDifference, looping over slices until final.
+     */
+    private suspend fun recoverChannelGap(channelId: Long) {
+        if (channelGapRecovering.putIfAbsent(channelId, true) != null) return // already running
+        val client = apiClient ?: run { channelGapRecovering.remove(channelId); return }
+        try {
+            val ch = channelMetaCache[channelId] ?: return
+            var localPts = channelPts[channelId] ?: 0
+            if (localPts == 0) localPts = 1 // force a fresh fetch when we have no baseline
+            var fetching = true
+            while (fetching) {
+                val diff = client.invoke(
+                    UpdatesGetChannelDifference(channelId, ch.accessHash, localPts)
+                ) { TlRegistry.decode(it) }
+                when (diff) {
+                    is ChannelDifference -> {
+                        cacheUsers(diff.users)
+                        cacheChats(diff.chats)
+                        for (msg in diff.newMessages) emitDiffMessage(msg)
+                        for (u in diff.otherUpdates) handleSingleUpdate(u, fromDiff = true)
+                        channelPts[channelId] = diff.pts
+                        localPts = diff.pts
+                        fetching = !diff.final
+                    }
+                    is ChannelDifferenceEmpty -> {
+                        channelPts[channelId] = diff.pts
+                        fetching = false
+                    }
+                    is ChannelDifferenceTooLong -> {
+                        cacheUsers(diff.users)
+                        cacheChats(diff.chats)
+                        for (msg in diff.messages) emitDiffMessage(msg)
+                        if (diff.pts > 0) channelPts[channelId] = diff.pts
+                        fetching = false
+                    }
+                    else -> fetching = false
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "recoverChannelGap($channelId) failed: ${t.message}")
+        } finally {
+            channelGapRecovering.remove(channelId)
+        }
+    }
+
+    private suspend fun emitDiffMessage(msg: TlObject) {
+        when (msg) {
+            is Message -> {
+                val chatId = peerToId(msg.peerId)
+                _events.emit(msg.toMessageUpdate(chatId))
+            }
+            is MessageService -> {
+                val chatId = peerToId(msg.peerId)
+                handleServiceMessageEvent(msg, chatId)
+            }
         }
     }
 
@@ -1224,7 +1425,160 @@ object TelegramClient {
                 }
             }
         }
-        for (u in otherUpdates) handleSingleUpdate(u)
+        for (u in otherUpdates) handleSingleUpdate(u, fromDiff = true)
+    }
+
+    // ----------------------------------------------------------------
+    // File / avatar downloader
+    // ----------------------------------------------------------------
+
+    private const val DOWNLOAD_CHUNK = 512 * 1024 // must be a multiple of 4096
+
+    /**
+     * Returns a TelegramApiClient connected & authorized to [dc]. For the home DC this is the
+     * primary [apiClient]; for other DCs a secondary connection is created and authorized via
+     * auth.exportAuthorization (home) -> auth.importAuthorization (target), then cached.
+     * UNVERIFIED: cross-DC export/import flow is exercised only against a live server.
+     */
+    private suspend fun clientForDc(dc: Int): TelegramApiClient? {
+        val main = apiClient ?: return null
+        if (dc == main.dc) return main
+        dcClients[dc]?.let { if (it.isConnected) return it }
+        return try {
+            val exported = main.invoke(AuthExportAuthorization(dc)) { TlRegistry.decode(it) }
+                    as? AuthExportedAuthorization ?: return null
+            val sub = TelegramApiClient()
+            sub.connect(dc)
+            sub.invoke(AuthImportAuthorization(exported.id, exported.bytes)) { TlRegistry.decode(it) }
+            dcClients[dc] = sub
+            sub
+        } catch (t: Throwable) {
+            Log.w(TAG, "clientForDc($dc) failed: ${t.message}")
+            null
+        }
+    }
+
+    /**
+     * Chunked upload.getFile download loop. Returns the raw file bytes, or null on failure.
+     * CDN-redirected files are not supported and return null. // UNVERIFIED
+     */
+    private suspend fun downloadFileBytes(location: TlObject, dc: Int): ByteArray? {
+        val client = clientForDc(dc) ?: return null
+        val out = java.io.ByteArrayOutputStream()
+        var offset = 0L
+        return try {
+            while (true) {
+                val res = client.invoke(UploadGetFile(location, offset, DOWNLOAD_CHUNK)) { TlRegistry.decode(it) }
+                when (res) {
+                    is UploadFile -> {
+                        out.write(res.bytes)
+                        if (res.bytes.size < DOWNLOAD_CHUNK) break
+                        offset += res.bytes.size
+                    }
+                    is UploadFileCdnRedirect -> {
+                        Log.w(TAG, "CDN redirect for file download not supported (dc=${res.dcId})")
+                        return null
+                    }
+                    else -> break
+                }
+            }
+            out.toByteArray()
+        } catch (t: Throwable) {
+            Log.w(TAG, "downloadFileBytes failed: ${humanizeError(t)}")
+            null
+        }
+    }
+
+    /** Downloads [location] (if not already cached) and returns a file:// path. */
+    private suspend fun downloadToCache(location: TlObject, dc: Int, cacheKey: String, ext: String): String? {
+        val dir = java.io.File(appContext.cacheDir, "telegram_media")
+        dir.mkdirs()
+        val file = java.io.File(dir, "$cacheKey.$ext")
+        if (file.exists() && file.length() > 0) return "file://${file.absolutePath}"
+        val bytes = downloadFileBytes(location, dc) ?: return null
+        if (bytes.isEmpty()) return null
+        return try {
+            file.writeBytes(bytes)
+            "file://${file.absolutePath}"
+        } catch (t: Throwable) {
+            Log.w(TAG, "downloadToCache write failed: ${t.message}")
+            null
+        }
+    }
+
+    /**
+     * Downloads the small profile photo for [peerId] using the captured photo_id + dc_id and the
+     * cached InputPeer, returning a file:// path (or null if no photo / download failed).
+     */
+    private suspend fun downloadPeerAvatar(peerId: Long): String? {
+        avatarPathCache[peerId]?.let { return it }
+        val photo = photoCache[peerId] ?: return null
+        val peer = peerCache[peerId] ?: return null
+        val location = InputPeerPhotoFileLocation(peer = peer, photoId = photo.photoId, big = false)
+        val dc = if (photo.dcId > 0) photo.dcId else (apiClient?.dc ?: 2)
+        val path = downloadToCache(location, dc, "avatar_${peerId}_${photo.photoId}", "jpg")
+        if (path != null) avatarPathCache[peerId] = path
+        return path
+    }
+
+    private const val MAX_MEDIA_DOWNLOAD = 25L * 1024 * 1024 // skip auto-download above 25 MB
+
+    /**
+     * Downloads message media (photos + bounded non-sticker documents). Returns
+     * (bytes, mime, fileName) or null when there is nothing downloadable. Stickers and very large
+     * files are skipped. // UNVERIFIED against a live server.
+     */
+    private suspend fun downloadMessageMedia(media: TlObject?): Triple<ByteArray, String, String>? {
+        return when (media) {
+            is MessageMediaPhoto -> {
+                if (media.photoId == 0L) return null
+                val loc = InputPhotoFileLocation(
+                    media.photoId, media.accessHash, media.fileReference,
+                    media.thumbSize.ifEmpty { "x" },
+                )
+                val dc = if (media.dcId > 0) media.dcId else (apiClient?.dc ?: 2)
+                val bytes = downloadFileBytes(loc, dc) ?: return null
+                if (bytes.isEmpty()) null else Triple(bytes, "image/jpeg", "photo_${media.photoId}.jpg")
+            }
+            is MessageMediaDocument -> {
+                if (media.docId == 0L || media.isSticker) return null
+                if (media.size in 1 until MAX_MEDIA_DOWNLOAD || media.size == 0L) {
+                    val loc = InputDocumentFileLocation(media.docId, media.accessHash, media.fileReference, "")
+                    val dc = if (media.dcId > 0) media.dcId else (apiClient?.dc ?: 2)
+                    val bytes = downloadFileBytes(loc, dc) ?: return null
+                    val mime = media.mimeType.ifEmpty { "application/octet-stream" }
+                    val name = media.fileName.ifEmpty { "file_${media.docId}" }
+                    if (bytes.isEmpty()) null else Triple(bytes, mime, name)
+                } else null
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * For a freshly-arrived message with downloadable media, downloads it off the hot path and
+     * re-emits a MessageUpdate carrying the bytes (same messageId so the row is updated in place).
+     */
+    private fun launchMediaFetch(msg: Message, chatId: String) {
+        val media = msg.media
+        if (media !is MessageMediaPhoto && media !is MessageMediaDocument) return
+        scope.launch {
+            val result = runCatching { downloadMessageMedia(media) }.getOrNull() ?: return@launch
+            _events.emit(
+                GMEvent.MessageUpdate(
+                    source = source,
+                    conversationId = chatId,
+                    messageId = "${chatId}_${msg.id}",
+                    body = renderBody(msg),
+                    outgoing = msg.out,
+                    timestamp = msg.date.toLong() * 1000L,
+                    senderName = senderName(msg.fromId),
+                    mediaData = result.first,
+                    mediaMime = result.second,
+                    mediaName = result.third,
+                )
+            )
+        }
     }
 
     // ----------------------------------------------------------------
@@ -1242,6 +1596,22 @@ object TelegramClient {
         is PeerChat -> peer.chatId.toString()
         is PeerChannel -> peer.channelId.toString()
         else -> "0"
+    }
+
+    private fun peerNumericId(peer: TlObject): Long? = when (peer) {
+        is PeerUser -> peer.userId
+        is PeerChat -> peer.chatId
+        is PeerChannel -> peer.channelId
+        else -> null
+    }
+
+    private fun channelIdOfMessage(message: TlObject): Long? {
+        val peer = when (message) {
+            is Message -> message.peerId
+            is MessageService -> message.peerId
+            else -> null
+        }
+        return (peer as? PeerChannel)?.channelId
     }
 
     private fun senderName(fromId: TlObject?): String? {
@@ -1281,6 +1651,8 @@ object TelegramClient {
                 val name = "${u.firstName} ${u.lastName}".trim()
                 if (name.isNotBlank()) userNameCache[u.id] = name
                 peerCache[u.id] = InputPeerUser(u.id, u.accessHash)
+                if (u.photoId != 0L) photoCache[u.id] = ProfilePhoto(u.photoId, u.photoDcId)
+                else photoCache.remove(u.id)
             }
         }
     }
@@ -1291,11 +1663,15 @@ object TelegramClient {
                 is Chat -> {
                     userNameCache[c.id] = c.title
                     peerCache[c.id] = InputPeerChat(c.id)
+                    if (c.photoId != 0L) photoCache[c.id] = ProfilePhoto(c.photoId, c.photoDcId)
+                    else photoCache.remove(c.id)
                 }
                 is Channel -> {
                     userNameCache[c.id] = c.title
                     peerCache[c.id] = InputPeerChannel(c.id, c.accessHash)
                     channelMetaCache[c.id] = c
+                    if (c.photoId != 0L) photoCache[c.id] = ProfilePhoto(c.photoId, c.photoDcId)
+                    else photoCache.remove(c.id)
                 }
             }
         }
@@ -2126,14 +2502,7 @@ object TelegramClient {
         if (peer is InputPeerUser) return false
         return try {
             val fileId = random.nextLong()
-            val partSize = 512 * 1024
-            val parts = (imageBytes.size + partSize - 1) / partSize
-            for (i in 0 until parts) {
-                val start = i * partSize
-                val end = minOf(start + partSize, imageBytes.size)
-                val chunk = imageBytes.copyOfRange(start, end)
-                client.invoke(UploadSaveFilePart(fileId, i, chunk)) { TlRegistry.decode(it) }
-            }
+            val parts = uploadFileParts(client, fileId, imageBytes, useBig = false)
             val inputFile = InputFile(fileId, parts, "avatar.jpg")
             val inputPhoto = InputChatUploadedPhoto(inputFile)
             when (peer) {

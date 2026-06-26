@@ -33,7 +33,24 @@ import java.util.concurrent.atomic.AtomicInteger
 class WebViewWebSocket(
     private val context: Context,
     private val authData: WhatsAppAuthData?,
+    // Registration key material for the QR-pairing handshake (used when [authData] is null).
+    // Carries the noise key pair whose public half is embedded in the QR, plus the companion
+    // registration data that must be sent in the ClientPayload's DevicePairingData.
+    private val registration: RegistrationData? = null,
 ) {
+    /**
+     * Companion-registration key material for the first-pair ClientPayload + handshake.
+     * Ref whatsmeow store/clientpayload.go getRegistrationPayload + the QR noise key.
+     */
+    class RegistrationData(
+        val noisePrivateKey: ByteArray,
+        val noisePublicKey: ByteArray,
+        val registrationId: Int,
+        val identityPublicKey: ByteArray,
+        val signedPreKeyId: Int,
+        val signedPreKeyPublic: ByteArray,
+        val signedPreKeySignature: ByteArray,
+    )
     private companion object {
         const val TAG = "WebViewWebSocket"
         const val KEEPALIVE_INTERVAL_MIN_MS = 20_000L
@@ -108,15 +125,15 @@ class WebViewWebSocket(
         fun onClose(code: Int, reason: String) {
             Log.i(TAG, "WebSocket closed: $code $reason")
             isConnected = false
+            // Reconnect is owned by WhatsAppClient (it observes Disconnected and
+            // rebuilds the socket with backoff); don't self-reconnect here too.
             scope.launch { _connectionState.emit(ConnectionState.Disconnected("Closed: $reason")) }
-            scheduleReconnect()
         }
 
         @JavascriptInterface
         fun onError(error: String) {
             Log.e(TAG, "WebSocket error: $error")
             scope.launch { _connectionState.emit(ConnectionState.Disconnected("Error: $error")) }
-            scheduleReconnect()
         }
 
         @JavascriptInterface
@@ -301,15 +318,23 @@ class WebViewWebSocket(
 
             val certDecrypted = handshake.decrypt(certificateCiphertext)
             Log.d(TAG, "Server cert decrypted (${certDecrypted.size} bytes)")
+            if (!WhatsAppProtocol.verifyServerCert(certDecrypted, staticDecrypted)) {
+                Log.e(TAG, "Server certificate verification failed — aborting handshake")
+                disconnect()
+                return
+            }
 
-            // Send ClientFinish (whatsmeow/handshake.go lines 89-119)
-            val noiseKeyPair = if (authData != null) {
-                Pair(
+            // Send ClientFinish (whatsmeow/handshake.go lines 89-119). The static (noise) key must
+            // match the one advertised: the saved key when logging in, or the provisioning key whose
+            // public half is in the QR when first pairing. Generating a fresh key here would make the
+            // server/phone reject the companion.
+            val noiseKeyPair = when {
+                authData != null -> Pair(
                     Base64.decode(authData.noisePrivateKey, Base64.NO_WRAP),
                     Base64.decode(authData.noisePublicKey, Base64.NO_WRAP)
                 )
-            } else {
-                WhatsAppProtocol.generateX25519KeyPair()
+                registration != null -> Pair(registration.noisePrivateKey, registration.noisePublicKey)
+                else -> WhatsAppProtocol.generateX25519KeyPair()
             }
             val (noisePriv, noisePub) = noiseKeyPair
 
@@ -382,13 +407,42 @@ class WebViewWebSocket(
             .setConnectReason(com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.ClientPayload.ConnectReason.USER_ACTIVATED)
 
         if (authData != null) {
-            val widUser = authData.wid.substringBefore("@")
+            val widUser = authData.wid.substringBefore("@").substringBefore(":")
             payloadBuilder.username = widUser.toLongOrNull() ?: 0L
             payloadBuilder.device = authData.deviceId
             payloadBuilder.passive = true
             payloadBuilder.pull = true
             payloadBuilder.lidDbMigrated = true
             payloadBuilder.lc = 1
+        } else if (registration != null) {
+            // First-pair registration payload (whatsmeow store/clientpayload.go getRegistrationPayload).
+            val regId = ByteArray(4).also { java.nio.ByteBuffer.wrap(it).putInt(registration.registrationId) }
+            val skeyId4 = ByteArray(4).also { java.nio.ByteBuffer.wrap(it).putInt(registration.signedPreKeyId) }
+            val buildHash = java.security.MessageDigest.getInstance("MD5")
+                .digest(WhatsAppProtocol.WA_VERSION.joinToString(".").toByteArray(Charsets.UTF_8))
+            val deviceProps = com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.DeviceProps.newBuilder()
+                .setOs("whatsmeow")
+                .setVersion(
+                    com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.DeviceProps.AppVersion.newBuilder()
+                        .setPrimary(0).setSecondary(1).setTertiary(0)
+                )
+                .setPlatformType(com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.DeviceProps.PlatformType.UNKNOWN)
+                .setRequireFullSync(false)
+                .build()
+                .toByteArray()
+            val pairing = com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.ClientPayload.DevicePairingRegistrationData.newBuilder()
+                .setERegid(com.google.protobuf.ByteString.copyFrom(regId))
+                .setEKeytype(com.google.protobuf.ByteString.copyFrom(byteArrayOf(0x05)))
+                .setEIdent(com.google.protobuf.ByteString.copyFrom(registration.identityPublicKey))
+                .setESkeyId(com.google.protobuf.ByteString.copyFrom(skeyId4.copyOfRange(1, 4)))
+                .setESkeyVal(com.google.protobuf.ByteString.copyFrom(registration.signedPreKeyPublic))
+                .setESkeySig(com.google.protobuf.ByteString.copyFrom(registration.signedPreKeySignature))
+                .setBuildHash(com.google.protobuf.ByteString.copyFrom(buildHash))
+                .setDeviceProps(com.google.protobuf.ByteString.copyFrom(deviceProps))
+                .build()
+            payloadBuilder.devicePairingData = pairing
+            payloadBuilder.passive = false
+            payloadBuilder.pull = false
         } else {
             payloadBuilder.passive = false
             payloadBuilder.pull = false
@@ -479,23 +533,12 @@ class WebViewWebSocket(
                     if (System.currentTimeMillis() - lastKeepaliveSuccess > KEEPALIVE_MAX_FAIL_MS) {
                         Log.w(TAG, "Keepalive failed for too long, forcing reconnect")
                         disconnect()
-                        scheduleReconnect()
                         return@launch
                     }
                 } else {
                     lastKeepaliveSuccess = System.currentTimeMillis()
                 }
             }
-        }
-    }
-
-    private fun scheduleReconnect() {
-        if (authData == null) return
-        reconnectJob?.cancel()
-        reconnectJob = scope.launch {
-            delay(RECONNECT_DELAY_MS)
-            Log.i(TAG, "Attempting reconnect")
-            connect()
         }
     }
 

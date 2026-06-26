@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class MetaMqttClient(
     private val authData: MetaAuthData,
+    private val config: MetaConfig = MetaConfig(),
 ) {
     private companion object {
         const val TAG = "MetaMqttClient"
@@ -61,11 +62,19 @@ class MetaMqttClient(
     private val requestChannels = ConcurrentHashMap<Int, CompletableDeferred<MetaProtocol.MqttMessage>>()
 
     private var previouslyConnected = false
-    var versionId: Long = 0L
-    var appId: String = when (authData.platform) {
-        MetaAuthData.Platform.INSTAGRAM -> "936619743392459"
-        MetaAuthData.Platform.MESSENGER -> "219994525426954"
-    }
+    // Web bootstrap (#5): versionId/appId/broker come from MetaConfig when the
+    // page parse succeeded, otherwise fall back to the previous hardcoded values.
+    var versionId: Long = config.versionId
+    var appId: String = config.defaultAppId(authData.platform).toString()
+
+    // DB SyncManager (#10).
+    private val syncManager = MetaSyncManager(
+        platform = authData.platform,
+        versionId = config.versionId,
+        syncParamsMailbox = config.syncParamsMailbox,
+        syncParamsContact = config.syncParamsContact,
+        syncParamsE2ee = config.syncParamsE2ee,
+    )
 
     private val _messages = MutableSharedFlow<MetaProtocol.MqttMessage>(extraBufferCapacity = 256)
     val messages: SharedFlow<MetaProtocol.MqttMessage> = _messages.asSharedFlow()
@@ -168,12 +177,13 @@ class MetaMqttClient(
     }
 
     private fun buildBrokerUrl(): String {
-        val baseUrl = when (authData.platform) {
+        val baseUrl = config.broker ?: when (authData.platform) {
             MetaAuthData.Platform.MESSENGER -> MetaProtocol.MESSENGER_MQTT_URL
             MetaAuthData.Platform.INSTAGRAM -> MetaProtocol.INSTAGRAM_MQTT_URL
         }
+        val sep = if (baseUrl.endsWith("?") || baseUrl.endsWith("&")) "" else if (baseUrl.contains("?")) "&" else "?"
         val cid = authData.cookies["cid"] ?: java.util.UUID.randomUUID().toString()
-        return "${baseUrl}sid=$sessionId&cid=$cid"
+        return "${baseUrl}${sep}sid=$sessionId&cid=$cid"
     }
 
     private suspend fun sendData(data: ByteArray): Boolean {
@@ -187,10 +197,8 @@ class MetaMqttClient(
         val connectJsonStr = MetaProtocol.buildConnectJson(
             accountId = authData.userId,
             sessionId = sessionId,
-            appId = authData.cookies["appId"]?.toLongOrNull() ?: when (authData.platform) {
-                MetaAuthData.Platform.INSTAGRAM -> 936619743392459L
-                MetaAuthData.Platform.MESSENGER -> 219994525426954L
-            },
+            appId = authData.cookies["appId"]?.toLongOrNull()
+                ?: config.defaultAppId(authData.platform),
             cid = authData.cookies["cid"] ?: java.util.UUID.randomUUID().toString(),
             platform = authData.platform,
             previouslyConnected = previouslyConnected,
@@ -280,8 +288,12 @@ class MetaMqttClient(
     private suspend fun handleReady() {
         reconnectAttempts = 0
         if (previouslyConnected) {
+            // #10: on reconnect the Go bridge re-syncs the minimal DB set and
+            // emits a Reconnected event (events.go handleReadyEvent). Mirror the
+            // re-sync so cursors stay current after a drop.
             _connectionState.emit(ConnectionState.Connected)
             startPing()
+            runReconnectSync()
             return
         }
 
@@ -301,18 +313,53 @@ class MetaMqttClient(
         _connectionState.emit(ConnectionState.Connected)
         startPing()
 
-        // Fetch threads for SyncGroup 1 and SyncGroup 95 (from messagix/events.go)
-        val fetchPayloadSG1 = MetaProtocol.buildFetchThreadsPayload(versionId)
-        makeLSRequest(fetchPayloadSG1, MetaProtocol.LS_REQUEST_TYPE_TASK)
+        // Fetch threads for SyncGroup 1 and SyncGroup 95 for each known parent
+        // thread key (#5: ParentThreadKeys from bootstrap). handleReady relies on
+        // these responses being processed, so since the automatic emit is now
+        // suppressed for request-correlated responses (#10) we re-inject them.
+        val ptks = config.parentThreadKeys.ifEmpty { listOf(-1L) }
+        for (tk in ptks) {
+            val fetchSG1 = MetaProtocol.buildFetchThreadsPayload(versionId, syncGroup = 1, parentThreadKey = tk)
+            makeLSRequest(fetchSG1, MetaProtocol.LS_REQUEST_TYPE_TASK)?.let { emitForProcessing(it) }
 
-        val fetchPayloadSG95 = MetaProtocol.buildFetchThreadsPayload(versionId, syncGroup = 95)
-        makeLSRequest(fetchPayloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
+            val fetchSG95 = MetaProtocol.buildFetchThreadsPayload(versionId, syncGroup = 95, parentThreadKey = tk)
+            makeLSRequest(fetchSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)?.let { emitForProcessing(it) }
+        }
 
         // Report app state as FOREGROUND (from messagix/events.go)
         val reportPayload = MetaProtocol.buildReportAppStatePayload(versionId)
         makeLSRequest(reportPayload, MetaProtocol.LS_REQUEST_TYPE_TASK)
 
+        // #10: initial DB sync via the SyncManager.
+        runInitialSync()
+
         previouslyConnected = true
+    }
+
+    // The SyncManager performs /ls_req round-trips through makeLSRequest, then we
+    // re-inject each response so its events are processed exactly once.
+    private val syncRequester = MetaSyncManager.LSRequester { payload, type ->
+        val response = makeLSRequest(payload, type)
+        if (response != null) emitForProcessing(response)
+        response
+    }
+
+    private suspend fun runInitialSync() {
+        try {
+            syncManager.versionId = versionId
+            syncManager.ensureSynced(syncManager.initialSyncSet(), syncRequester)
+        } catch (e: Exception) {
+            Log.e(TAG, "Initial DB sync failed", e)
+        }
+    }
+
+    private suspend fun runReconnectSync() {
+        try {
+            syncManager.versionId = versionId
+            syncManager.ensureSynced(syncManager.reconnectSyncSet(), syncRequester)
+        } catch (e: Exception) {
+            Log.e(TAG, "Reconnect DB sync failed", e)
+        }
     }
 
     private fun handlePubAck(pubAck: MqttFraming.MqttResponse.PubAck) {
@@ -339,17 +386,37 @@ class MetaMqttClient(
             qos = publish.qos,
         )
 
-        // Check if this is a response to a pending request
+        // #10: stop double-emitting request-correlated /ls_resp responses. In the
+        // Go bridge (events.go handlePublishResponseEvent) a response with a
+        // non-zero request_id that matches a pending request is delivered ONLY to
+        // the waiter — it is not re-emitted as a server event. We mirror that
+        // here: if a waiter is registered we complete it and suppress the emit.
+        // Callers that need the response's events processed (thread fetches, DB
+        // syncs) re-inject it via emitForProcessing().
         val responseData = MetaProtocol.parsePublishResponse(publish.payload)
         if (responseData != null && responseData.requestId > 0) {
             val requestIdInt = responseData.requestId.toInt()
-            requestChannels.remove(requestIdInt)?.complete(mqttMessage)
+            val waiter = requestChannels.remove(requestIdInt)
+            if (waiter != null) {
+                waiter.complete(mqttMessage)
+                return
+            }
         }
 
-        // Always emit for downstream processing
+        // Server-initiated message (request_id == 0 or no waiter): emit for
+        // downstream processing.
         scope.launch {
             _messages.emit(mqttMessage)
         }
+    }
+
+    /**
+     * Re-injects a response into the message pipeline so its decoded events are
+     * processed exactly once. Used for request-correlated responses (thread
+     * fetches / DB syncs) whose automatic emit is suppressed by [handlePublishMessage].
+     */
+    suspend fun emitForProcessing(message: MetaProtocol.MqttMessage) {
+        _messages.emit(message)
     }
 
     suspend fun sendPublishPacket(

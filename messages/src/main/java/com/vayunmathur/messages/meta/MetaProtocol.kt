@@ -540,6 +540,104 @@ object MetaProtocol {
         return json.encodeToString(query)
     }
 
+    // --- DB SyncManager support (from messagix/syncManager.go) ---
+
+    // SyncChannel values (socket/database.go)
+    const val SYNC_CHANNEL_MAILBOX = 1L
+    const val SYNC_CHANNEL_CONTACT = 2L
+    const val SYNC_CHANNEL_E2EE = 3L
+
+    /**
+     * Builds the socket DatabaseQuery payload used by the SyncManager.
+     * When [sendSyncParams] is true the payload carries sync_params (LS request
+     * type 1); otherwise it carries last_applied_cursor (type 2). Ref
+     * syncManager.go SyncSocketData.
+     */
+    fun buildDatabaseSyncPayload(
+        databaseId: Long,
+        versionId: Long,
+        sendSyncParams: Boolean,
+        syncParams: String?,
+        cursor: String?,
+    ): String {
+        val query = if (sendSyncParams) {
+            DatabaseQuery(
+                database = databaseId,
+                epochId = generateEpochId(),
+                version = versionId.toString(),
+                syncParams = syncParams ?: "",
+                lastAppliedCursor = null,
+            )
+        } else {
+            DatabaseQuery(
+                database = databaseId,
+                epochId = generateEpochId(),
+                version = versionId.toString(),
+                syncParams = null,
+                lastAppliedCursor = cursor,
+            )
+        }
+        return json.encodeToString(query)
+    }
+
+    data class SyncTransactionBlock(
+        val databaseId: Long,
+        val currentCursor: String,
+        val nextCursor: String,
+        val sendSyncParams: Boolean,
+        val syncChannel: Long,
+    )
+
+    data class SyncGroupRange(
+        val syncGroup: Long,
+        val parentThreadKey: Long,
+        val minLastActivityTimestampMs: Long,
+        val hasMoreBefore: Boolean,
+        val minThreadKey: Long,
+    )
+
+    // LSExecuteFirstBlockForSyncTransaction: databaseId@0, currentCursor@2,
+    // nextCursor@3, sendSyncParams@5, syncChannel@8 (table/sync_groups.go).
+    fun parseSyncTransactions(events: List<LightspeedDecoder.DecodedEvent>): List<SyncTransactionBlock> {
+        val out = mutableListOf<SyncTransactionBlock>()
+        for (event in events) {
+            if (event.procedureName != "LSExecuteFirstBlockForSyncTransaction") continue
+            val args = event.args
+            val dbId = args.argLong(0) ?: continue
+            out.add(
+                SyncTransactionBlock(
+                    databaseId = dbId,
+                    currentCursor = args.argStr(2) ?: "",
+                    nextCursor = args.argStr(3) ?: "",
+                    sendSyncParams = args.argBool(5),
+                    syncChannel = args.argLong(8) ?: 0L,
+                )
+            )
+        }
+        return out
+    }
+
+    // LSUpsertSyncGroupThreadsRange: syncGroup@0, parentThreadKey@1,
+    // minLastActivityTimestampMS@2, hasMoreBefore@3, minThreadKey@5.
+    fun parseSyncGroupRanges(events: List<LightspeedDecoder.DecodedEvent>): List<SyncGroupRange> {
+        val out = mutableListOf<SyncGroupRange>()
+        for (event in events) {
+            if (event.procedureName != "LSUpsertSyncGroupThreadsRange") continue
+            val args = event.args
+            val syncGroup = args.argLong(0) ?: continue
+            out.add(
+                SyncGroupRange(
+                    syncGroup = syncGroup,
+                    parentThreadKey = args.argLong(1) ?: -1L,
+                    minLastActivityTimestampMs = args.argLong(2) ?: 9999999999999L,
+                    hasMoreBefore = args.argBool(3),
+                    minThreadKey = args.argLong(5) ?: 0L,
+                )
+            )
+        }
+        return out
+    }
+
     fun buildLSRequestJson(appId: String, payload: String, requestId: Int, type: Int): String {
         val lsReq = SocketLSRequestPayload(
             appId = appId,
@@ -567,8 +665,8 @@ object MetaProtocol {
         val text: String,
     )
 
-    fun buildFetchThreadsPayload(versionId: Long, syncGroup: Int = 1): String {
-        val task = FetchThreadsTask(syncGroup = syncGroup)
+    fun buildFetchThreadsPayload(versionId: Long, syncGroup: Int = 1, parentThreadKey: Long = -1): String {
+        val task = FetchThreadsTask(syncGroup = syncGroup, parentThreadKey = parentThreadKey)
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["FetchThreadsTask"] ?: "145",

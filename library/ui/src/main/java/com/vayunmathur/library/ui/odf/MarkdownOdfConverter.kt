@@ -23,8 +23,8 @@ object MarkdownOdfConverter {
     private const val LINK_COLOR = 0xFF0066CCL
     private const val MONO = "monospace"
 
-    private const val UNCHECKED = "\u2610 "  // "☐ "
-    private const val CHECKED = "\u2611 "     // "☑ "
+    internal const val UNCHECKED = "\u2610 "  // "☐ "
+    internal const val CHECKED = "\u2611 "     // "☑ "
 
     // region Markdown -> ODF
 
@@ -49,7 +49,9 @@ object MarkdownOdfConverter {
             i++
         }
         if (blocks.isEmpty()) blocks.add(OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(text = "")))))
-        return OdfDocument.TextDocument(title = title, content = blocks)
+        // Renumber ordered lists so they display correctly immediately on load (parsing assigns 1 to
+        // every item; the editor only renumbers on edit).
+        return renumberLists(OdfDocument.TextDocument(title = title, content = blocks))
     }
 
     /** Returns the language (possibly "") if [line] opens/closes a ``` fence, else null. */
@@ -96,20 +98,26 @@ object MarkdownOdfConverter {
             val indent = list.groupValues[1].length
             val level = (indent / 2) + 1
             val marker = list.groupValues[2]
-            var rest = list.groupValues[3]
+            val rest = list.groupValues[3]
             val numbered = marker[0].isDigit()
-            // Task checkbox (only for bullet lists)
+            // Task checkbox (only for bullet markers): a CHECKBOX list item.
             val task = if (!numbered) Regex("^\\[([ xX])]\\s+(.*)$").find(rest) else null
-            val spans: List<OdfSpan>
             if (task != null) {
                 val checked = task.groupValues[1].lowercase() == "x"
-                spans = listOf(OdfSpan(text = if (checked) CHECKED else UNCHECKED)) + parseInline(task.groupValues[2])
-            } else {
-                spans = parseInline(rest)
+                return OdfContentBlock.Paragraph(
+                    OdfParagraph(
+                        spans = parseInline(task.groupValues[2]),
+                        style = ParagraphStyle.LIST_ITEM,
+                        listLevel = level,
+                        listType = ListType.CHECKBOX,
+                        listChecked = checked,
+                        listItemIndex = 1,
+                    )
+                )
             }
             return OdfContentBlock.Paragraph(
                 OdfParagraph(
-                    spans = spans,
+                    spans = parseInline(rest),
                     style = ParagraphStyle.LIST_ITEM,
                     listLevel = level,
                     listType = if (numbered) ListType.NUMBERED else ListType.BULLET,
@@ -290,17 +298,11 @@ object MarkdownOdfConverter {
             ParagraphStyle.HEADING4 -> return "#### " + emitSpans(para.spans)
             ParagraphStyle.LIST_ITEM -> {
                 val indent = "  ".repeat((para.listLevel - 1).coerceAtLeast(0))
-                if (para.listType == ListType.NUMBERED) {
-                    return indent + "$listNumber. " + emitSpans(para.spans)
+                return when (para.listType) {
+                    ListType.NUMBERED -> indent + "$listNumber. " + emitSpans(para.spans)
+                    ListType.CHECKBOX -> indent + (if (para.listChecked) "- [x] " else "- [ ] ") + emitSpans(para.spans)
+                    ListType.BULLET -> indent + "- " + emitSpans(para.spans)
                 }
-                // Bullet, possibly a task checkbox encoded in the first span.
-                val firstText = para.spans.firstOrNull()?.text ?: ""
-                if (firstText.startsWith(UNCHECKED) || firstText.startsWith(CHECKED)) {
-                    val checked = firstText.startsWith(CHECKED)
-                    val stripped = stripPrefix(para.spans, 2)
-                    return indent + (if (checked) "- [x] " else "- [ ] ") + emitSpans(stripped)
-                }
-                return indent + "- " + emitSpans(para.spans)
             }
             else -> {}
         }

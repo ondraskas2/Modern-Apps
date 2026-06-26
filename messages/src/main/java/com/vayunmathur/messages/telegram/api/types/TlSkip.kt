@@ -8,6 +8,12 @@ object TlSkip {
 
     private const val TAG = "TlSkip"
 
+    /** Thrown when an unknown boxed constructor is encountered: its wire size is unknowable, so
+     *  continuing would silently mis-parse the rest of the message. Callers decoding a single
+     *  message/update catch this and drop that message rather than corrupting the stream. */
+    class TlDesyncException(val constructorId: Int) :
+        IllegalStateException("Unknown boxed constructor 0x${constructorId.toUInt().toString(16)}; aborting decode to avoid desync")
+
     fun skipRecentStory(buf: TlBuffer) {
         val typeId = buf.int32() // constructor 0x711d692d
         val flags = Fields.decode(buf)
@@ -92,6 +98,22 @@ object TlSkip {
         }
     }
 
+    /** Like [skipChatPhoto] but captures photo_id + dc_id. Consumes identical bytes. */
+    fun parseChatPhoto(buf: TlBuffer): ProfilePhoto? {
+        val typeId = buf.int32()
+        return when (typeId) {
+            0x37c1011c.toInt() -> null // chatPhotoEmpty
+            0x1c6e1c11.toInt() -> { // chatPhoto
+                val flags = Fields.decode(buf)
+                val photoId = buf.int64()
+                if (flags.has(1)) buf.bytes() // stripped_thumb
+                val dcId = buf.int32()
+                if (photoId == 0L) null else ProfilePhoto(photoId, dcId)
+            }
+            else -> null
+        }
+    }
+
     fun skipUserProfilePhoto(buf: TlBuffer) {
         val typeId = buf.int32()
         when (typeId) {
@@ -102,6 +124,22 @@ object TlSkip {
                 if (flags.has(1)) buf.bytes() // stripped_thumb
                 buf.int32() // dc_id
             }
+        }
+    }
+
+    /** Like [skipUserProfilePhoto] but captures photo_id + dc_id. Consumes identical bytes. */
+    fun parseUserProfilePhoto(buf: TlBuffer): ProfilePhoto? {
+        val typeId = buf.int32()
+        return when (typeId) {
+            0x4f11bae1.toInt() -> null // userProfilePhotoEmpty
+            0x82d1f706.toInt() -> { // userProfilePhoto
+                val flags = Fields.decode(buf)
+                val photoId = buf.int64()
+                if (flags.has(1)) buf.bytes() // stripped_thumb
+                val dcId = buf.int32()
+                if (photoId == 0L) null else ProfilePhoto(photoId, dcId)
+            }
+            else -> null
         }
     }
 
@@ -340,7 +378,9 @@ object TlSkip {
             0xfcdad815.toInt() -> skipForumTopic(buf) // forumTopic
 
             else -> {
-                Log.w(TAG, "skipByTypeId: unknown type 0x${typeId.toUInt().toString(16)}, buffer may be corrupted")
+                // Unknown boxed type: we cannot know its size, so any further reads would
+                // mis-parse. Abort the current message decode instead of silently corrupting.
+                throw TlDesyncException(typeId)
             }
         }
     }

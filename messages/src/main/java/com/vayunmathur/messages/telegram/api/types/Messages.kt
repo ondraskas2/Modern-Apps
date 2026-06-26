@@ -171,10 +171,12 @@ data class Message(
                 0x3ded6320.toInt() -> MessageMediaEmpty // messageMediaEmpty
                 0xe216eb63.toInt() -> { // messageMediaPhoto
                     val flags = Fields.decode(buf)
-                    if (flags.has(0)) TlSkip.skipBoxedType(buf)
+                    val photoRef = if (flags.has(0)) parsePhoto(buf) else null
                     if (flags.has(2)) buf.int32()
                     if (flags.has(4)) TlSkip.skipBoxedType(buf) // video
-                    MessageMediaPhoto()
+                    if (photoRef != null) {
+                        MessageMediaPhoto(photoRef.id, photoRef.accessHash, photoRef.fileReference, photoRef.dcId, photoRef.thumbSize)
+                    } else MessageMediaPhoto()
                 }
                 0x52d8ccd9.toInt() -> decodeMediaDocument(buf)
                 0x56e0d474.toInt() -> decodeMediaGeo(buf) // messageMediaGeo
@@ -221,19 +223,24 @@ data class Message(
             var duration = 0.0
             var width = 0
             var height = 0
+            var docId = 0L
+            var accessHash = 0L
+            var fileReference = ByteArray(0)
+            var dcId = 0
+            var size = 0L
             if (flags.has(0)) {
                 val docTypeId = buf.int32()
                 if (docTypeId == 0x8fd4c4d8.toInt()) { // document
                     val docFlags = Fields.decode(buf)
-                    buf.int64() // id
-                    buf.int64() // access_hash
-                    buf.bytes() // file_reference
+                    docId = buf.int64() // id
+                    accessHash = buf.int64() // access_hash
+                    fileReference = buf.bytes() // file_reference
                     buf.int32() // date
                     mimeType = buf.string()
-                    buf.int64() // size
+                    size = buf.int64() // size
                     if (docFlags.has(0)) TlSkip.skipVector(buf) { TlSkip.skipPhotoSizeBoxed(it) }
                     if (docFlags.has(1)) TlSkip.skipVector(buf) { TlSkip.skipVideoSizeBoxed(it) }
-                    buf.int32() // dc_id
+                    dcId = buf.int32() // dc_id
                     // parse attributes
                     buf.int32() // vector constructor
                     val attrCount = buf.int32()
@@ -288,7 +295,67 @@ data class Message(
             if (flags.has(9)) TlSkip.skipBoxedType(buf) // video_cover
             if (flags.has(10)) buf.int32() // video_timestamp
             if (flags.has(2)) buf.int32() // ttl_seconds
-            return MessageMediaDocument(mimeType, fileName, isSticker, stickerAlt, isAnimated, isVoice, isRoundVideo, isVideo, duration, width, height)
+            return MessageMediaDocument(mimeType, fileName, isSticker, stickerAlt, isAnimated, isVoice, isRoundVideo, isVideo, duration, width, height, docId, accessHash, fileReference, dcId, size)
+        }
+
+        /** Parsed reference to a photo (id/access_hash/file_reference/dc_id + best size type). */
+        private data class PhotoRef(
+            val id: Long,
+            val accessHash: Long,
+            val fileReference: ByteArray,
+            val dcId: Int,
+            val thumbSize: String,
+        )
+
+        /** Parses a Photo (photo#fb197a65 / photoEmpty#2331b22d), capturing the download reference. */
+        private fun parsePhoto(buf: TlBuffer): PhotoRef? {
+            val typeId = buf.int32()
+            return when (typeId) {
+                0x2331b22d.toInt() -> { buf.int64(); null } // photoEmpty: id
+                0xfb197a65.toInt() -> { // photo
+                    val flags = Fields.decode(buf)
+                    val id = buf.int64()
+                    val accessHash = buf.int64()
+                    val fileReference = buf.bytes()
+                    buf.int32() // date
+                    val sizeType = parsePhotoSizesPickLargest(buf) // sizes
+                    if (flags.has(1)) TlSkip.skipVector(buf) { TlSkip.skipVideoSizeBoxed(it) } // video_sizes
+                    val dcId = buf.int32()
+                    PhotoRef(id, accessHash, fileReference, dcId, sizeType)
+                }
+                else -> null
+            }
+        }
+
+        /** Reads a vector<PhotoSize>, returning the `type` of the largest concrete size. */
+        private fun parsePhotoSizesPickLargest(buf: TlBuffer): String {
+            buf.int32() // vector constructor
+            val count = buf.int32()
+            var bestType = ""
+            var bestArea = -1
+            repeat(count) {
+                val sizeTypeId = buf.int32()
+                when (sizeTypeId) {
+                    0xe17e23c0.toInt() -> { val t = buf.string(); if (bestArea < 0) bestType = t } // photoSizeEmpty
+                    0x75c78e60.toInt() -> { // photoSize: type w h size
+                        val t = buf.string(); val w = buf.int32(); val h = buf.int32(); buf.int32()
+                        if (w * h > bestArea) { bestArea = w * h; bestType = t }
+                    }
+                    0x021e1ad6.toInt() -> { // photoCachedSize: type w h bytes
+                        val t = buf.string(); val w = buf.int32(); val h = buf.int32(); buf.bytes()
+                        if (w * h > bestArea) { bestArea = w * h; bestType = t }
+                    }
+                    0xe0b0bc2e.toInt() -> { buf.string(); buf.bytes() } // photoStrippedSize (ignore)
+                    0xfa3efb95.toInt() -> { // photoSizeProgressive: type w h sizes
+                        val t = buf.string(); val w = buf.int32(); val h = buf.int32()
+                        buf.int32(); val c = buf.int32(); repeat(c) { buf.int32() }
+                        if (w * h > bestArea) { bestArea = w * h; bestType = t }
+                    }
+                    0xd8214d41.toInt() -> { buf.string(); buf.bytes() } // photoPathSize (ignore)
+                    else -> {} // unknown; nothing consumed beyond id (best effort)
+                }
+            }
+            return bestType
         }
 
         private fun decodeMediaGeo(buf: TlBuffer): MessageMediaGeo {

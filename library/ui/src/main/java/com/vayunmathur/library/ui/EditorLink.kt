@@ -1,6 +1,7 @@
 package com.vayunmathur.library.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 
 /**
@@ -41,9 +43,11 @@ fun LinkDialog(
     context: LinkContext,
     onConfirm: (text: String, url: String) -> Unit,
     onDismiss: () -> Unit,
+    onUnlink: (() -> Unit)? = null,
 ) {
     var text by remember(context) { mutableStateOf(context.text) }
     var url by remember(context) { mutableStateOf(context.url) }
+    val uriHandler = LocalUriHandler.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -74,7 +78,18 @@ fun LinkDialog(
             ) { Text(if (context.editing) "Save" else "Add") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            Row {
+                if (context.editing && onUnlink != null) {
+                    TextButton(onClick = onUnlink) { Text("Unlink") }
+                }
+                if (context.editing) {
+                    TextButton(
+                        enabled = url.isNotBlank(),
+                        onClick = { runCatching { uriHandler.openUri(url.trim()) }; onDismiss() },
+                    ) { Text("Open") }
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
         },
     )
 }

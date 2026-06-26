@@ -12,6 +12,7 @@ import com.vayunmathur.messages.telegram.mtproto.tl.TlBuffer
 import com.vayunmathur.messages.telegram.mtproto.tl.TlObject
 import com.vayunmathur.messages.telegram.mtproto.transport.TcpTransport
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.security.SecureRandom
@@ -46,6 +47,18 @@ class MtProtoConnection(
     @Volatile var connected = false
         private set
 
+    // Outgoing batching: content-related sends are funnelled through this channel and the
+    // batchSendLoop coalesces any that arrive within a short debounce window into a single
+    // msg_container, cutting the number of encrypted transport packets under bursty load.
+    private data class OutgoingItem(
+        val payload: ByteArray,
+        val contentRelated: Boolean,
+        val result: CompletableDeferred<Long>,
+    )
+    private val outgoingQueue = kotlinx.coroutines.channels.Channel<OutgoingItem>(
+        kotlinx.coroutines.channels.Channel.UNLIMITED
+    )
+
     private var serverTimeOffset: Long = 0L
     private var serverTimeOffsetSet = false
     private val futureSalts = mutableListOf<MessageFraming.FutureSalt>()
@@ -53,6 +66,8 @@ class MtProtoConnection(
 
     private companion object {
         const val ACK_BATCH_SIZE = 20
+        const val SEND_BATCH_DEBOUNCE_MS = 5L
+        const val SEND_BATCH_MAX = 16
     }
 
     fun setAuthData(authKey: ByteArray, authKeyId: ByteArray, salt: Long, sessionId: Long) {
@@ -80,6 +95,7 @@ class MtProtoConnection(
         s.launch { readLoop() }
         s.launch { pingLoop() }
         s.launch { ackLoop() }
+        s.launch { batchSendLoop() }
     }
 
     suspend fun send(payload: ByteArray, contentRelated: Boolean): Long {
@@ -94,8 +110,97 @@ class MtProtoConnection(
         }
     }
 
+    // Enqueues a content message for batched sending and suspends until it has been assigned an
+    // inner msg_id and written (possibly inside a msg_container). Returns the inner msg_id so the
+    // RpcEngine can track the pending request exactly as with a direct send. // UNVERIFIED runtime
+    suspend fun sendBatched(payload: ByteArray, contentRelated: Boolean): Long {
+        if (!connected) return send(payload, contentRelated)
+        val item = OutgoingItem(payload, contentRelated, CompletableDeferred())
+        outgoingQueue.send(item)
+        return item.result.await()
+    }
+
+    // Drains the outgoing queue, coalescing a debounced burst of messages into one msg_container
+    // (single-item bursts are sent directly). Pending acks are piggybacked into the same packet.
+    private suspend fun batchSendLoop() {
+        try {
+            while (connected) {
+                val first = outgoingQueue.receive()
+                val batch = mutableListOf(first)
+                try {
+                    if (SEND_BATCH_DEBOUNCE_MS > 0) delay(SEND_BATCH_DEBOUNCE_MS)
+                    while (batch.size < SEND_BATCH_MAX) {
+                        val next = outgoingQueue.tryReceive().getOrNull() ?: break
+                        batch.add(next)
+                    }
+                    val acks = drainPendingAcksForContainer()
+                    if (batch.size == 1 && acks.isEmpty()) {
+                        val only = batch[0]
+                        only.result.complete(send(only.payload, only.contentRelated))
+                    } else {
+                        sendContainer(batch, acks)
+                    }
+                } catch (e: Throwable) {
+                    // Fail the whole in-flight batch so their callers don't hang (covers send
+                    // errors and cancellation mid-debounce on disconnect).
+                    batch.forEach { it.result.completeExceptionally(e) }
+                    if (e is CancellationException) throw e
+                }
+            }
+        } catch (_: ClosedReceiveChannelException) {
+            // queue closed on disconnect
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "batchSendLoop error: ${e.message}")
+        }
+    }
+
+    private fun drainPendingAcksForContainer(): List<Long> {
+        synchronized(pendingAcks) {
+            if (pendingAcks.isEmpty()) return emptyList()
+            val ids = pendingAcks.toList()
+            pendingAcks.clear()
+            return ids
+        }
+    }
+
+    // Builds one msg_container holding the batched content messages (each with its own msg_id /
+    // seqno) plus an optional piggybacked msgs_ack, encrypts it under a single outer msg_id, and
+    // writes it. Inner msg_ids are reported back through each item's deferred.
+    private suspend fun sendContainer(batch: List<OutgoingItem>, acks: List<Long>) {
+        sendMutex.withLock {
+            val inner = mutableListOf<MessageFraming.InnerMessage>()
+            val assigned = ArrayList<Pair<OutgoingItem, Long>>(batch.size)
+            for (item in batch) {
+                val msgId = MessageId.generate()
+                val sn = nextSeqNo(item.contentRelated)
+                inner.add(MessageFraming.InnerMessage(msgId, sn, item.payload))
+                assigned.add(item to msgId)
+            }
+            if (acks.isNotEmpty()) {
+                val ackMsgId = MessageId.generate()
+                val ackSn = nextSeqNo(false)
+                inner.add(MessageFraming.InnerMessage(ackMsgId, ackSn, MessageFraming.writeMsgsAck(acks)))
+            }
+            val containerBody = MessageFraming.writeContainer(inner)
+            val outerMsgId = MessageId.generate()
+            val outerSn = nextSeqNo(false)
+            val encrypted = MtProtoCipher.encrypt(authKey, salt, sessionId, outerMsgId, outerSn, containerBody)
+            writeMutex.withLock {
+                transport.send(encrypted)
+            }
+            for ((item, msgId) in assigned) item.result.complete(msgId)
+        }
+    }
+
     fun disconnect() {
         connected = false
+        // Fail any batched sends still waiting so their callers don't hang past disconnect.
+        while (true) {
+            val item = outgoingQueue.tryReceive().getOrNull() ?: break
+            item.result.completeExceptionally(CancellationException("Disconnected"))
+        }
         scope?.cancel()
         scope = null
         rpcEngine.dropAll(CancellationException("Disconnected"))

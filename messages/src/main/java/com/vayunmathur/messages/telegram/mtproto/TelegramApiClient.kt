@@ -73,7 +73,7 @@ class TelegramApiClient {
     suspend fun <R : TlObject> invoke(method: TlMethod<R>, decoder: (TlBuffer) -> R): R {
         val conn = connection ?: throw IllegalStateException("Not connected")
         return try {
-            conn.rpcEngine.execute(method, { data, _ -> conn.send(data, true) }, decoder)
+            conn.rpcEngine.execute(method, { data, _ -> conn.sendBatched(data, true) }, decoder)
         } catch (e: RpcException) {
             if (isMigrateError(e.message)) {
                 val newDc = extractMigrateDc(e.message)

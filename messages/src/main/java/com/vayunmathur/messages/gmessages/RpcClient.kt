@@ -137,6 +137,36 @@ class RpcClient {
         }
     }
 
+    /**
+     * GET [url] and decode the response as the template's message type. Used for the
+     * messages-for-web /web/config endpoint (see [Endpoints.ConfigUrl]). Mirrors libgm
+     * client.go fetchConfig: same-origin fetch headers, no x-user-agent / origin.
+     */
+    suspend fun <T : Message> getDecoded(
+        url: String,
+        responseTemplate: T,
+        accept: String = "*/*",
+    ): T {
+        Log.d(TAG, "GET $url")
+        val resp = normal.request(url) {
+            method = HttpMethod.Get
+            headers {
+                append("sec-ch-ua", Endpoints.SecUA)
+                append("x-goog-api-key", Endpoints.GoogleApiKey)
+                append("sec-ch-ua-mobile", Endpoints.SecUAMobile)
+                append("user-agent", Endpoints.UserAgent)
+                append("sec-ch-ua-platform", "\"${Endpoints.UAPlatform}\"")
+                append("accept", accept)
+                append("sec-fetch-site", "same-origin")
+                append("sec-fetch-mode", "cors")
+                append("sec-fetch-dest", "empty")
+                append("referer", "https://messages.google.com/")
+                append("accept-language", "en-US,en;q=0.9")
+            }
+        }
+        return decodeBody(resp, responseTemplate)
+    }
+
     private suspend fun post(
         url: String,
         body: ByteArray,

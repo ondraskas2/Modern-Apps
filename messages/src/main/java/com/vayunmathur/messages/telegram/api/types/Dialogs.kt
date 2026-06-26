@@ -10,6 +10,7 @@ data class Dialog(
     val readInboxMaxId: Int,
     val readOutboxMaxId: Int,
     val unreadCount: Int,
+    val pts: Int = 0,
 ) : TlObject {
     override val typeId = 0xfc89f7f3.toInt()
     override fun encode(buf: TlBuffer) {}
@@ -26,11 +27,11 @@ data class Dialog(
             buf.int32() // unread_reactions_count
             buf.int32() // unread_poll_votes_count
             TlSkip.skipPeerNotifySettings(buf) // notifySettings (mandatory)
-            if (flags.has(0)) buf.int32() // pts
+            val pts = if (flags.has(0)) buf.int32() else 0 // pts (channels only)
             if (flags.has(1)) TlSkip.skipBoxedType(buf) // draft
             if (flags.has(4)) buf.int32() // folder_id
             if (flags.has(5)) buf.int32() // ttl_period
-            return Dialog(peer, topMessage, readInboxMaxId, readOutboxMaxId, unreadCount)
+            return Dialog(peer, topMessage, readInboxMaxId, readOutboxMaxId, unreadCount, pts)
         }
     }
 }

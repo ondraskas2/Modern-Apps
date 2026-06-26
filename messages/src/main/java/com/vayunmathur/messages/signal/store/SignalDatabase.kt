@@ -26,21 +26,28 @@ data class SignalIdentityKeyEntity(
     val trustLevel: String,
 )
 
-@Entity(tableName = "signal_pre_keys")
+// Pre-key tables are scoped by service ("ACI"/"PNI"): ACI and PNI each have their own
+// independent key-id namespace, mirroring signalmeow's per-service scoped stores. This
+// replaces the old +1000000 id-offset hack which broke decryption of PNI-addressed
+// pre-key messages (their signed-pre-key id=1 collided with the ACI key in one table).
+@Entity(tableName = "signal_pre_keys", primaryKeys = ["service", "id"])
 data class SignalPreKeyEntity(
-    @PrimaryKey val id: Int,
+    val service: String,
+    val id: Int,
     val record: ByteArray,
 )
 
-@Entity(tableName = "signal_signed_pre_keys")
+@Entity(tableName = "signal_signed_pre_keys", primaryKeys = ["service", "id"])
 data class SignalSignedPreKeyEntity(
-    @PrimaryKey val id: Int,
+    val service: String,
+    val id: Int,
     val record: ByteArray,
 )
 
-@Entity(tableName = "signal_kyber_pre_keys")
+@Entity(tableName = "signal_kyber_pre_keys", primaryKeys = ["service", "id"])
 data class SignalKyberPreKeyEntity(
-    @PrimaryKey val id: Int,
+    val service: String,
+    val id: Int,
     val lastResort: Boolean,
     val record: ByteArray,
 )
@@ -139,86 +146,95 @@ interface SignalIdentityKeyDao {
 
 @Dao
 interface SignalPreKeyDao {
-    @Query("SELECT * FROM signal_pre_keys WHERE id = :id LIMIT 1")
-    suspend fun get(id: Int): SignalPreKeyEntity?
+    @Query("SELECT * FROM signal_pre_keys WHERE service = :service AND id = :id LIMIT 1")
+    suspend fun get(service: String, id: Int): SignalPreKeyEntity?
 
-    @Query("SELECT * FROM signal_pre_keys")
-    suspend fun getAll(): List<SignalPreKeyEntity>
+    @Query("SELECT * FROM signal_pre_keys WHERE service = :service")
+    suspend fun getAll(service: String): List<SignalPreKeyEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SignalPreKeyEntity)
 
-    @Query("SELECT COUNT(*) > 0 FROM signal_pre_keys WHERE id = :id")
-    suspend fun exists(id: Int): Boolean
+    @Query("SELECT COUNT(*) > 0 FROM signal_pre_keys WHERE service = :service AND id = :id")
+    suspend fun exists(service: String, id: Int): Boolean
 
-    @Query("DELETE FROM signal_pre_keys WHERE id = :id")
-    suspend fun delete(id: Int)
+    @Query("DELETE FROM signal_pre_keys WHERE service = :service AND id = :id")
+    suspend fun delete(service: String, id: Int)
+
+    @Query("DELETE FROM signal_pre_keys WHERE service = :service")
+    suspend fun deleteAll(service: String)
 
     @Query("DELETE FROM signal_pre_keys")
-    suspend fun deleteAll()
+    suspend fun deleteAllServices()
 
-    @Query("SELECT COUNT(*) FROM signal_pre_keys")
-    suspend fun getCount(): Int
+    @Query("SELECT COUNT(*) FROM signal_pre_keys WHERE service = :service")
+    suspend fun getCount(service: String): Int
 
-    @Query("SELECT COALESCE(MAX(id), 0) FROM signal_pre_keys")
-    suspend fun getMaxId(): Int
+    @Query("SELECT COALESCE(MAX(id), 0) FROM signal_pre_keys WHERE service = :service")
+    suspend fun getMaxId(service: String): Int
 }
 
 @Dao
 interface SignalSignedPreKeyDao {
-    @Query("SELECT * FROM signal_signed_pre_keys WHERE id = :id LIMIT 1")
-    suspend fun get(id: Int): SignalSignedPreKeyEntity?
+    @Query("SELECT * FROM signal_signed_pre_keys WHERE service = :service AND id = :id LIMIT 1")
+    suspend fun get(service: String, id: Int): SignalSignedPreKeyEntity?
 
-    @Query("SELECT * FROM signal_signed_pre_keys")
-    suspend fun getAll(): List<SignalSignedPreKeyEntity>
+    @Query("SELECT * FROM signal_signed_pre_keys WHERE service = :service")
+    suspend fun getAll(service: String): List<SignalSignedPreKeyEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SignalSignedPreKeyEntity)
 
-    @Query("SELECT COUNT(*) > 0 FROM signal_signed_pre_keys WHERE id = :id")
-    suspend fun exists(id: Int): Boolean
+    @Query("SELECT COUNT(*) > 0 FROM signal_signed_pre_keys WHERE service = :service AND id = :id")
+    suspend fun exists(service: String, id: Int): Boolean
 
-    @Query("DELETE FROM signal_signed_pre_keys WHERE id = :id")
-    suspend fun delete(id: Int)
+    @Query("DELETE FROM signal_signed_pre_keys WHERE service = :service AND id = :id")
+    suspend fun delete(service: String, id: Int)
+
+    @Query("DELETE FROM signal_signed_pre_keys WHERE service = :service")
+    suspend fun deleteAll(service: String)
 
     @Query("DELETE FROM signal_signed_pre_keys")
-    suspend fun deleteAll()
+    suspend fun deleteAllServices()
 }
 
 @Dao
 interface SignalKyberPreKeyDao {
-    @Query("SELECT * FROM signal_kyber_pre_keys WHERE id = :id LIMIT 1")
-    suspend fun get(id: Int): SignalKyberPreKeyEntity?
+    @Query("SELECT * FROM signal_kyber_pre_keys WHERE service = :service AND id = :id LIMIT 1")
+    suspend fun get(service: String, id: Int): SignalKyberPreKeyEntity?
 
-    @Query("SELECT * FROM signal_kyber_pre_keys")
-    suspend fun getAll(): List<SignalKyberPreKeyEntity>
+    @Query("SELECT * FROM signal_kyber_pre_keys WHERE service = :service")
+    suspend fun getAll(service: String): List<SignalKyberPreKeyEntity>
 
-    @Query("SELECT * FROM signal_kyber_pre_keys WHERE lastResort = 0")
-    suspend fun getAllNonLastResort(): List<SignalKyberPreKeyEntity>
+    @Query("SELECT * FROM signal_kyber_pre_keys WHERE service = :service AND lastResort = 0")
+    suspend fun getAllNonLastResort(service: String): List<SignalKyberPreKeyEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SignalKyberPreKeyEntity)
 
-    @Query("SELECT COUNT(*) > 0 FROM signal_kyber_pre_keys WHERE id = :id")
-    suspend fun exists(id: Int): Boolean
+    @Query("SELECT COUNT(*) > 0 FROM signal_kyber_pre_keys WHERE service = :service AND id = :id")
+    suspend fun exists(service: String, id: Int): Boolean
 
-    @Query("SELECT lastResort FROM signal_kyber_pre_keys WHERE id = :id")
-    suspend fun isLastResort(id: Int): Boolean?
+    @Query("SELECT lastResort FROM signal_kyber_pre_keys WHERE service = :service AND id = :id")
+    suspend fun isLastResort(service: String, id: Int): Boolean?
 
-    @Query("DELETE FROM signal_kyber_pre_keys WHERE id = :id")
-    suspend fun delete(id: Int)
+    @Query("DELETE FROM signal_kyber_pre_keys WHERE service = :service AND id = :id")
+    suspend fun delete(service: String, id: Int)
 
-    @Query("DELETE FROM signal_kyber_pre_keys WHERE lastResort = 0")
-    suspend fun deleteAllNonLastResort()
+    @Query("DELETE FROM signal_kyber_pre_keys WHERE service = :service AND lastResort = 0")
+    suspend fun deleteAllNonLastResort(service: String)
+
+    @Query("DELETE FROM signal_kyber_pre_keys WHERE service = :service")
+    suspend fun deleteAll(service: String)
 
     @Query("DELETE FROM signal_kyber_pre_keys")
-    suspend fun deleteAll()
+    suspend fun deleteAllServices()
 
-    @Query("SELECT COUNT(*) FROM signal_kyber_pre_keys")
-    suspend fun getCount(): Int
+    @Query("SELECT COUNT(*) FROM signal_kyber_pre_keys WHERE service = :service")
+    suspend fun getCount(service: String): Int
 
-    @Query("SELECT COALESCE(MAX(id), 0) FROM signal_kyber_pre_keys")
-    suspend fun getMaxId(): Int
+    @Query("SELECT COALESCE(MAX(id), 0) FROM signal_kyber_pre_keys WHERE service = :service")
+    suspend fun getMaxId(service: String): Int
 }
 
 @Dao
@@ -384,7 +400,7 @@ interface SignalEventBufferDao {
         SignalBackupChatEntity::class,
         SignalBackupChatItemEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class SignalDatabase : RoomDatabase() {

@@ -112,6 +112,8 @@ data class OdfParagraph(
     val listLevel: Int = 0,
     val listType: ListType = ListType.BULLET,
     val listItemIndex: Int = 0,
+    // Checked state for CHECKBOX list items (loext:checkbox-status). Ignored for other list types.
+    val listChecked: Boolean = false,
     val direction: LayoutDirection? = null,
     // Line spacing as a multiple of normal (1.0 = single, 1.5 = 150%); null = unspecified. (A6)
     val lineHeightPercent: Float? = null,
@@ -142,7 +144,7 @@ data class OdfParagraph(
 
 enum class ParagraphStyle { HEADING1, HEADING2, HEADING3, HEADING4, BODY, LIST_ITEM, TABLE_HEADER }
 
-enum class ListType { BULLET, NUMBERED }
+enum class ListType { BULLET, NUMBERED, CHECKBOX }
 
 /** Formats a 1-based list item index using an ODF number-format token ("1","a","A","i","I"). (F42) */
 fun formatListNumber(index: Int, format: String): String {

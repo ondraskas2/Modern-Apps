@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatIndentDecrease
 import androidx.compose.material.icons.filled.FormatIndentIncrease
@@ -86,7 +87,14 @@ fun OdfMarkdownEditorField(
         fontSizeMultiplier = fontSizeMultiplier,
         onSelectionChange = { _, _, s, e -> controller.selStart = s; controller.selEnd = e },
         onTextChange = { s, e, t -> controller.editor.updateParagraphRun(s, e, t) },
-        modifier = modifier.onFocusChanged { controller.focused = it.isFocused },
+        onEnter = { gPos -> controller.editor.handleListEnter(0, runEnd, gPos) },
+        onBackspace = { gPos -> controller.editor.handleListBackspace(0, runEnd, gPos) },
+        onToggleCheckbox = { idx ->
+            val para = (doc.content.getOrNull(idx) as? OdfContentBlock.Paragraph)?.paragraph
+            if (para != null) controller.editor.setCheckboxChecked(idx, !para.listChecked)
+        },
+        onFocusChangedCb = { controller.focused = it },
+        modifier = modifier,
     )
 }
 
@@ -141,6 +149,7 @@ private fun OdfMarkdownToolbar(
     val focusedPara = state.runParagraphIndexAt(runStart, runEnd, selStart)
     val para = (doc.content.getOrNull(focusedPara) as? OdfContentBlock.Paragraph)?.paragraph
     val isNumbered = para?.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.NUMBERED
+    val isCheckbox = para?.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.CHECKBOX
     var headingMenu by remember { mutableStateOf(false) }
 
     val formatter = remember(doc, selStart, selEnd) {
@@ -177,6 +186,9 @@ private fun OdfMarkdownToolbar(
 
         FormatIconButton(Icons.Filled.FormatListNumbered, "Numbered list", active = isNumbered) {
             if (focusedPara >= 0) state.toggleNumberedList(focusedPara)
+        }
+        FormatIconButton(Icons.Filled.CheckBox, "Checkbox", active = isCheckbox) {
+            if (focusedPara >= 0) state.toggleCheckbox(focusedPara)
         }
         FormatIconButton(Icons.Filled.FormatIndentIncrease, "Increase nesting") {
             if (focusedPara >= 0) state.changeListLevel(focusedPara, 1)
@@ -224,14 +236,30 @@ private class MarkdownRunFormatter(
     }
 
     override fun linkContext(): LinkContext? {
-        if (selStart == selEnd) return null
-        return LinkContext(editing = false, text = selectedText(), url = "")
+        val link = state.linkAt(runStart, runEnd, selStart)
+        if (link != null) return LinkContext(editing = true, text = link.text, url = link.url)
+        if (selStart != selEnd) return LinkContext(editing = false, text = selectedText(), url = "")
+        return null
     }
 
     override fun applyLink(context: LinkContext, text: String, url: String) {
-        if (selStart == selEnd || url.isBlank()) return
-        // Mark the selected characters as a link (text is kept; Markdown emits [text](url)).
-        apply { it.copy(href = url, underline = true, color = 0xFF0066CCL) }
+        if (url.isBlank()) return
+        // Editing an existing link replaces its whole extent (no nested links); otherwise wrap the
+        // current selection.
+        val link = state.linkAt(runStart, runEnd, selStart)
+        val gs: Int; val ge: Int
+        if (link != null) { gs = link.gStart; ge = link.gEnd }
+        else if (selStart != selEnd) { gs = selStart; ge = selEnd }
+        else return
+        state.setLink(runStart, runEnd, gs, ge, text.ifBlank { url }, url)
+    }
+
+    override fun removeLink(context: LinkContext) {
+        val link = state.linkAt(runStart, runEnd, selStart) ?: return
+        // Keep the text, drop the link styling.
+        state.applyRunSpanStyle(runStart, runEnd, link.gStart, link.gEnd) {
+            it.copy(href = null, underline = false, color = null)
+        }
     }
 
     private fun has(predicate: (OdfSpan) -> Boolean) =

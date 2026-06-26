@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -52,6 +53,15 @@ object InstagramClient {
     private var mqttClient: MetaMqttClient? = null
     private var db: MetaDatabase? = null
     private var backfillJob: Job? = null
+
+    // Web bootstrap (#5) + media upload (#14) need an HTTP client and the parsed config.
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+    private var config: MetaConfig = MetaConfig()
 
     private val pendingMessages = ConcurrentHashMap<Int, (String?) -> Unit>()
 
@@ -115,7 +125,10 @@ object InstagramClient {
     private suspend fun connect(auth: MetaAuthData) {
         _state.value = State.Connecting
 
-        mqttClient = MetaMqttClient(auth).apply {
+        // #5: bootstrap web config before opening the realtime socket.
+        config = MetaBootstrap.load(auth, httpClient)
+
+        mqttClient = MetaMqttClient(auth, config).apply {
             scope.launch {
                 connectionState.collect { state ->
                     when (state) {
@@ -360,9 +373,11 @@ object InstagramClient {
             try {
                 val payload = MetaProtocol.buildFetchThreadsPayload(client.versionId)
                 client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+                    ?.let { client.emitForProcessing(it) }
 
                 val payloadSG95 = MetaProtocol.buildFetchThreadsPayload(client.versionId, syncGroup = 95)
                 client.makeLSRequest(payloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
+                    ?.let { client.emitForProcessing(it) }
             } catch (e: Exception) {
                 Log.e(TAG, "Backfill failed", e)
             }
@@ -411,14 +426,27 @@ object InstagramClient {
     ): Boolean {
         if (_state.value !is State.Connected) return false
         val client = mqttClient ?: return false
+        val auth = authData ?: return false
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
 
-        // TODO: Proper Mercury upload not available on Android
-        val base64Data = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        // #14: real rupload media upload (replaces the base64 hack).
+        val fbid = MetaMediaUpload.upload(
+            authData = auth,
+            config = config,
+            threadId = threadId,
+            bytes = bytes,
+            mimeType = mimeType,
+            fileName = fileName,
+            httpClient = httpClient,
+        )
+        if (fbid == null) {
+            Log.e(TAG, "Media upload failed for $conversationId")
+            return false
+        }
         val payload = MetaProtocol.buildSendMediaPayload(
             threadId = threadId,
-            attachmentFbIds = emptyList(),
-            text = base64Data,
+            attachmentFbIds = listOf(fbid),
+            text = "",
             mimeType = mimeType,
             fileName = fileName,
             versionId = client.versionId,
@@ -508,6 +536,7 @@ object InstagramClient {
         val client = mqttClient ?: return
         val payload = MetaProtocol.buildFetchMessagesPayload(threadId, referenceTimestampMs, referenceMessageId, client.versionId)
         client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
+            ?.let { client.emitForProcessing(it) }
     }
 
     suspend fun sendTypingIndicator(conversationId: String, isTyping: Boolean, isGroup: Boolean = false): Boolean {

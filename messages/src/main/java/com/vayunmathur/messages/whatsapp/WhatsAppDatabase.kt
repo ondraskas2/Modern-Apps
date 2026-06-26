@@ -27,8 +27,14 @@ import androidx.room.TypeConverters
         WhatsAppMediaRequest::class,
         WhatsAppAvatarCache::class,
         WhatsAppPollOption::class,
+        // libsignal-backed E2E protocol stores
+        WhatsAppE2ESession::class,
+        WhatsAppE2EIdentity::class,
+        WhatsAppE2EPreKey::class,
+        WhatsAppE2ESignedPreKey::class,
+        WhatsAppE2ESenderKey::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(WhatsAppTypeConverters::class)
@@ -39,6 +45,11 @@ abstract class WhatsAppDatabase : RoomDatabase() {
     abstract fun mediaRequestDao(): WhatsAppMediaRequestDao
     abstract fun avatarCacheDao(): WhatsAppAvatarCacheDao
     abstract fun pollOptionDao(): WhatsAppPollOptionDao
+    abstract fun e2eSessionDao(): WhatsAppE2ESessionDao
+    abstract fun e2eIdentityDao(): WhatsAppE2EIdentityDao
+    abstract fun e2ePreKeyDao(): WhatsAppE2EPreKeyDao
+    abstract fun e2eSignedPreKeyDao(): WhatsAppE2ESignedPreKeyDao
+    abstract fun e2eSenderKeyDao(): WhatsAppE2ESenderKeyDao
 
     companion object {
         @Volatile
@@ -204,4 +215,141 @@ interface WhatsAppPollOptionDao {
 
     @Query("DELETE FROM whatsapp_poll_option WHERE msgId = :msgId")
     suspend fun deleteByMessageId(msgId: String)
+}
+
+// -- libsignal-backed E2E protocol stores (whatsmeow signal store equivalents) --
+
+/** Signal session record keyed by (signalAddress, deviceId). */
+@Entity(tableName = "whatsapp_e2e_sessions", primaryKeys = ["address", "deviceId"])
+data class WhatsAppE2ESession(
+    val address: String,
+    val deviceId: Int,
+    val record: ByteArray,
+)
+
+/** Remote identity key keyed by signal address (user[:device] string). */
+@Entity(tableName = "whatsapp_e2e_identities")
+data class WhatsAppE2EIdentity(
+    @PrimaryKey val address: String,
+    val identityKey: ByteArray,
+)
+
+/** One-time pre key record keyed by id. */
+@Entity(tableName = "whatsapp_e2e_pre_keys")
+data class WhatsAppE2EPreKey(
+    @PrimaryKey val id: Int,
+    val record: ByteArray,
+    val uploaded: Boolean = false,
+)
+
+/** Signed pre key record keyed by id. */
+@Entity(tableName = "whatsapp_e2e_signed_pre_keys")
+data class WhatsAppE2ESignedPreKey(
+    @PrimaryKey val id: Int,
+    val record: ByteArray,
+)
+
+/** Sender (group) key record keyed by (address, deviceId, distributionId). */
+@Entity(tableName = "whatsapp_e2e_sender_keys", primaryKeys = ["address", "deviceId", "distributionId"])
+data class WhatsAppE2ESenderKey(
+    val address: String,
+    val deviceId: Int,
+    val distributionId: String,
+    val record: ByteArray,
+)
+
+@Dao
+interface WhatsAppE2ESessionDao {
+    @Query("SELECT * FROM whatsapp_e2e_sessions WHERE address = :address AND deviceId = :deviceId LIMIT 1")
+    suspend fun get(address: String, deviceId: Int): WhatsAppE2ESession?
+
+    @Query("SELECT deviceId FROM whatsapp_e2e_sessions WHERE address = :address")
+    suspend fun getSubDeviceIds(address: String): List<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: WhatsAppE2ESession)
+
+    @Query("SELECT COUNT(*) > 0 FROM whatsapp_e2e_sessions WHERE address = :address AND deviceId = :deviceId")
+    suspend fun exists(address: String, deviceId: Int): Boolean
+
+    @Query("DELETE FROM whatsapp_e2e_sessions WHERE address = :address AND deviceId = :deviceId")
+    suspend fun delete(address: String, deviceId: Int)
+
+    @Query("DELETE FROM whatsapp_e2e_sessions WHERE address = :address")
+    suspend fun deleteAll(address: String)
+}
+
+@Dao
+interface WhatsAppE2EIdentityDao {
+    @Query("SELECT * FROM whatsapp_e2e_identities WHERE address = :address LIMIT 1")
+    suspend fun get(address: String): WhatsAppE2EIdentity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: WhatsAppE2EIdentity)
+
+    @Query("DELETE FROM whatsapp_e2e_identities WHERE address = :address")
+    suspend fun delete(address: String)
+}
+
+@Dao
+interface WhatsAppE2EPreKeyDao {
+    @Query("SELECT * FROM whatsapp_e2e_pre_keys WHERE id = :id LIMIT 1")
+    suspend fun get(id: Int): WhatsAppE2EPreKey?
+
+    @Query("SELECT * FROM whatsapp_e2e_pre_keys")
+    suspend fun getAll(): List<WhatsAppE2EPreKey>
+
+    @Query("SELECT * FROM whatsapp_e2e_pre_keys WHERE uploaded = 0")
+    suspend fun getUnuploaded(): List<WhatsAppE2EPreKey>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: WhatsAppE2EPreKey)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(entities: List<WhatsAppE2EPreKey>)
+
+    @Query("UPDATE whatsapp_e2e_pre_keys SET uploaded = 1 WHERE id <= :maxId")
+    suspend fun markUploadedUpTo(maxId: Int)
+
+    @Query("SELECT COUNT(*) > 0 FROM whatsapp_e2e_pre_keys WHERE id = :id")
+    suspend fun exists(id: Int): Boolean
+
+    @Query("DELETE FROM whatsapp_e2e_pre_keys WHERE id = :id")
+    suspend fun delete(id: Int)
+
+    @Query("SELECT COUNT(*) FROM whatsapp_e2e_pre_keys")
+    suspend fun getCount(): Int
+
+    @Query("SELECT COALESCE(MAX(id), 0) FROM whatsapp_e2e_pre_keys")
+    suspend fun getMaxId(): Int
+}
+
+@Dao
+interface WhatsAppE2ESignedPreKeyDao {
+    @Query("SELECT * FROM whatsapp_e2e_signed_pre_keys WHERE id = :id LIMIT 1")
+    suspend fun get(id: Int): WhatsAppE2ESignedPreKey?
+
+    @Query("SELECT * FROM whatsapp_e2e_signed_pre_keys")
+    suspend fun getAll(): List<WhatsAppE2ESignedPreKey>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: WhatsAppE2ESignedPreKey)
+
+    @Query("SELECT COUNT(*) > 0 FROM whatsapp_e2e_signed_pre_keys WHERE id = :id")
+    suspend fun exists(id: Int): Boolean
+
+    @Query("DELETE FROM whatsapp_e2e_signed_pre_keys WHERE id = :id")
+    suspend fun delete(id: Int)
+}
+
+@Dao
+interface WhatsAppE2ESenderKeyDao {
+    @Query("SELECT * FROM whatsapp_e2e_sender_keys WHERE address = :address AND deviceId = :deviceId AND distributionId = :distributionId LIMIT 1")
+    suspend fun get(address: String, deviceId: Int, distributionId: String): WhatsAppE2ESenderKey?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: WhatsAppE2ESenderKey)
+
+    @Query("DELETE FROM whatsapp_e2e_sender_keys WHERE address = :address AND deviceId = :deviceId AND distributionId = :distributionId")
+    suspend fun delete(address: String, deviceId: Int, distributionId: String)
 }

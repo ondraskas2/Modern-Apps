@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator
 import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.digests.SHA256Digest
+import org.signal.libsignal.protocol.ecc.ECPublicKey
 
 /**
  * WhatsApp Web protocol implementation.
@@ -779,6 +780,65 @@ object WhatsAppProtocol {
         return decoder.readNode()
     }
 
+    // WhatsApp Noise certificate root public key + issuer serial (whatsmeow/handshake.go).
+    private val WA_CERT_PUB_KEY = byteArrayOf(
+        0x14, 0x23, 0x75, 0x57, 0x4d, 0x0a, 0x58, 0x71, 0x66.toByte(), 0xaa.toByte(),
+        0xe7.toByte(), 0x1e, 0xbe.toByte(), 0x51, 0x64, 0x37, 0xc4.toByte(), 0xa2.toByte(),
+        0x8b.toByte(), 0x73, 0xe3.toByte(), 0x69, 0x5c, 0x6c, 0xe1.toByte(), 0xf7.toByte(),
+        0xf9.toByte(), 0x54, 0x5d, 0xa8.toByte(), 0xee.toByte(), 0x6b,
+    )
+    private const val WA_CERT_ISSUER_SERIAL = 0
+
+    /**
+     * Verify the server's Noise certificate chain (intermediate signed by the WA root,
+     * leaf signed by the intermediate, leaf key == server static key, validity window).
+     * Port of whatsmeow/handshake.go verifyServerCert. Returns true if trusted.
+     */
+    fun verifyServerCert(certDecrypted: ByteArray, staticDecrypted: ByteArray): Boolean {
+        return try {
+            val chain = com.vayunmathur.messages.whatsapp.proto.WhatsAppCertProto.CertChain.parseFrom(certDecrypted)
+            val interRaw = chain.intermediate.details.toByteArray()
+            val interSig = chain.intermediate.signature.toByteArray()
+            val leafRaw = chain.leaf.details.toByteArray()
+            val leafSig = chain.leaf.signature.toByteArray()
+            if (interRaw.isEmpty() || leafRaw.isEmpty() || interSig.size != 64 || leafSig.size != 64) {
+                Log.e(TAG, "cert: missing/invalid parts")
+                return false
+            }
+            if (!ECPublicKey.fromPublicKeyBytes(WA_CERT_PUB_KEY).verifySignature(interRaw, interSig)) {
+                Log.e(TAG, "cert: intermediate signature invalid")
+                return false
+            }
+            val inter = com.vayunmathur.messages.whatsapp.proto.WhatsAppCertProto.CertChain.NoiseCertificate.Details.parseFrom(interRaw)
+            if (inter.issuerSerial != WA_CERT_ISSUER_SERIAL || inter.key.size() != 32) {
+                Log.e(TAG, "cert: bad intermediate issuer/key")
+                return false
+            }
+            if (!ECPublicKey.fromPublicKeyBytes(inter.key.toByteArray()).verifySignature(leafRaw, leafSig)) {
+                Log.e(TAG, "cert: leaf signature invalid")
+                return false
+            }
+            val leaf = com.vayunmathur.messages.whatsapp.proto.WhatsAppCertProto.CertChain.NoiseCertificate.Details.parseFrom(leafRaw)
+            if (leaf.issuerSerial != inter.serial) {
+                Log.e(TAG, "cert: leaf issuer serial mismatch")
+                return false
+            }
+            if (!leaf.key.toByteArray().contentEquals(staticDecrypted)) {
+                Log.e(TAG, "cert: leaf key != server static key")
+                return false
+            }
+            val now = System.currentTimeMillis() / 1000
+            for (d in listOf(inter, leaf)) {
+                if (d.notBefore != 0L && now < d.notBefore) { Log.e(TAG, "cert: not yet valid"); return false }
+                if (d.notAfter != 0L && now > d.notAfter) { Log.e(TAG, "cert: expired"); return false }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "cert verification error", e)
+            false
+        }
+    }
+
     /**
      * Strips the leading compression flag byte from a decrypted frame and inflates
      * the remainder with zlib when the flag's 0x02 bit is set.
@@ -817,33 +877,190 @@ object WhatsAppProtocol {
      * Build a text message node with E2E encrypted protobuf payload.
      * The enc node contains the Signal-encrypted E2E.Message protobuf.
      */
-    fun buildTextMessage(to: String, id: String, text: String): Node {
-        val e2eMessage = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
+    /**
+     * Build the E2E protobuf plaintext for a conversation (text) message.
+     * The returned bytes are the unencrypted, unpadded waE2E.Message; the caller pads and
+     * Signal-encrypts them before placing into an <enc> node.
+     */
+    fun buildConversationPlaintext(text: String): ByteArray {
+        return buildConversationMessage(text).toByteArray()
+    }
+
+    /** Build the waE2E.Message proto object for a conversation (text) message. */
+    fun buildConversationMessage(text: String): com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message {
+        return com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
             .setConversation(text)
             .build()
-        val plaintext = e2eMessage.toByteArray()
+    }
 
-        return Node(
-            tag = "message",
-            attrs = mapOf(
-                "to" to to,
-                "id" to id,
-                "type" to "text"
-            ),
-            content = listOf(
-                Node(
-                    tag = "enc",
-                    attrs = mapOf("v" to "2", "type" to "msg"),
-                    data = padMessage(plaintext)
-                )
+    /**
+     * Wrap a message in a DeviceSentMessage for fan-out to the sender's own other devices.
+     * Ref whatsmeow send.go marshalMessage() dsmPlaintext.
+     */
+    fun deviceSentPlaintext(
+        destinationJid: String,
+        message: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message,
+    ): ByteArray {
+        return com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
+            .setDeviceSentMessage(
+                com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.DeviceSentMessage.newBuilder()
+                    .setDestinationJid(destinationJid)
+                    .setMessage(message)
             )
+            .build()
+            .toByteArray()
+    }
+
+    /**
+     * Build the SKDM-bearing plaintext that is 1:1 fanned out to every group device so they
+     * can decrypt the group skmsg. Ref whatsmeow send.go sendGroup() skdMessage.
+     */
+    fun senderKeyDistributionPlaintext(groupJid: String, axolotlSkdm: ByteArray): ByteArray {
+        return com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
+            .setSenderKeyDistributionMessage(
+                com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.SenderKeyDistributionMessage.newBuilder()
+                    .setGroupId(groupJid)
+                    .setAxolotlSenderKeyDistributionMessage(com.google.protobuf.ByteString.copyFrom(axolotlSkdm))
+            )
+            .build()
+            .toByteArray()
+    }
+
+    /**
+     * Build an outgoing message node with a <participants> fan-out: one <to jid><enc> per
+     * recipient/own device, plus an optional message-level extra <enc> (the group skmsg) and a
+     * <device-identity> node when any per-device enc is a pkmsg. Mirrors whatsmeow
+     * send.go prepareMessageNode/sendGroup.
+     *
+     * [participantEncs] is (wireDeviceJid, encType, ciphertext) per device.
+     */
+    data class ParticipantEnc(val deviceJid: String, val encType: String, val ciphertext: ByteArray)
+
+    fun buildFanOutMessageNode(
+        to: String,
+        id: String,
+        type: String,
+        participantEncs: List<ParticipantEnc>,
+        includeDeviceIdentity: Boolean,
+        deviceIdentity: ByteArray?,
+        extraEnc: Node? = null,
+        extraEncAttrs: Map<String, String> = emptyMap(),
+        messageAttrs: Map<String, String> = emptyMap(),
+    ): Node {
+        val toNodes = participantEncs.map { pe ->
+            val encAttrs = mutableMapOf("v" to "2", "type" to pe.encType)
+            encAttrs.putAll(extraEncAttrs)
+            Node(
+                tag = "to",
+                attrs = mapOf("jid" to pe.deviceJid),
+                content = listOf(Node(tag = "enc", attrs = encAttrs, data = pe.ciphertext)),
+            )
+        }
+        val participants = Node(tag = "participants", content = toNodes)
+        val content = mutableListOf(participants)
+        if (extraEnc != null) content.add(extraEnc)
+        if (includeDeviceIdentity && deviceIdentity != null) {
+            content.add(Node(tag = "device-identity", data = deviceIdentity))
+        }
+        val attrs = mutableMapOf("to" to to, "id" to id, "type" to type)
+        attrs.putAll(messageAttrs)
+        return Node(tag = "message", attrs = attrs, content = content)
+    }
+
+    /**
+     * Build a retry receipt sent when an inbound message fails to decrypt, asking the sender to
+     * re-encrypt. Ref whatsmeow retry.go sendRetryReceipt. [keysNode] (identity + fresh prekeys +
+     * device-identity) should be included on the 2nd+ retry or when forced.
+     */
+    fun buildRetryReceipt(
+        originalNode: Node,
+        registrationId: Int,
+        retryCount: Int,
+        keysNode: Node?,
+    ): Node {
+        val msgId = originalNode.attrs["id"] ?: ""
+        val attrs = mutableMapOf(
+            "id" to msgId,
+            "to" to (originalNode.attrs["from"] ?: ""),
+            "type" to "retry",
+        )
+        originalNode.attrs["recipient"]?.let { attrs["recipient"] = it }
+        originalNode.attrs["participant"]?.let { attrs["participant"] = it }
+        val regBytes = byteArrayOf(
+            (registrationId ushr 24).toByte(),
+            (registrationId ushr 16).toByte(),
+            (registrationId ushr 8).toByte(),
+            registrationId.toByte(),
+        )
+        val retryNode = Node(
+            tag = "retry",
+            attrs = mapOf(
+                "count" to retryCount.toString(),
+                "id" to msgId,
+                "t" to (originalNode.attrs["t"] ?: ""),
+                "v" to "1",
+            ),
+        )
+        val content = mutableListOf(retryNode, Node(tag = "registration", data = regBytes))
+        if (keysNode != null) content.add(keysNode)
+        return Node(tag = "receipt", attrs = attrs, content = content)
+    }
+
+    /**
+     * Build a group-info (participants) interactive query IQ.
+     * Ref whatsmeow group.go getGroupInfo: <iq to=group xmlns=w:g2 type=get><query request=interactive/>.
+     */
+    fun buildGroupParticipantsQuery(groupJid: String, id: String): Node {
+        return Node(
+            tag = "iq",
+            attrs = mapOf("id" to id, "type" to "get", "xmlns" to "w:g2", "to" to groupJid),
+            content = listOf(Node(tag = "query", attrs = mapOf("request" to "interactive"))),
         )
     }
 
     /**
-     * Build a reaction message node.
-     * From whatsmeow/send.go BuildReaction()
+     * Build a usync device-list query for the given users.
+     * Ref whatsmeow user.go GetUserDevices/usync: <iq xmlns=usync><usync mode=query context=message>
+     * <query><devices version=2/></query><list><user jid=.../></list></usync>.
      */
+    fun buildUsyncDevicesQuery(userJids: List<String>, id: String, sid: String): Node {
+        val userNodes = userJids.map { Node(tag = "user", attrs = mapOf("jid" to it)) }
+        return Node(
+            tag = "iq",
+            attrs = mapOf("id" to id, "type" to "get", "xmlns" to "usync", "to" to "s.whatsapp.net"),
+            content = listOf(
+                Node(
+                    tag = "usync",
+                    attrs = mapOf(
+                        "sid" to sid,
+                        "mode" to "query",
+                        "last" to "true",
+                        "index" to "0",
+                        "context" to "message",
+                    ),
+                    content = listOf(
+                        Node(
+                            tag = "query",
+                            content = listOf(Node(tag = "devices", attrs = mapOf("version" to "2"))),
+                        ),
+                        Node(tag = "list", content = userNodes),
+                    ),
+                )
+            ),
+        )
+    }
+
+    /**
+     * Build a media_conn query IQ to obtain the upload auth token + hosts.
+     * Ref whatsmeow mediaconn.go queryMediaConn: <iq xmlns=w:m type=set><media_conn/>.
+     */
+    fun buildMediaConnQuery(id: String): Node {
+        return Node(
+            tag = "iq",
+            attrs = mapOf("id" to id, "type" to "set", "xmlns" to "w:m", "to" to "s.whatsapp.net"),
+            content = listOf(Node(tag = "media_conn")),
+        )
+    }
     fun buildReactionMessage(
         chatJid: String,
         senderJid: String,
@@ -1752,7 +1969,18 @@ object WhatsAppProtocol {
         }
     }
 
-    fun parseMessage(node: Node): WhatsAppMessage? {
+    /**
+     * Parse an inbound <message> node. If [decryptEnc] is supplied, the <enc> payload is
+     * Signal-decrypted (and unpadded) via the callback; otherwise the raw enc data is treated
+     * as already-plaintext padded protobuf (legacy/no-crypto path).
+     *
+     * [decryptEnc] receives (senderJid, encType, encData) and returns the decrypted, still
+     * padded plaintext, or null if decryption failed.
+     */
+    fun parseMessage(
+        node: Node,
+        decryptEnc: ((senderJid: String, encType: String, data: ByteArray) -> ByteArray?)? = null,
+    ): WhatsAppMessage? {
         if (node.tag != "message") return null
 
         val from = node.attrs["from"] ?: return null
@@ -1764,7 +1992,18 @@ object WhatsAppProtocol {
         val encNode = node.getChildByTag("enc")
         if (encNode?.data != null) {
             return try {
-                val plaintext = unpadMessage(encNode.data)
+                val encType = encNode.attrs["type"] ?: "msg"
+                val senderJid = participant ?: from
+                val decryptedPadded: ByteArray = if (decryptEnc != null) {
+                    decryptEnc(senderJid, encType, encNode.data)
+                        ?: return WhatsAppMessage(
+                            id = id, from = from, to = node.attrs["to"] ?: "", body = "",
+                            timestamp = timestamp, type = type, participant = participant,
+                        )
+                } else {
+                    encNode.data
+                }
+                val plaintext = unpadMessage(decryptedPadded)
                 var e2eMessage = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.parseFrom(plaintext)
 
                 // Unwrap FutureProofMessage (Go events.go GetInnerMessage)

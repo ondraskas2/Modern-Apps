@@ -14,6 +14,8 @@ data class User(
     val bot: Boolean = false,
     val deleted: Boolean = false,
     val premium: Boolean = false,
+    val photoId: Long = 0,
+    val photoDcId: Int = 0,
 ) : TlObject {
     override val typeId = 0x31774388.toInt()
     override fun encode(buf: TlBuffer) {}
@@ -28,7 +30,7 @@ data class User(
             val lastName = if (flags.has(2)) buf.string() else ""
             val username = if (flags.has(3)) buf.string() else ""
             val phone = if (flags.has(4)) buf.string() else ""
-            if (flags.has(5)) TlSkip.skipUserProfilePhoto(buf) // photo
+            val photo = if (flags.has(5)) TlSkip.parseUserProfilePhoto(buf) else null // photo
             if (flags.has(6)) TlSkip.skipUserStatus(buf) // status
             if (flags.has(14)) buf.int32() // bot_info_version
             if (flags.has(18)) { // restriction_reason vector
@@ -56,6 +58,8 @@ data class User(
                 bot = flags.has(14),
                 deleted = flags.has(13),
                 premium = flags.has(28),
+                photoId = photo?.photoId ?: 0L,
+                photoDcId = photo?.dcId ?: 0,
             )
         }
     }

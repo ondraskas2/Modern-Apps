@@ -12,6 +12,7 @@ import authentication.Authentication.DeviceType
 import authentication.Authentication.ECDSAKeys
 import authentication.Authentication.KeyData
 import authentication.Authentication.RegisterPhoneRelayResponse
+import authentication.Authentication.RefreshPhoneRelayResponse
 import authentication.Authentication.URLData
 import java.util.UUID
 
@@ -38,15 +39,69 @@ object PairFlow {
     private const val TAG = "GMessages/Pair"
 
     /** Network name on the QR-pair path (vs. "GDitto" for the
-     *  Google-account-based GAIA path we don't support). */
+     *  Google-account-based GAIA path).
+     *
+     *  GAIA sign-in (libgm pair_google.go) is intentionally DEFERRED, not implemented here. It
+     *  requires: (1) a full UKEY2 cryptographic handshake (CREATE_GAIA_PAIRING_CLIENT_INIT/
+     *  _FINISHED), (2) Google-account cookie/OAuth acquisition which is inherently browser-driven
+     *  and cannot be performed headlessly in this client, and (3) DestRegistrationIDs + GAIA key
+     *  derivation plumbing. The supporting hooks exist (AuthData GAIA fields, SessionHandler action
+     *  allow-list, LongPoll gaia-event handling), but the ~540-line handshake port is out of scope
+     *  and unverifiable without a Google-account test rig. QR pairing ([QrNetwork]) is the supported
+     *  path. */
     const val QrNetwork = "Bugle"
 
     /** Config version that messages.google.com/web is currently sending.
-     *  Kept in sync with libgm `util/config.go.ConfigMessage`. Lazy so
-     *  the proto runtime is initialized before we touch the builders. */
-    val ConfigVersion: ConfigVersion by lazy {
+     *  Defaults to a hardcoded value kept in sync with libgm
+     *  `util/config.go.ConfigMessage`, but is overwritten at runtime by
+     *  [fetchConfig] which reads the live version from /web/config. */
+    private val DefaultConfigVersion: ConfigVersion by lazy {
         authentication.Authentication.ConfigVersion.newBuilder()
             .setYear(2026).setMonth(3).setDay(18).setV1(4).setV2(6)
+            .build()
+    }
+
+    @Volatile
+    private var fetchedConfigVersion: ConfigVersion? = null
+
+    val ConfigVersion: ConfigVersion
+        get() = fetchedConfigVersion ?: DefaultConfigVersion
+
+    /**
+     * Fetches the live messages-for-web config and updates [ConfigVersion] from its
+     * `clientVersion` string. Replaces the previously hardcoded version. Port of libgm
+     * client.go FetchConfig + Config.ParsedClientVersion. Returns the parsed version, or null
+     * (leaving the default in place) on any failure. // UNVERIFIED runtime
+     */
+    suspend fun fetchConfig(rpc: RpcClient): ConfigVersion? {
+        return try {
+            val config = rpc.getDecoded(
+                url = Endpoints.ConfigUrl,
+                responseTemplate = config.ConfigOuterClass.Config.getDefaultInstance(),
+            )
+            val parsed = parseClientVersion(config.clientVersion)
+            if (parsed != null) {
+                fetchedConfigVersion = parsed
+                Log.i(TAG, "Fetched config version ${parsed.year}.${parsed.month}.${parsed.day}")
+            } else {
+                Log.w(TAG, "Could not parse clientVersion '${config.clientVersion}', keeping default")
+            }
+            parsed
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchConfig failed, keeping default config version: ${e.message}")
+            null
+        }
+    }
+
+    /** Parses a "YYYYMMDD.." clientVersion string into a ConfigVersion (V1/V2 fixed at 4/6,
+     *  matching libgm Config.ParsedClientVersion). */
+    private fun parseClientVersion(version: String): ConfigVersion? {
+        if (version.length < 8) return null
+        val year = version.substring(0, 4).toIntOrNull() ?: return null
+        val month = version.substring(4, 6).toIntOrNull() ?: return null
+        val day = version.substring(6, 8).toIntOrNull() ?: return null
+        return authentication.Authentication.ConfigVersion.newBuilder()
+            .setYear(year).setMonth(month).setDay(day).setV1(4).setV2(6)
             .build()
     }
 
@@ -71,6 +126,9 @@ object PairFlow {
         auth: AuthData,
     ): RegisterResult {
         val pubKey = auth.refreshKey.publicKeyDer()
+        // Best-effort: refresh the config version from the live web config before pairing so we
+        // advertise the version the server currently expects rather than a stale hardcoded one.
+        fetchConfig(rpc)
         val req = AuthenticationContainer.newBuilder()
             .setAuthMessage(
                 AuthMessage.newBuilder()
@@ -153,21 +211,24 @@ object PairFlow {
         val resp = rpc.postProtobuf(
             url = Endpoints.RefreshPhoneRelayUrl,
             body = req,
-            responseTemplate = RegisterPhoneRelayResponse.getDefaultInstance(),
+            responseTemplate = RefreshPhoneRelayResponse.getDefaultInstance(),
         )
         Log.i(TAG, "RefreshPhoneRelay OK")
 
         val urlData = URLData.newBuilder()
-            .setPairingKey(resp.pairingKey)
+            .setPairingKey(resp.pairKey)
             .setAESKey(auth.crypto().aesKey.toByteString())
             .setHMACKey(auth.crypto().hmacKey.toByteString())
             .build()
         val qrPayload = Base64.encodeToString(urlData.toByteArray(), Base64.NO_WRAP)
         val qrUrl = Endpoints.QrCodeBaseUrl + qrPayload
 
+        // RefreshPhoneRelay only regenerates a QR pair key; it does NOT issue a new
+        // tachyon token (cf libgm pair.go RefreshPhoneRelay). Return the existing
+        // token unchanged so callers don't wipe it.
         return RegisterResult(
-            tachyonToken = resp.authKeyData.tachyonAuthToken.toByteArray(),
-            tachyonTtlUs = resp.authKeyData.ttl,
+            tachyonToken = tachyonToken,
+            tachyonTtlUs = 0,
             qrUrl = qrUrl,
         )
     }

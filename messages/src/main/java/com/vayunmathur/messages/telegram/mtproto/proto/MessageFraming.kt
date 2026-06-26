@@ -128,6 +128,22 @@ object MessageFraming {
         return buf.raw
     }
 
+    // Serializes a msg_container#73f1f8dc wrapping multiple already-framed inner messages, each as
+    // (msg_id:long seqno:int bytes:int body). Used to batch several outgoing content messages into a
+    // single encrypted MTProto transport packet. Ref MTProto msg_container.
+    fun writeContainer(inner: List<InnerMessage>): ByteArray {
+        val buf = TlBuffer()
+        buf.putId(TYPE_MSG_CONTAINER)
+        buf.putInt32(inner.size)
+        for (msg in inner) {
+            buf.putInt64(msg.msgId)
+            buf.putInt32(msg.seqNo)
+            buf.putInt32(msg.data.size)
+            buf.putRawBytes(msg.data)
+        }
+        return buf.raw
+    }
+
     fun writePingDelayDisconnect(pingId: Long, disconnectDelay: Int): ByteArray {
         val buf = TlBuffer()
         buf.putId(0xf3427b8c.toInt()) // ping_delay_disconnect

@@ -69,6 +69,15 @@ object TlRegistry {
             // Auth export/import
             0xb434e2b8.toInt() -> AuthExportedAuthorization.decode(buf)
 
+            // Upload (file download)
+            0x096a18d5.toInt() -> UploadFile.decode(buf)
+            0xf18cda44.toInt() -> UploadFileCdnRedirect.decode(buf)
+
+            // Channel difference
+            0x2064674e.toInt() -> decodeChannelDifference(buf)
+            0x3e11affb.toInt() -> decodeChannelDifferenceEmpty(buf)
+            0xa4bcc6fe.toInt() -> decodeChannelDifferenceTooLong(buf)
+
             // Peers
             0x59511722.toInt() -> PeerUser(buf.int64())
             0x36c6019a.toInt() -> PeerChat(buf.int64())
@@ -333,6 +342,43 @@ object TlRegistry {
         val stateId = buf.int32() // UpdatesState constructor
         val state = UpdatesState.decode(buf)
         return UpdatesDifferenceSlice(newMessages, newEncryptedMessages, otherUpdates, chats, users, state)
+    }
+
+    // updates.channelDifference#2064674e flags:# final:flags.0?true pts:int timeout:flags.1?int
+    //   new_messages:Vector<Message> other_updates:Vector<Update> chats:Vector<Chat> users:Vector<User>
+    private fun decodeChannelDifference(buf: TlBuffer): ChannelDifference {
+        val flags = Fields.decode(buf)
+        val final = flags.has(0)
+        val pts = buf.int32()
+        if (flags.has(1)) buf.int32() // timeout
+        val newMessages = decodeVector(buf) { decodeMessage(it) }
+        val otherUpdates = decodeVector(buf) { val id = it.int32(); decodeById(id, it) }
+        val chats = decodeVector(buf) { decodeChat(it) }
+        val users = decodeVector(buf) { decodeUser(it) }
+        return ChannelDifference(final, pts, newMessages, otherUpdates, chats, users)
+    }
+
+    // updates.channelDifferenceEmpty#3e11affb flags:# final:flags.0?true pts:int timeout:flags.1?int
+    private fun decodeChannelDifferenceEmpty(buf: TlBuffer): ChannelDifferenceEmpty {
+        val flags = Fields.decode(buf)
+        val final = flags.has(0)
+        val pts = buf.int32()
+        if (flags.has(1)) buf.int32() // timeout
+        return ChannelDifferenceEmpty(final, pts)
+    }
+
+    // updates.channelDifferenceTooLong#a4bcc6fe flags:# final:flags.0?true timeout:flags.1?int
+    //   dialog:Dialog messages:Vector<Message> chats:Vector<Chat> users:Vector<User>
+    private fun decodeChannelDifferenceTooLong(buf: TlBuffer): ChannelDifferenceTooLong {
+        val flags = Fields.decode(buf)
+        val final = flags.has(0)
+        if (flags.has(1)) buf.int32() // timeout
+        val dialog = decodeDialog(buf)
+        val pts = (dialog as? Dialog)?.pts ?: 0
+        val messages = decodeVector(buf) { decodeMessage(it) }
+        val chats = decodeVector(buf) { decodeChat(it) }
+        val users = decodeVector(buf) { decodeUser(it) }
+        return ChannelDifferenceTooLong(final, pts, messages, chats, users)
     }
 }
 

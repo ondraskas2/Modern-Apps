@@ -8,7 +8,13 @@ object MessageMediaEmpty : TlObject {
     override fun encode(buf: TlBuffer) {}
 }
 
-data class MessageMediaPhoto(val dummy: Int = 0) : TlObject {
+data class MessageMediaPhoto(
+    val photoId: Long = 0,
+    val accessHash: Long = 0,
+    val fileReference: ByteArray = ByteArray(0),
+    val dcId: Int = 0,
+    val thumbSize: String = "",
+) : TlObject {
     override val typeId = 0xe216eb63.toInt()
     override fun encode(buf: TlBuffer) {}
 }
@@ -25,6 +31,11 @@ data class MessageMediaDocument(
     val duration: Double = 0.0,
     val width: Int = 0,
     val height: Int = 0,
+    val docId: Long = 0,
+    val accessHash: Long = 0,
+    val fileReference: ByteArray = ByteArray(0),
+    val dcId: Int = 0,
+    val size: Long = 0,
 ) : TlObject {
     override val typeId = 0x52d8ccd9.toInt()
     override fun encode(buf: TlBuffer) {}

@@ -202,3 +202,36 @@ data class UpdatesDifferenceTooLong(val pts: Int) : TlObject {
     override val typeId = 0x4afe8f6d.toInt()
     override fun encode(buf: TlBuffer) {}
 }
+
+// ---- Channel difference (per-channel pts recovery) ----
+
+data class ChannelDifference(
+    val final: Boolean,
+    val pts: Int,
+    val newMessages: List<TlObject>,
+    val otherUpdates: List<TlObject>,
+    val chats: List<TlObject>,
+    val users: List<TlObject>,
+) : TlObject {
+    override val typeId = 0x2064674e.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class ChannelDifferenceEmpty(
+    val final: Boolean,
+    val pts: Int,
+) : TlObject {
+    override val typeId = 0x3e11affb.toInt()
+    override fun encode(buf: TlBuffer) {}
+}
+
+data class ChannelDifferenceTooLong(
+    val final: Boolean,
+    val pts: Int,
+    val messages: List<TlObject>,
+    val chats: List<TlObject>,
+    val users: List<TlObject>,
+) : TlObject {
+    override val typeId = 0xa4bcc6fe.toInt()
+    override fun encode(buf: TlBuffer) {}
+}

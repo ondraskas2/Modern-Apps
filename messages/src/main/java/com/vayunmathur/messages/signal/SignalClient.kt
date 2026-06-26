@@ -26,6 +26,7 @@ import com.vayunmathur.messages.signal.store.SignalGroupStore
 import com.vayunmathur.messages.signal.store.SignalIdentityKeyStore
 import com.vayunmathur.messages.signal.store.SignalPreKeyStore
 import com.vayunmathur.messages.signal.store.SignalRecipientStore
+import com.vayunmathur.messages.signal.store.SignalRecipientEntity
 import com.vayunmathur.messages.signal.store.SignalSenderKeyStore
 import com.vayunmathur.messages.signal.store.SignalSessionStore
 import com.vayunmathur.messages.signal.web.SignalHttpClient
@@ -93,11 +94,13 @@ object SignalClient {
     private var sessionStore: SignalSessionStore? = null
     private var identityKeyStore: SignalIdentityKeyStore? = null
     private var preKeyStore: SignalPreKeyStore? = null
+    private var pniPreKeyStore: SignalPreKeyStore? = null
     private var senderKeyStore: SignalSenderKeyStore? = null
     private var messageSender: MessageSender? = null
     private var contactManager: ContactManager? = null
     private var profileManager: ProfileManager? = null
     private var groupManager: GroupManager? = null
+    private var storageServiceManager: StorageServiceManager? = null
     private var contactDiscovery: ContactDiscovery? = null
     private var recipientStore: SignalRecipientStore? = null
     var syncContactsOnConnect: Boolean = false
@@ -105,6 +108,13 @@ object SignalClient {
     private var lastContactRequestTime: Long = 0L
     private val CONTACT_SYNC_THRESHOLD_MS = 3L * 24 * 60 * 60 * 1000 // 3 days (matching Go bridge)
     val encryptionLock = Mutex()
+
+    // Idempotent receive: drop redelivered envelopes (server re-sends until ACKed)
+    // so we don't reprocess/re-run the ratchet for an already-handled message.
+    private val recentEnvelopeHashes: MutableMap<String, Boolean> =
+        java.util.Collections.synchronizedMap(object : LinkedHashMap<String, Boolean>(512, 0.75f, false) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>): Boolean = size > 4096
+        })
 
     private val nameCache = ConcurrentHashMap<String, String>()
 
@@ -169,6 +179,7 @@ object SignalClient {
         contactDiscovery = null
         profileManager = null
         groupManager = null
+        storageServiceManager = null
         _state.value = State.Disconnected("Disconnected")
     }
 
@@ -846,11 +857,13 @@ object SignalClient {
                 auth.aciIdentityKeyPair,
                 auth.aciRegistrationId,
             )
-            val pkStore = SignalPreKeyStore(database)
+            val pkStore = SignalPreKeyStore(database, SignalPreKeyStore.SERVICE_ACI)
+            val pniPkStore = SignalPreKeyStore(database, SignalPreKeyStore.SERVICE_PNI)
             val skStore = SignalSenderKeyStore(database)
             sessionStore = sessStore
             identityKeyStore = idStore
             preKeyStore = pkStore
+            pniPreKeyStore = pniPkStore
             senderKeyStore = skStore
 
             val basicAuth = "${auth.aci}.${auth.deviceId}:${auth.password}"
@@ -894,9 +907,16 @@ object SignalClient {
             profileManager = ProfileManager(unauthedWs, recipientStore)
             groupManager = GroupManager(ws, groupStore, recipientStore, auth.aci, auth.pni, auth.password)
             groupManager?.messageSender = sender
+            groupManager?.profileManager = profileManager
+            storageServiceManager = StorageServiceManager(recipientStore, groupStore, ws) { accountRecord ->
+                val current = authData ?: return@StorageServiceManager
+                val updated = current.copy(accountRecord = accountRecord.toByteArray())
+                updated.save(appContext)
+                authData = updated
+            }
 
             ws.incomingRequestHandler = { request ->
-                handleIncomingRequest(request, auth, sessStore, idStore, pkStore, skStore)
+                handleIncomingRequest(request, auth, sessStore, idStore, pkStore, pniPkStore, skStore)
             }
 
             _state.value = State.Connected
@@ -919,7 +939,7 @@ object SignalClient {
                 try {
                     val aciKeyPair = IdentityKeyPair(Base64.decode(auth.aciIdentityKeyPair, Base64.NO_WRAP))
                     val pniKeyPair = IdentityKeyPair(Base64.decode(auth.pniIdentityKeyPair, Base64.NO_WRAP))
-                    PreKeyManager.generateAndUploadPreKeys(ws, pkStore, aciKeyPair, pniKeyPair)
+                    PreKeyManager.generateAndUploadPreKeys(ws, pkStore, pniPkStore, aciKeyPair, pniKeyPair)
                 } catch (t: Throwable) {
                     Log.w(TAG, "Initial pre-key upload failed: ${t.message}")
                 }
@@ -930,7 +950,7 @@ object SignalClient {
                 try {
                     val aciKeyPair = IdentityKeyPair(Base64.decode(auth.aciIdentityKeyPair, Base64.NO_WRAP))
                     val pniKeyPair = IdentityKeyPair(Base64.decode(auth.pniIdentityKeyPair, Base64.NO_WRAP))
-                    PreKeyManager.keyCheckLoop(ws, pkStore, aciKeyPair, pniKeyPair)
+                    PreKeyManager.keyCheckLoop(ws, pkStore, pniPkStore, aciKeyPair, pniKeyPair)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (t: Throwable) {
@@ -960,6 +980,10 @@ object SignalClient {
                         Log.w(TAG, "Storage key sync request failed: ${t.message}")
                     }
                 }
+            } else {
+                // We already have the storage-service master key: pull contacts/groups/account
+                // records from storage service. Ref signalmeow StorageService sync.
+                syncStorageIfPossible()
             }
 
             scope.launch {
@@ -1015,6 +1039,7 @@ object SignalClient {
         sessStore: SignalSessionStore,
         idStore: SignalIdentityKeyStore,
         pkStore: SignalPreKeyStore,
+        pniPkStore: SignalPreKeyStore,
         skStore: SignalSenderKeyStore,
     ) {
         if (request.verb == "PUT" && request.path == "/api/v1/queue/empty") {
@@ -1040,12 +1065,28 @@ object SignalClient {
         scope.launch {
             try {
                 val envelope = SignalServiceProtos.Envelope.parseFrom(request.body)
+                // Idempotency: identical envelope bytes mean a redelivery of an
+                // already-processed message; ACK and drop to avoid ratchet desync
+                // and duplicate events. Ref signalmeow receiving.go EventBuffer.
+                val dedupKey = Base64.encodeToString(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(request.body.toByteArray()),
+                    Base64.NO_WRAP,
+                )
+                if (recentEnvelopeHashes.put(dedupKey, true) != null) {
+                    Log.d(TAG, "Dropping duplicate redelivered envelope")
+                    webSocket?.sendResponse(request.id, 200)
+                    return@launch
+                }
                 // Serialize ratchet/session access: libsignal session state is not
                 // safe under concurrent encrypt/decrypt for the same recipient.
                 val result = encryptionLock.withLock {
                     EnvelopeDecryptor.decrypt(
                         envelope, sessStore, idStore, pkStore, pkStore, pkStore, skStore,
                         null, auth.aci, auth.deviceId,
+                        selfPni = auth.pni,
+                        pniPreKeyStore = pniPkStore,
+                        pniSignedPreKeyStore = pniPkStore,
+                        pniKyberPreKeyStore = pniPkStore,
                     )
                 }
 
@@ -1088,6 +1129,18 @@ object SignalClient {
                         selfAci = auth.aci,
                     )
                     handleDecryptedMessage(decrypted)
+
+                    // Capture inbound profile keys (carried on regular data messages) so we can
+                    // fetch + populate the sender's profile. Ref signalmeow incomingDataMessage.
+                    if (result.senderAci != auth.aci &&
+                        result.content.hasDataMessage() &&
+                        result.content.dataMessage.profileKey.size() == 32
+                    ) {
+                        captureProfileKey(
+                            result.senderAci,
+                            result.content.dataMessage.profileKey.toByteArray(),
+                        )
+                    }
 
                     if (result.senderAci != auth.aci && result.content.hasDataMessage()) {
                         messageSender?.sendDeliveryReceipt(
@@ -1188,6 +1241,8 @@ object SignalClient {
                     updated.save(appContext)
                     authData = updated
                     Log.i(TAG, "Received and saved master key from sync")
+                    // Now that we have the storage-service key, pull down storage records.
+                    syncStorageIfPossible()
                 }
             }
             is MessageContent.SyncFetchLatest -> {
@@ -1265,7 +1320,9 @@ object SignalClient {
                 _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName))
                 _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
             }
-            is MessageContent.ProfileKeyUpdate -> {}
+            is MessageContent.ProfileKeyUpdate -> {
+                captureProfileKey(content.senderAci, content.profileKey)
+            }
             // Fix #3: GroupChange processing
             is MessageContent.GroupChange -> {
                 val gId = content.groupId
@@ -1366,6 +1423,47 @@ object SignalClient {
                 Log.d(TAG, "Sent contacts sync request to primary device")
             } catch (t: Throwable) {
                 Log.w(TAG, "Contacts sync request failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun syncStorageIfPossible() {
+        val mgr = storageServiceManager ?: return
+        val masterKeyB64 = authData?.masterKey ?: return
+        val masterKey = try {
+            Base64.decode(masterKeyB64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Log.w(TAG, "Invalid stored master key: ${e.message}")
+            return
+        }
+        scope.launch {
+            try {
+                mgr.syncStorage(masterKey)
+            } catch (e: Exception) {
+                Log.w(TAG, "Storage sync failed: ${e.message}")
+            }
+        }
+    }
+
+    // Persists a captured profile key for [aci] (if changed) and refreshes that contact's profile
+    // (name/about/avatar) via ProfileManager. // UNVERIFIED runtime (network fetch).
+    private fun captureProfileKey(aci: String, profileKey: ByteArray) {
+        if (profileKey.size != 32) return
+        val store = recipientStore ?: return
+        val pm = profileManager ?: return
+        scope.launch {
+            try {
+                val existing = store.getRecipient(aci)
+                val changed = existing?.profileKey?.contentEquals(profileKey) != true
+                if (changed) {
+                    store.storeRecipient(
+                        existing?.copy(profileKey = profileKey)
+                            ?: SignalRecipientEntity(aci = aci, profileKey = profileKey)
+                    )
+                    pm.retrieveProfileByID(aci, profileKey)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to capture profile key for $aci: ${e.message}")
             }
         }
     }
