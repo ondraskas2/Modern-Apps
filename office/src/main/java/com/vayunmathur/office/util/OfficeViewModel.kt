@@ -134,7 +134,9 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private fun updateDocument(newDoc: OdfDocument) {
         val current = (_state.value as? ViewState.Loaded)?.document ?: return
         pushUndo(current)
-        _state.value = ViewState.Loaded(newDoc)
+        // Keep ordered-list numbering live after every text edit (matches the markdown editor).
+        val stored = if (newDoc is OdfDocument.TextDocument) renumberLists(newDoc) else newDoc
+        _state.value = ViewState.Loaded(stored)
         _hasUnsavedChanges.value = true
     }
 
@@ -349,6 +351,63 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     fun updateParagraphRun(start: Int, endInclusive: Int, newText: String) {
         val doc = curText() ?: return
         updateDocument(doc.updateParagraphRun(start, endInclusive, newText) ?: return)
+    }
+
+    /** Smart Enter: splits/continues a list line, or exits an empty list item. Returns the new caret. */
+    fun handleListEnter(start: Int, endInclusive: Int, gPos: Int): Int? {
+        val doc = curText() ?: return null
+        val (newDoc, caret) = doc.handleListEnter(start, endInclusive, gPos) ?: return null
+        updateDocument(newDoc)
+        return caret
+    }
+
+    /** Smart Backspace at the start of a list item: outdent/remove the marker. Returns the new caret. */
+    fun handleListBackspace(start: Int, endInclusive: Int, gPos: Int): Int? {
+        val doc = curText() ?: return null
+        val (newDoc, caret) = doc.handleListBackspace(start, endInclusive, gPos) ?: return null
+        updateDocument(newDoc)
+        return caret
+    }
+
+    /** Toggles a checklist item on/off for a paragraph. */
+    fun toggleCheckbox(blockIndex: Int) {
+        val doc = curText() ?: return
+        updateDocument(doc.toggleCheckbox(blockIndex) ?: return)
+    }
+
+    /** Sets the checked state of a checklist item (tapping the box). */
+    fun setCheckboxChecked(blockIndex: Int, checked: Boolean) {
+        val doc = curText() ?: return
+        updateDocument(doc.setCheckboxChecked(blockIndex, checked) ?: return)
+    }
+
+    /** Finds the link covering the caret in a run, or null. */
+    fun linkAt(start: Int, endInclusive: Int, gPos: Int): OdfLinkSpan? =
+        curText()?.linkAt(start, endInclusive, gPos)
+
+    /** Plain text of the current run selection (used to pre-fill the link dialog). */
+    fun runSelectedText(start: Int, endInclusive: Int, gStart: Int, gEnd: Int): String {
+        val doc = curText() ?: return ""
+        val full = (start..endInclusive)
+            .mapNotNull { (doc.content.getOrNull(it) as? OdfContentBlock.Paragraph)?.paragraph }
+            .joinToString("\n") { p -> p.spans.joinToString("") { it.text } }
+        val s = minOf(gStart, gEnd).coerceIn(0, full.length)
+        val e = maxOf(gStart, gEnd).coerceIn(s, full.length)
+        return full.substring(s, e)
+    }
+
+    /** Replaces a run range with a single link span. */
+    fun setLink(start: Int, endInclusive: Int, gStart: Int, gEnd: Int, text: String, url: String) {
+        val doc = curText() ?: return
+        updateDocument(doc.setLinkInRun(start, endInclusive, gStart, gEnd, text, url) ?: return)
+    }
+
+    /** Removes the link over a run range, keeping the text. */
+    fun removeLinkInRun(start: Int, endInclusive: Int, gStart: Int, gEnd: Int) {
+        val doc = curText() ?: return
+        updateDocument(doc.applyRunSpanStyle(start, endInclusive, gStart, gEnd) {
+            it.copy(href = null, underline = false, color = null)
+        } ?: return)
     }
 
     /** Applies a span transform across a (possibly multi-paragraph) selection within a run. Empty selection = caret's whole paragraph. */

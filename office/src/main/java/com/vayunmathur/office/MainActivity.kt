@@ -558,6 +558,12 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                     is OdfDocument.TextDocument -> TextDocumentView(doc = document, searchQuery = searchQuery, fontSizeMultiplier = fontSizeMultiplier, listState = listState,
                         onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge; activeTableBlock = -1; activeTableRow = -1; activeTableCol = -1 },
                         onRunTextChange = { rs, re, text -> viewModel.updateParagraphRun(rs, re, text) },
+                        onRunEnter = { rs, re, gPos -> viewModel.handleListEnter(rs, re, gPos) },
+                        onRunBackspace = { rs, re, gPos -> viewModel.handleListBackspace(rs, re, gPos) },
+                        onToggleCheckbox = { idx ->
+                            val p = (document.content.getOrNull(idx) as? OdfContentBlock.Paragraph)?.paragraph
+                            if (p != null) viewModel.setCheckboxChecked(idx, !p.listChecked)
+                        },
                         onCellTextChange = { bi, r, c, text -> viewModel.updateTextTableCell(bi, r, c, text) },
                         onCellFocus = { bi, r, c -> activeTableBlock = bi; activeTableRow = r; activeTableCol = c },
                         onChartClick = { bi -> editingChartBlock = bi; showChartEditor = true },

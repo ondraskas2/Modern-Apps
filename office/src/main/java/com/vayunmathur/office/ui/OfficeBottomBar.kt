@@ -40,6 +40,7 @@ import com.vayunmathur.office.util.OfficeViewModel
 import com.vayunmathur.library.ui.EditorBaseButtons
 import com.vayunmathur.library.ui.EditorFormat
 import com.vayunmathur.library.ui.EditorFormatter
+import com.vayunmathur.library.ui.LinkContext
 
 /** What the shared bottom bar is currently formatting. (Phase 2) */
 sealed interface FormatTarget {
@@ -160,6 +161,7 @@ private fun TextFormatControls(
 
     val isBullet = para?.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.BULLET
     val isNumbered = para?.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.NUMBERED
+    val isCheckbox = para?.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.CHECKBOX
 
     val textFormatter = TextRunFormatter(viewModel, runStart, runEnd, selStart, selEnd, enabled)
 
@@ -201,8 +203,19 @@ private fun TextFormatControls(
     }
     FmtIcon(R.drawable.format_list_bulleted_24px, isBullet, enabled, "Bulleted list") { if (focusedPara >= 0) viewModel.toggleListItem(focusedPara) }
     FmtIcon(R.drawable.format_list_numbered_24px, isNumbered, enabled, "Numbered list") { if (focusedPara >= 0) viewModel.toggleNumberedList(focusedPara) }
-    FmtIcon(R.drawable.format_indent_increase_24px, false, enabled, "Increase indent") { if (focusedPara >= 0) viewModel.indentParagraph(focusedPara) }
-    FmtIcon(R.drawable.format_indent_decrease_24px, false, enabled, "Decrease indent") { if (focusedPara >= 0) viewModel.outdentParagraph(focusedPara) }
+    FmtIcon(R.drawable.check_box_24px, isCheckbox, enabled, "Checklist") { if (focusedPara >= 0) viewModel.toggleCheckbox(focusedPara) }
+    FmtIcon(R.drawable.format_indent_increase_24px, false, enabled, "Increase indent") {
+        if (focusedPara >= 0) {
+            if (para?.style == ParagraphStyle.LIST_ITEM) viewModel.changeListLevel(focusedPara, 1)
+            else viewModel.indentParagraph(focusedPara)
+        }
+    }
+    FmtIcon(R.drawable.format_indent_decrease_24px, false, enabled, "Decrease indent") {
+        if (focusedPara >= 0) {
+            if (para?.style == ParagraphStyle.LIST_ITEM) viewModel.changeListLevel(focusedPara, -1)
+            else viewModel.outdentParagraph(focusedPara)
+        }
+    }
     Box {
         val tableEnabled = activeTableBlock >= 0
         TextButton(onClick = { tableMenu = true }) {
@@ -300,6 +313,7 @@ private class TextRunFormatter(
 ) : EditorFormatter {
     override val supported = setOf(
         EditorFormat.BOLD, EditorFormat.ITALIC, EditorFormat.UNDERLINE, EditorFormat.STRIKETHROUGH,
+        EditorFormat.LINK,
     )
 
     override fun isActive(format: EditorFormat): Boolean = enabled && when (format) {
@@ -319,6 +333,29 @@ private class TextRunFormatter(
             EditorFormat.STRIKETHROUGH -> { val t = !isActive(EditorFormat.STRIKETHROUGH); viewModel.applyRunSpanStyle(runStart, runEnd, selStart, selEnd) { it.copy(strikethrough = t) } }
             else -> {}
         }
+    }
+
+    override fun linkContext(): LinkContext? {
+        if (!enabled) return null
+        val link = viewModel.linkAt(runStart, runEnd, selStart)
+        if (link != null) return LinkContext(editing = true, text = link.text, url = link.url)
+        if (selStart != selEnd) return LinkContext(editing = false, text = viewModel.runSelectedText(runStart, runEnd, selStart, selEnd), url = "")
+        return null
+    }
+
+    override fun applyLink(context: LinkContext, text: String, url: String) {
+        if (!enabled || url.isBlank()) return
+        val link = viewModel.linkAt(runStart, runEnd, selStart)
+        val gs: Int; val ge: Int
+        if (link != null) { gs = link.gStart; ge = link.gEnd }
+        else if (selStart != selEnd) { gs = selStart; ge = selEnd }
+        else return
+        viewModel.setLink(runStart, runEnd, gs, ge, text.ifBlank { url }, url)
+    }
+
+    override fun removeLink(context: LinkContext) {
+        val link = viewModel.linkAt(runStart, runEnd, selStart) ?: return
+        viewModel.removeLinkInRun(runStart, runEnd, link.gStart, link.gEnd)
     }
 }
 

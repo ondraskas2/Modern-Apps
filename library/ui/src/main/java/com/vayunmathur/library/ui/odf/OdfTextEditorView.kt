@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -169,6 +170,17 @@ fun ContinuousParagraphEditor(
         buildDocTransformed(it.text, paras, lens, prefixes, onSurface, prefixColor, fontSizeMultiplier)
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    // When the run's shape changes (a paragraph added/removed by Enter/Backspace), the caller's
+    // tracked run range + selection go stale. Report the fresh range + caret so toolbar targeting
+    // (focused paragraph) stays correct even before the next user interaction.
+    var prevRange by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(start, endInclusive) {
+        val key = start to endInclusive
+        if (prevRange != null && prevRange != key) {
+            onSelectionChange(start, endInclusive, tfv.selection.min, tfv.selection.max)
+        }
+        prevRange = key
+    }
     Box(modifier) {
         // Let Compose own the caret. The built-in cursor is positioned with the SAME internal
         // (visually-transformed) TextLayoutResult and OffsetMapping that lay out the aligned glyphs,
@@ -208,8 +220,7 @@ fun ContinuousParagraphEditor(
         // Tappable overlays over each checkbox glyph so tapping toggles its checked state.
         val lay = layout
         if (onToggleCheckbox != null && lay != null) {
-            val sep = runSeparators(paras, lens)
-            val transStarts = runTransStarts(lens, prefixes, sep)
+            val transStarts = runTransStarts(lens, prefixes)
             val density = LocalDensity.current
             paras.forEachIndexed { pi, para ->
                 if (para.style == ParagraphStyle.LIST_ITEM && para.listType == ListType.CHECKBOX) {
@@ -233,23 +244,18 @@ private fun sameLayout(a: OdfParagraph, b: OdfParagraph): Boolean =
     a.alignment == b.alignment && a.lineHeightPercent == b.lineHeightPercent &&
         a.textIndent == 0f && b.textIndent == 0f
 
-/** '\n' separators emitted between paragraphs (mirrors [buildDocTransformed]). */
-private fun runSeparators(paras: List<OdfParagraph>, lens: List<Int>): IntArray {
-    val n = paras.size
-    val sep = IntArray(n)
-    for (i in 0 until n - 1) sep[i] = if (sameLayout(paras[i], paras[i + 1]) || lens[i + 1] == 0) 1 else 0
-    if (n > 0 && lens[0] == 0 && n > 1) sep[0] = 1
-    return sep
-}
-
-/** Transformed-text start offset (start of the injected prefix) for each paragraph. */
-private fun runTransStarts(lens: List<Int>, prefixes: List<String>, sep: IntArray): IntArray {
+/**
+ * Transformed-text start offset (start of the injected prefix) for each paragraph. Every paragraph
+ * boundary contributes exactly one separator char (see [buildDocTransformed]), so the accounting is
+ * simply prefix + text + 1 per non-final paragraph.
+ */
+private fun runTransStarts(lens: List<Int>, prefixes: List<String>): IntArray {
     val n = lens.size
     val transStarts = IntArray(n)
     var t = 0
     for (i in 0 until n) {
         transStarts[i] = t
-        t += prefixes[i].length + lens[i] + sep[i]
+        t += prefixes[i].length + lens[i] + (if (i < n - 1) 1 else 0)
     }
     return transStarts
 }
@@ -263,35 +269,30 @@ private fun buildDocTransformed(
     val transStarts = IntArray(n)
     val prefixLens = IntArray(n) { prefixes[it].length }
 
-    // Paragraph-break model (fixes the extra blank line between paragraphs + the start-of-paragraph
-    // backspace-merge). Compose renders each ParagraphStyle range as its own paragraph, so a '\n'
-    // that lands on a ParagraphStyle boundary becomes an extra empty "gap" paragraph -> a blank
-    // line between every paragraph, and that blank line is caret-addressable (its offset maps back
-    // to the END of the previous paragraph, so backspace there deletes a char instead of merging).
-    //
-    // Instead we keep a '\n' separator ONLY between consecutive paragraphs that share the same
-    // paragraph-level layout (alignment, line spacing) and use no first-line indent: those sit
-    // inside ONE shared ParagraphStyle, so the '\n' is an ordinary single line break (no blank
-    // line, fully addressable). At a real layout change we drop the '\n' and let the paragraph
-    // break come for free from the two adjacent ParagraphStyle ranges. Empty paragraphs keep a
-    // separator with their previous (or, for a leading empty paragraph, next) neighbour so they
-    // still occupy a caret-addressable line. The original text always joins paragraphs with '\n'
-    // (see plainText), so origStarts still advances by lens[i] + 1 for every paragraph.
-    fun sameLayout(a: OdfParagraph, b: OdfParagraph): Boolean =
-        a.alignment == b.alignment && a.lineHeightPercent == b.lineHeightPercent &&
-            a.textIndent == 0f && b.textIndent == 0f
-    val sep = IntArray(n) // sep[i] = 1 if a '\n' is emitted between paragraph i and i+1
+    // Paragraph-break model. Compose makes each ParagraphStyle range its own paragraph, and a '\n'
+    // that lands between two ParagraphStyle ranges becomes an extra blank "gap" line. So we keep a
+    // '\n' separator only between consecutive paragraphs that share the same paragraph-level layout
+    // (alignment, line spacing, no first-line indent): those sit inside ONE shared ParagraphStyle,
+    // where the '\n' is an ordinary single line break. At a real layout change the two paragraphs
+    // need separate ParagraphStyles, so instead of a '\n' (which would blank-line) OR nothing (which
+    // would collapse the end of one block and the start of the next onto a single caret offset and
+    // break caret placement / hit-testing), we emit a zero-width space (U+200B) kept INSIDE the
+    // first paragraph's ParagraphStyle range: it adds no blank line and no visible glyph, but gives
+    // the boundary a real, distinct offset so the caret lands correctly. Either way exactly one
+    // separator char is emitted between paragraphs, so origStarts and transStarts both advance by
+    // len + 1 per boundary.
+    val withinGroup = BooleanArray(n) // withinGroup[i] = paragraphs i and i+1 share a ParagraphStyle
     for (i in 0 until n - 1) {
-        sep[i] = if (sameLayout(paras[i], paras[i + 1]) || lens[i + 1] == 0) 1 else 0
+        withinGroup[i] = sameLayout(paras[i], paras[i + 1]) || lens[i + 1] == 0
     }
-    if (n > 0 && lens[0] == 0 && n > 1) sep[0] = 1 // keep a leading empty paragraph on its own line
+    if (n > 0 && lens[0] == 0 && n > 1) withinGroup[0] = true // keep a leading empty paragraph with its neighbour
 
     var oAcc = 0; var tAcc = 0
     for (i in 0 until n) {
         origStarts[i] = oAcc
         transStarts[i] = tAcc
         oAcc += lens[i] + 1
-        tAcc += prefixLens[i] + lens[i] + sep[i]
+        tAcc += prefixLens[i] + lens[i] + (if (i < n - 1) 1 else 0)
     }
     val origLen = text.length
     val transLen = if (n == 0) 0 else transStarts[n - 1] + prefixLens[n - 1] + lens[n - 1]
@@ -300,7 +301,7 @@ private fun buildDocTransformed(
         var groupStart = 0   // annotated offset where the current ParagraphStyle group began
         var groupFirst = 0   // index of the first paragraph in the current group
         for (i in paras.indices) {
-            if (i == 0 || sep[i - 1] == 0) { groupStart = length; groupFirst = i }
+            if (i == 0 || !withinGroup[i - 1]) { groupStart = length; groupFirst = i }
             val para = paras[i]
             // prefix (styled muted, never bold/italic)
             if (prefixes[i].isNotEmpty()) {
@@ -339,11 +340,15 @@ private fun buildDocTransformed(
                 }
                 off = segEnd
             }
+            val groupEnds = i == n - 1 || !withinGroup[i]
+            // Between-group separator: append the zero-width space BEFORE applying the group's
+            // ParagraphStyle so it stays inside the group's range (no orphan blank line).
+            if (groupEnds && i != n - 1) append("\u200B")
             // At the end of a group, emit ONE ParagraphStyle spanning every paragraph in the group
             // (prefixes, text and interior '\n' separators). The group's paragraph-level layout is
             // taken from its first non-empty paragraph so that an absorbed empty paragraph never
             // overrides the alignment/indent of real content. (A5/A6 + paragraph-spacing fix)
-            if (i == n - 1 || sep[i] == 0) {
+            if (groupEnds) {
                 val styleSrc = (groupFirst..i).firstOrNull { lens[it] > 0 }?.let { paras[it] } ?: paras[groupFirst]
                 val firstLineIndent = if (styleSrc.textIndent != 0f) styleSrc.textIndent.sp else 0.sp
                 // Justify is stretched at draw time, but BasicTextField computes caret / selection /
@@ -361,8 +366,10 @@ private fun buildDocTransformed(
                     ),
                     groupStart, length
                 )
+            } else {
+                // Within a group: an ordinary single line break that stays inside the group's range.
+                append("\n")
             }
-            if (sep[i] == 1) append("\n")
         }
     }
     return TransformedText(annotated, PrefixOffsetMapping(origStarts, transStarts, prefixLens, lens.toIntArray(), origLen, transLen))

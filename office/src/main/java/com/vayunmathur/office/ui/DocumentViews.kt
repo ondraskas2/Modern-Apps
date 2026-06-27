@@ -540,6 +540,9 @@ fun TextDocumentView(
     listState: LazyListState = rememberLazyListState(),
     onRunSelectionChange: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     onRunTextChange: (Int, Int, String) -> Unit = { _, _, _ -> },
+    onRunEnter: (Int, Int, Int) -> Int? = { _, _, _ -> null },
+    onRunBackspace: (Int, Int, Int) -> Int? = { _, _, _ -> null },
+    onToggleCheckbox: (Int) -> Unit = {},
     onCellTextChange: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> },
     onCellFocus: (Int, Int, Int) -> Unit = { _, _, _ -> },
     onChartClick: (Int) -> Unit = {},
@@ -561,7 +564,12 @@ fun TextDocumentView(
 
         items(segments.size) { si ->
             when (val seg = segments[si]) {
-                is DocSegment.Paragraphs -> ContinuousParagraphEditor(doc, seg.start, seg.endInclusive, fontSizeMultiplier, onRunSelectionChange, onRunTextChange)
+                is DocSegment.Paragraphs -> ContinuousParagraphEditor(
+                    doc, seg.start, seg.endInclusive, fontSizeMultiplier, onRunSelectionChange, onRunTextChange,
+                    onEnter = { gPos -> onRunEnter(seg.start, seg.endInclusive, gPos) },
+                    onBackspace = { gPos -> onRunBackspace(seg.start, seg.endInclusive, gPos) },
+                    onToggleCheckbox = onToggleCheckbox,
+                )
                 is DocSegment.Block -> when (val block = doc.content[seg.index]) {
                     is OdfContentBlock.Table -> TableView(block.table, seg.index, searchQuery, fontSizeMultiplier, onCellTextChange, onCellFocus)
                     is OdfContentBlock.Image -> {
