@@ -86,6 +86,10 @@ class WebViewWebSocket(
     private var ephemeralPublicKey: ByteArray? = null
     private var scriptInjected = false
     private var serverHeaderReceived = false
+    // Reassembly buffer for the incoming frame stream. A single Noise frame can be split
+    // across multiple WebSocket messages (the ServerHello carries the full cert chain) and
+    // several frames can coalesce into one, so we cannot assume 1 message == 1 frame.
+    private var recvBuffer = ByteArray(0)
     private val iqCounter = AtomicInteger(0)
     private var reconnectJob: Job? = null
     private var lastKeepaliveSuccess = System.currentTimeMillis()
@@ -93,29 +97,15 @@ class WebViewWebSocket(
     private inner class WebSocketBridge {
         @JavascriptInterface
         fun onOpen() {
-            Log.i(TAG, "WebSocket opened via WebView, starting Noise handshake")
+            WhatsAppDiag.log(TAG, "WS opened → starting Noise handshake")
             startNoiseHandshake()
         }
 
         @JavascriptInterface
         fun onMessage(data: String) {
             try {
-                var bytes = Base64.decode(data, Base64.DEFAULT)
-                if (!serverHeaderReceived) {
-                    serverHeaderReceived = true
-                    if (bytes.size >= WhatsAppProtocol.WA_CONN_HEADER.size &&
-                        bytes[0] == 'W'.code.toByte() && bytes[1] == 'A'.code.toByte()) {
-                        bytes = bytes.copyOfRange(WhatsAppProtocol.WA_CONN_HEADER.size, bytes.size)
-                    }
-                }
-                scope.launch {
-                    if (!isHandshakeComplete) {
-                        val framePayload = WhatsAppProtocol.extractFrame(bytes)
-                        handleHandshakeMessage(framePayload)
-                    } else {
-                        processIncomingFrames(bytes)
-                    }
-                }
+                val bytes = Base64.decode(data, Base64.DEFAULT)
+                scope.launch { ingestBytes(bytes) }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to decode message", e)
             }
@@ -123,7 +113,7 @@ class WebViewWebSocket(
 
         @JavascriptInterface
         fun onClose(code: Int, reason: String) {
-            Log.i(TAG, "WebSocket closed: $code $reason")
+            WhatsAppDiag.log(TAG, "WS CLOSED code=$code reason='${reason}' (handshakeComplete=$isHandshakeComplete)")
             isConnected = false
             // Reconnect is owned by WhatsAppClient (it observes Disconnected and
             // rebuilds the socket with backoff); don't self-reconnect here too.
@@ -132,7 +122,7 @@ class WebViewWebSocket(
 
         @JavascriptInterface
         fun onError(error: String) {
-            Log.e(TAG, "WebSocket error: $error")
+            WhatsAppDiag.log(TAG, "WS ERROR: $error")
             scope.launch { _connectionState.emit(ConnectionState.Disconnected("Error: $error")) }
         }
 
@@ -236,6 +226,7 @@ class WebViewWebSocket(
             isHandshakeComplete = false
             scriptInjected = false
             serverHeaderReceived = false
+            recvBuffer = ByteArray(0)
             noiseHandshake = null
             noiseSocket = null
             handshakeJob?.cancel()
@@ -270,7 +261,7 @@ class WebViewWebSocket(
                 val framedMessage = WhatsAppProtocol.buildFramedMessage(clientHelloBytes, WhatsAppProtocol.WA_CONN_HEADER)
                 sendRaw(framedMessage)
 
-                Log.i(TAG, "Sent ClientHello (${clientHelloBytes.size} bytes)")
+                WhatsAppDiag.log(TAG, "→ ClientHello sent (${clientHelloBytes.size}B payload, ${framedMessage.size}B framed)")
             } catch (e: Exception) {
                 Log.e(TAG, "Handshake failed", e)
                 scope.launch { _connectionState.emit(ConnectionState.Disconnected("Handshake failed: ${e.message}")) }
@@ -296,6 +287,7 @@ class WebViewWebSocket(
             val serverEphemeral = serverHello.ephemeral.toByteArray()
             val serverStaticCiphertext = serverHello.getStatic().toByteArray()
             val certificateCiphertext = serverHello.payload.toByteArray()
+            WhatsAppDiag.log(TAG, "← ServerHello eph=${serverEphemeral.size}B static=${serverStaticCiphertext.size}B cert=${certificateCiphertext.size}B")
 
             if (serverEphemeral.size != 32 || serverStaticCiphertext.isEmpty() || certificateCiphertext.isEmpty()) {
                 Log.e(TAG, "Invalid ServerHello: missing fields")
@@ -319,10 +311,11 @@ class WebViewWebSocket(
             val certDecrypted = handshake.decrypt(certificateCiphertext)
             Log.d(TAG, "Server cert decrypted (${certDecrypted.size} bytes)")
             if (!WhatsAppProtocol.verifyServerCert(certDecrypted, staticDecrypted)) {
-                Log.e(TAG, "Server certificate verification failed — aborting handshake")
+                WhatsAppDiag.log(TAG, "Server cert verification FAILED — aborting")
                 disconnect()
                 return
             }
+            WhatsAppDiag.log(TAG, "Server cert verified OK")
 
             // Send ClientFinish (whatsmeow/handshake.go lines 89-119). The static (noise) key must
             // match the one advertised: the saved key when logging in, or the provisioning key whose
@@ -356,7 +349,8 @@ class WebViewWebSocket(
             val framedFinish = WhatsAppProtocol.buildFramedMessage(clientFinishBytes, null)
             sendRaw(framedFinish)
 
-            Log.i(TAG, "Sent ClientFinish (${clientFinishBytes.size} bytes)")
+            val mode = if (authData != null) "login" else if (registration != null) "register/pair" else "anon"
+            WhatsAppDiag.log(TAG, "→ ClientFinish sent ($mode, payload=${clientPayloadBytes.size}B, framed=${framedFinish.size}B)")
 
             // Derive final encryption keys
             val (writeKey, readKey) = handshake.finish()
@@ -364,12 +358,12 @@ class WebViewWebSocket(
             isHandshakeComplete = true
             isConnected = true
 
-            Log.i(TAG, "Noise handshake complete")
+            WhatsAppDiag.log(TAG, "Noise handshake COMPLETE — awaiting server stanzas")
             scope.launch { _connectionState.emit(ConnectionState.Connected) }
             startKeepalive()
 
         } catch (e: Exception) {
-            Log.e(TAG, "Handshake processing failed", e)
+            WhatsAppDiag.log(TAG, "Handshake processing FAILED: ${e.javaClass.simpleName}: ${e.message}")
             scope.launch { _connectionState.emit(ConnectionState.Disconnected("Handshake failed: ${e.message}")) }
             disconnect()
         }
@@ -407,7 +401,10 @@ class WebViewWebSocket(
             .setConnectReason(com.vayunmathur.messages.whatsapp.proto.WhatsAppPayloadProto.ClientPayload.ConnectReason.USER_ACTIVATED)
 
         if (authData != null) {
-            val widUser = authData.wid.substringBefore("@").substringBefore(":")
+            // JID is <user>.<agent>:<device>@server (e.g. 16503988058.0:3). The username is the
+            // numeric phone only — strip both the :device and the .agent suffixes, otherwise
+            // toLongOrNull() fails on the "." and we send username=0, which the server rejects.
+            val widUser = authData.wid.substringBefore("@").substringBefore(":").substringBefore(".")
             payloadBuilder.username = widUser.toLongOrNull() ?: 0L
             payloadBuilder.device = authData.deviceId
             payloadBuilder.passive = true
@@ -452,26 +449,51 @@ class WebViewWebSocket(
     }
 
     /**
-     * Process incoming post-handshake frames.
-     * Strips 3-byte length prefix, decrypts with NoiseSocket, emits plaintext.
+     * Accumulate incoming WebSocket bytes and dispatch every complete length-prefixed frame.
+     * WhatsApp can split a single Noise frame across multiple WebSocket messages (the
+     * ServerHello carries the full cert chain) or coalesce several frames into one, so the
+     * stream must be reassembled like whatsmeow/socket/framesocket.go processData().
      */
-    private suspend fun processIncomingFrames(rawData: ByteArray) {
-        var data = rawData
-        while (data.size >= WhatsAppProtocol.FRAME_LENGTH_SIZE) {
-            val length = ((data[0].toInt() and 0xFF) shl 16) or
-                    ((data[1].toInt() and 0xFF) shl 8) or
-                    (data[2].toInt() and 0xFF)
-            if (data.size < WhatsAppProtocol.FRAME_LENGTH_SIZE + length) break
+    private suspend fun ingestBytes(chunk: ByteArray) {
+        var data = chunk
+        WhatsAppDiag.log(TAG, "← WS msg ${WhatsAppDiag.preview(chunk)} (buffered=${recvBuffer.size}, hsDone=$isHandshakeComplete)")
+        // The connection header is only ever prepended once, at the very start of the stream.
+        if (!serverHeaderReceived) {
+            serverHeaderReceived = true
+            if (data.size >= WhatsAppProtocol.WA_CONN_HEADER.size &&
+                data[0] == 'W'.code.toByte() && data[1] == 'A'.code.toByte()) {
+                data = data.copyOfRange(WhatsAppProtocol.WA_CONN_HEADER.size, data.size)
+            }
+        }
+        recvBuffer = if (recvBuffer.isEmpty()) data else recvBuffer + data
 
-            val frameData = data.copyOfRange(WhatsAppProtocol.FRAME_LENGTH_SIZE, WhatsAppProtocol.FRAME_LENGTH_SIZE + length)
-            data = data.copyOfRange(WhatsAppProtocol.FRAME_LENGTH_SIZE + length, data.size)
+        while (recvBuffer.size >= WhatsAppProtocol.FRAME_LENGTH_SIZE) {
+            val length = ((recvBuffer[0].toInt() and 0xFF) shl 16) or
+                    ((recvBuffer[1].toInt() and 0xFF) shl 8) or
+                    (recvBuffer[2].toInt() and 0xFF)
+            if (recvBuffer.size < WhatsAppProtocol.FRAME_LENGTH_SIZE + length) {
+                WhatsAppDiag.log(TAG, "  … partial frame: need ${length}B, have ${recvBuffer.size - WhatsAppProtocol.FRAME_LENGTH_SIZE}B, waiting")
+                break
+            }
 
-            noiseSocket?.let { socket ->
-                try {
-                    val plaintext = socket.decrypt(frameData)
-                    _messages.emit(plaintext)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to decrypt frame", e)
+            val frame = recvBuffer.copyOfRange(
+                WhatsAppProtocol.FRAME_LENGTH_SIZE,
+                WhatsAppProtocol.FRAME_LENGTH_SIZE + length,
+            )
+            recvBuffer = recvBuffer.copyOfRange(
+                WhatsAppProtocol.FRAME_LENGTH_SIZE + length,
+                recvBuffer.size,
+            )
+
+            if (!isHandshakeComplete) {
+                handleHandshakeMessage(frame)
+            } else {
+                noiseSocket?.let { socket ->
+                    try {
+                        _messages.emit(socket.decrypt(frame))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to decrypt frame", e)
+                    }
                 }
             }
         }
@@ -495,9 +517,13 @@ class WebViewWebSocket(
                 })();
             """.trimIndent()
 
-            var result = false
-            webView?.evaluateJavascript(js) { value -> result = value == "true" }
-            result
+            val wv = webView ?: return false
+            // Marshal onto the main thread. evaluateJavascript must run on the WebView's
+            // thread, but this WebView is headless (never attached to a window), so View.post
+            // would queue forever. scope uses Dispatchers.Main (the main Looper), which always
+            // runs regardless of view attachment.
+            scope.launch { wv.evaluateJavascript(js, null) }
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send raw", e)
             false

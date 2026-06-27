@@ -72,6 +72,7 @@ object WhatsAppClient {
     private var e2e: WhatsAppE2E? = null
     private var backfillJob: Job? = null
     private var qrJob: Job? = null
+    private var qrRotateJob: Job? = null
 
     // Pending IQ request/response correlation (by stanza id) for prekey fetch/upload/count.
     private val pendingIqs = ConcurrentHashMap<String, CompletableDeferred<WhatsAppProtocol.Node>>()
@@ -133,6 +134,7 @@ object WhatsAppClient {
         Log.i(TAG, "stop — clearing WhatsApp session")
         backfillJob?.cancel()
         qrJob?.cancel()
+        qrRotateJob?.cancel()
         reconnectJob?.cancel()
         reconnectAttempts = 0
         webSocket?.disconnect()
@@ -185,6 +187,9 @@ object WhatsAppClient {
 
     fun startProvisioning() {
         _state.value = State.Connecting
+        WhatsAppDiag.clear()
+        WhatsAppDiag.log(TAG, "startProvisioning: generating keys, connecting…")
+        qrRotateJob?.cancel()
         qrJob?.cancel()
         qrJob = scope.launch {
             try {
@@ -219,9 +224,12 @@ object WhatsAppClient {
                     scope.launch {
                         connectionState.collect { connState ->
                             when (connState) {
+                                is WebViewWebSocket.ConnectionState.Connecting ->
+                                    WhatsAppDiag.log(TAG, "provisioning socket: Connecting")
                                 is WebViewWebSocket.ConnectionState.Connected ->
-                                    Log.i(TAG, "Provisioning socket connected, awaiting pair-device ref")
+                                    WhatsAppDiag.log(TAG, "provisioning socket: Connected, awaiting pair-device ref")
                                 is WebViewWebSocket.ConnectionState.Disconnected -> {
+                                    WhatsAppDiag.log(TAG, "provisioning socket: Disconnected (${connState.reason})")
                                     val pairedAuth = authData
                                     if (pairedAuth != null) {
                                         // Pairing completed: the server drops the provisioning
@@ -252,7 +260,7 @@ object WhatsAppClient {
         scope.launch {
             try {
                 val node = WhatsAppProtocol.decodeNode(data)
-                Log.d(TAG, "Provisioning message: tag=${node.tag}")
+                WhatsAppDiag.log(TAG, "\u2190 stanza ${nodeSummary(node)}")
                 if (node.tag != "iq") return@launch
                 val child = node.getChildren().firstOrNull() ?: return@launch
                 when (child.tag) {
@@ -260,12 +268,20 @@ object WhatsAppClient {
                     "pair-success" -> handlePairSuccess(node, child)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to handle provisioning message", e)
+                WhatsAppDiag.log(TAG, "decode/handle provisioning stanza FAILED: ${e.javaClass.simpleName}: ${e.message} (raw=${WhatsAppDiag.preview(data)})")
             }
         }
     }
 
-    /** Ack the pair-device IQ and surface the QR ref. Ref whatsmeow pair.go handlePairDevice. */
+    /** Compact human-readable summary of a decoded binary-XML node for on-screen diagnostics. */
+    private fun nodeSummary(node: WhatsAppProtocol.Node): String {
+        val attrs = if (node.attrs.isEmpty()) "" else " " + node.attrs.entries.joinToString(" ") { "${it.key}=${it.value}" }
+        val kids = node.getChildren()
+        val kidPart = if (kids.isEmpty()) "" else " {" + kids.joinToString(",") { it.tag } + "}"
+        return "<${node.tag}$attrs>$kidPart"
+    }
+
+    /** Ack the pair-device IQ and rotate through the QR refs. Ref whatsmeow pair.go + qrchan.go. */
     private fun handlePairDevice(node: WhatsAppProtocol.Node, pairDevice: WhatsAppProtocol.Node) {
         val keys = provisioning ?: return
         val from = node.attrs["from"] ?: "s.whatsapp.net"
@@ -279,17 +295,36 @@ object WhatsAppClient {
                 )
             )
         )
-        val refNode = pairDevice.getChildren().firstOrNull { it.tag == "ref" } ?: return
-        val ref = refNode.data?.toString(Charsets.UTF_8) ?: return
-        val qrData = "https://wa.me/settings/linked_devices#" + listOf(
-            ref,
-            Base64.encodeToString(keys.noisePub, Base64.NO_WRAP),
-            Base64.encodeToString(keys.identityPub, Base64.NO_WRAP),
-            Base64.encodeToString(keys.advSecretKey, Base64.NO_WRAP),
-            "1", // PairClientChrome (whatsmeow pair-code.go)
-        ).joinToString(",")
-        _state.value = State.AwaitingQrScan(qrData)
-        Log.i(TAG, "QR ref received, awaiting phone scan")
+        val refs = pairDevice.getChildren()
+            .filter { it.tag == "ref" }
+            .mapNotNull { it.data?.toString(Charsets.UTF_8) }
+        if (refs.isEmpty()) {
+            WhatsAppDiag.log(TAG, "pair-device contained no refs")
+            return
+        }
+        WhatsAppDiag.log(TAG, "pair-device: ${refs.size} ref(s) received, rotating QR")
+
+        // Rotate through the refs the way whatsmeow does (qrchan.go emitQRs): the first code
+        // gets 60s when the server sent the full batch (6), otherwise each gets 20s. Showing
+        // only the first ref gives a single ~20s window, after which the server ends the stream.
+        qrRotateJob?.cancel()
+        qrRotateJob = scope.launch {
+            refs.forEachIndexed { index, ref ->
+                val qrData = "https://wa.me/settings/linked_devices#" + listOf(
+                    ref,
+                    Base64.encodeToString(keys.noisePub, Base64.NO_WRAP),
+                    Base64.encodeToString(keys.identityPub, Base64.NO_WRAP),
+                    Base64.encodeToString(keys.advSecretKey, Base64.NO_WRAP),
+                    "1", // PairClientChrome (whatsmeow pair-code.go)
+                ).joinToString(",")
+                _state.value = State.AwaitingQrScan(qrData)
+                WhatsAppDiag.log(TAG, "QR ${index + 1}/${refs.size} shown (ref=${ref.take(12)}…), scan now")
+                val timeoutMs = if (index == 0 && refs.size >= 6) 60_000L else 20_000L
+                delay(timeoutMs)
+            }
+            WhatsAppDiag.log(TAG, "All ${refs.size} QR refs expired without a scan")
+            _state.value = State.Disconnected("QR code expired — tap Try Again")
+        }
     }
 
     /**
@@ -301,6 +336,8 @@ object WhatsAppClient {
         val reqId = node.attrs["id"] ?: return
         val from = node.attrs["from"] ?: "s.whatsapp.net"
         try {
+            qrRotateJob?.cancel()
+            WhatsAppDiag.log(TAG, "pair-success received, verifying device identity…")
             val deviceIdentityBytes = pairSuccess.getChildByTag("device-identity")?.data
                 ?: throw IllegalStateException("missing device-identity")
             val deviceNode = pairSuccess.getChildByTag("device")
@@ -373,6 +410,7 @@ object WhatsAppClient {
             )
             WhatsAppAuthData.save(appContext, auth)
             authData = auth
+            WhatsAppDiag.log(TAG, "pairing verified & saved for $jid; sending pair-device-sign confirmation")
 
             // Confirm pairing: pair-device-sign with the self-signed identity.
             val keyIndex = if (deviceDetails.hasKeyIndex()) deviceDetails.keyIndex else 0
@@ -398,7 +436,7 @@ object WhatsAppClient {
             // The server disconnects after this; reconnect() / start() will connect as the
             // registered device and prekeys will be uploaded on the Connected event.
         } catch (e: Exception) {
-            Log.e(TAG, "Pairing failed", e)
+            WhatsAppDiag.log(TAG, "pair-success handling FAILED: ${e.javaClass.simpleName}: ${e.message}")
             sendPairError(from, reqId, 500, "internal-error")
             _state.value = State.Disconnected("Pairing failed: ${e.message}")
         }
@@ -648,14 +686,15 @@ object WhatsAppClient {
                     when (state) {
                         is WebViewWebSocket.ConnectionState.Connected -> {
                             // Noise transport is up, but the server still must send <success>
-                            // before we are authenticated. The post-connect routine (active IQ,
-                            // prekey upload, presence, backfill) runs in handleConnectSuccess on
-                            // <success>, matching whatsmeow connectionevents.go handleConnectSuccess.
-                            reconnectAttempts = 0
-                            _state.value = State.Connected
+                            // before we are authenticated. Do NOT mark State.Connected or reset
+                            // the reconnect backoff here, or a login the server rejects right
+                            // after the handshake produces a tight reconnect loop. Both happen
+                            // in handleConnectSuccess on the real <success> stanza.
+                            WhatsAppDiag.log(TAG, "login socket: Noise connected, awaiting <success>")
                             ensureE2E(auth)
                         }
                         is WebViewWebSocket.ConnectionState.Disconnected -> {
+                            WhatsAppDiag.log(TAG, "login socket: Disconnected (${state.reason})")
                             if (authData != null) {
                                 scheduleReconnect()
                             } else {
@@ -681,6 +720,7 @@ object WhatsAppClient {
         scope.launch {
             try {
                 val node = WhatsAppProtocol.decodeNode(data)
+                WhatsAppDiag.log(TAG, "← login stanza ${nodeSummary(node)}")
 
                 // Ack messages, notifications, and receipts (whatsmeow/receipt.go)
                 if (node.tag == "message" || node.tag == "notification" || node.tag == "receipt") {
@@ -708,7 +748,7 @@ object WhatsAppClient {
                 // Handle connection failure events (Go handleWALogout, ClientOutdated, TemporaryBan)
                 if (node.tag == "failure") {
                     val reason = node.attrs["reason"] ?: "unknown"
-                    Log.e(TAG, "Connection failure: $reason")
+                    WhatsAppDiag.log(TAG, "login <failure> reason=$reason full=${nodeSummary(node)}")
                     when (reason) {
                         "401" -> {
                             _state.value = State.Disconnected("Logged out from WhatsApp")
@@ -724,7 +764,7 @@ object WhatsAppClient {
 
                 if (node.tag == "stream:error") {
                     val errorNode = node.content.firstOrNull()
-                    Log.e(TAG, "Stream error: ${errorNode?.tag ?: "unknown"}")
+                    WhatsAppDiag.log(TAG, "login stream:error code=${node.attrs["code"]} child=${errorNode?.tag} full=${nodeSummary(node)}")
                     _state.value = State.Disconnected("Stream error")
                     return@launch
                 }
@@ -1701,7 +1741,9 @@ object WhatsAppClient {
      * event stream, then uploads prekeys if low, sends unavailable presence and starts backfill.
      */
     private suspend fun handleConnectSuccess(node: WhatsAppProtocol.Node) {
-        Log.i(TAG, "Authenticated (<success>)")
+        WhatsAppDiag.log(TAG, "AUTHENTICATED (<success>) — login complete")
+        reconnectAttempts = 0
+        _state.value = State.Connected
         val lid = node.attrs["lid"]
         val current = authData
         if (!lid.isNullOrEmpty() && current != null && current.lid.isEmpty()) {

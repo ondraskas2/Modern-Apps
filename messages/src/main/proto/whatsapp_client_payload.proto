@@ -159,11 +159,11 @@ message ClientPayload {
     optional UserAgent userAgent = 5;
     optional WebInfo webInfo = 6;
     optional string pushName = 7;
-    optional uint32 device = 9;
+    optional uint32 device = 18;
     optional ConnectType connectType = 12;
     optional ConnectReason connectReason = 13;
-    optional DevicePairingRegistrationData devicePairingData = 18;
-    optional bool pull = 24;
-    optional int32 lc = 29;
+    optional DevicePairingRegistrationData devicePairingData = 19;
+    optional bool pull = 33;
+    optional int32 lc = 24;
     optional bool lidDbMigrated = 41;
 }
