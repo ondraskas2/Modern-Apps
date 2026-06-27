@@ -97,4 +97,5 @@
     <string name="import_button">Impordi</string>
     <string name="no_groups_found">Ühtegi gruppi ei leidu. Saad mõne luua gruppide vahekaardilt.</string>
     <string name="contacts_count">%1$d kontakti</string>
+    <string name="done">Valmis</string>
 </resources>
