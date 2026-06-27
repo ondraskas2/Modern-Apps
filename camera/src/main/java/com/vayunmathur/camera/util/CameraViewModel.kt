@@ -39,11 +39,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.camera.lifecycle.awaitInstance
+import kotlin.math.roundToInt
 
 enum class CameraMode { PHOTO, PORTRAIT, PANORAMA, PHOTOSPHERE, VIDEO, SLOW_MO, TIMELAPSE }
 enum class FlashMode { ON, OFF, AUTO }
 enum class TimerDuration(val seconds: Int) { NONE(0), THREE(3), FIVE(5), TEN(10) }
 enum class AspectRatioOption(val label: String) { RATIO_16_9("16:9"), RATIO_4_3("4:3"), RATIO_1_1("1:1") }
+
+/** Formats a zoom ratio for the zoom bar: ".5", "1x", "2x", or "1.5x". */
+fun formatZoomLabel(ratio: Float): String = when {
+    ratio < 1f -> ".${(ratio * 10).roundToInt()}"
+    else -> {
+        val rounded = (ratio * 10f).roundToInt() / 10f
+        if (kotlin.math.abs(rounded - rounded.roundToInt()) < 0.05f) "${rounded.roundToInt()}x"
+        else "%.1fx".format(rounded)
+    }
+}
 
 data class ExposureTimeStop(val label: String, val nanos: Long?)
 
@@ -258,12 +269,17 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         highSpeedCamera?.cameraControl?.setZoomRatio(ratio)
     }
 
-    fun updateZoomLevels(lensFacing: Int) {
-        _availableZoomLevels.value = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-            listOf(".5" to 0.5f, "1x" to 1f, "2x" to 2f, "5x" to 5f)
-        } else {
-            listOf(".7" to 0.7f, "1x" to 1f)
+    fun updateZoomLevels(minZoom: Float, maxZoom: Float) {
+        val levels = mutableListOf<Pair<String, Float>>()
+        // Wide-angle entry only when the lens can actually zoom out past 1x.
+        if (minZoom < 0.95f) {
+            levels.add(formatZoomLabel(minZoom) to minZoom)
         }
+        levels.add("1x" to 1f)
+        for (tele in listOf(2f, 5f)) {
+            if (tele <= maxZoom + 0.05f) levels.add(formatZoomLabel(tele) to tele)
+        }
+        _availableZoomLevels.value = levels
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -348,7 +364,9 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 Log.w("SloMo", "Could not set anti-banding", e)
             }
 
-            highSpeedCamera?.cameraInfo?.let { updateZoomLevels(_lensFacing.value) }
+            highSpeedCamera?.cameraInfo?.zoomState?.value?.let {
+                updateZoomLevels(it.minZoomRatio, it.maxZoomRatio)
+            }
             _highSpeedActive.value = true
             true
         } catch (e: Exception) {

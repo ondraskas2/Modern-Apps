@@ -264,7 +264,11 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     LaunchedEffect(lensFacing, isSloMo) {
         if (isSloMo) return@LaunchedEffect
         delay(500)
-        viewModel.updateZoomLevels(lensFacing)
+        val zoomState = controller.zoomState.value
+        viewModel.updateZoomLevels(
+            zoomState?.minZoomRatio ?: 1f,
+            zoomState?.maxZoomRatio ?: 1f
+        )
     }
 
     LaunchedEffect(Unit) {
