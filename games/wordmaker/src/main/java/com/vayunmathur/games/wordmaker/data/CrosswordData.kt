@@ -25,6 +25,20 @@ data class CrosswordData(
         }
     }
 
+    /**
+     * Solution words that are not explicitly found yet but whose letters are already entirely
+     * filled in by other found words (e.g. a vertical word completed as a side effect of its
+     * crossing words). These should be counted without the player retracing them.
+     */
+    fun incidentalWords(foundWords: Set<String>): Set<String> {
+        val foundPositions = foundWords.flatMapTo(mutableSetOf()) {
+            letterPositions[it]?.flatten().orEmpty()
+        }
+        return (solutionWords - foundWords).filterTo(mutableSetOf()) { word ->
+            letterPositions[word]?.any { occ -> foundPositions.containsAll(occ) } == true
+        }
+    }
+
     companion object {
         fun fromAsset(context: Context, fileName: String): CrosswordData? = try {
             fromString(context.assets.open(fileName).bufferedReader().use { it.readText() })

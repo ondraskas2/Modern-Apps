@@ -105,6 +105,21 @@ class WordMakerViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             currentLevel.collectLatest { level -> loadCasualLevel(level) }
         }
+        // Auto-count words that become fully filled in by their crossing words, so the player
+        // never has to retrace a word that is already complete on the board.
+        viewModelScope.launch {
+            combine(crosswordData, foundWords) { data, found -> data to found }
+                .collect { (data, found) ->
+                    if (data == null) return@collect
+                    val incidental = data.incidentalWords(found)
+                    if (incidental.isEmpty()) return@collect
+                    if (gameMode.value == GameMode.COMPETITIVE) {
+                        _competitiveFoundWords.value = _competitiveFoundWords.value + incidental
+                    } else {
+                        incidental.forEach { levelDataStore.addFoundWord(it) }
+                    }
+                }
+        }
         // Competitive mode always opens on the lobby; the player starts each level manually.
     }
 
