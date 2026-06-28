@@ -38,4 +38,11 @@
     <string name="notification_shuffle">Losowo</string>
     <string name="notification_repeat">Powtórz</string>
     <string name="go_to_source">Przejdź do %1$s</string>
+    <string name="dialog_delete_playlist">Usuń listę odtwarzania</string>
+    <string name="dialog_delete_playlist_confirm">Usunąć „%1$s”? Tej czynności nie można cofnąć.</string>
+    <string name="dialog_delete">Usuń</string>
+    <string name="menu_delete_playlist">Usuń listę odtwarzania</string>
+    <string name="dialog_create_playlist">Utwórz listę odtwarzania</string>
+    <string name="dialog_create">Utwórz</string>
+    <string name="playlist_name_hint">Nazwa listy odtwarzania</string>
 </resources>
