@@ -9,4 +9,5 @@
     <string name="level_number">Poziom %1$d</string>
     <string name="next_level">Następny poziom</string>
     <string name="bonus_words">Dodatkowe słowa</string>
+    <string name="settings">Ustawienia</string>
 </resources>
