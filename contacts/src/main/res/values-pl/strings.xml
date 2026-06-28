@@ -97,4 +97,5 @@
     <string name="create_new_account">+ Utwórz nowe konto</string>
     <string name="no_groups_found">Nie znaleziono grup. Utwórz grupę w zakładce Grupy.</string>
     <string name="contacts_count">%1$d kontaktów</string>
+    <string name="done">Zrobione</string>
 </resources>
