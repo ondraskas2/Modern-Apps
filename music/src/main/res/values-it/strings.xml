@@ -38,4 +38,11 @@
     <string name="notification_shuffle">Casuale</string>
     <string name="notification_repeat">Ripeti</string>
     <string name="go_to_source">Vai a %1$s</string>
+    <string name="dialog_delete_playlist">Elimina playlist</string>
+    <string name="dialog_delete_playlist_confirm">Eliminare \"%1$s\"? Questa operazione non può essere annullata.</string>
+    <string name="dialog_delete">Elimina</string>
+    <string name="menu_delete_playlist">Elimina playlist</string>
+    <string name="dialog_create_playlist">Crea playlist</string>
+    <string name="dialog_create">Crea</string>
+    <string name="playlist_name_hint">Nome playlist</string>
 </resources>
