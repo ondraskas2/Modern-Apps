@@ -19,6 +19,8 @@ import android.view.OrientationEventListener
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
@@ -251,7 +253,21 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
         onDispose { listener.disable() }
     }
 
-    val controller = remember { LifecycleCameraController(context) }
+    val controller = remember {
+        LifecycleCameraController(context).apply {
+            // Capture at the active sensor's maximum resolution rather than CameraX's
+            // capped default. HIGHEST_AVAILABLE_STRATEGY picks the largest supported
+            // output size, and PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE unlocks the
+            // full-res (maximum-resolution) sensor sizes. Re-resolved per bound camera,
+            // so front/back each get their own max.
+            imageCaptureResolutionSelector = ResolutionSelector.Builder()
+                .setAllowedResolutionMode(
+                    ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+                )
+                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                .build()
+        }
+    }
 
     // Gallery thumbnail (loaded off the main thread in the ViewModel)
     val galleryBitmap by viewModel.galleryThumbnail.collectAsState()
