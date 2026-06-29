@@ -77,4 +77,5 @@
     <string name="create_new_calendar">+ Crea nuovo calendario</string>
     <string name="import_button">Importa</string>
     <string name="default_layout">Layout predefinito</string>
+    <string name="add_reminder">Aggiungi promemoria</string>
 </resources>
