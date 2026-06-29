@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Clock face: 12 subtle Material You tick dots. Also defines the clock's
+     intrinsic size so AnalogClock scales the hands to match. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+    <path
+        android:fillColor="@android:color/system_neutral1_400"
+        android:pathData="M97,12 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M141,23.8 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M173.2,56 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M185,100 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M173.2,144 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M141,176.2 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M97,188 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M53,176.2 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M20.8,144 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M9,100 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M20.8,56 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0
+            M53,23.8 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+</vector>

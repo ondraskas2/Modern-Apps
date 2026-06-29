@@ -61,4 +61,7 @@
     <string name="time_am">AM</string>
     <string name="time_pm">PM</string>
     <string name="grant_notifications_permission">Grant Notifications Permission</string>
+
+    <string name="analog_clock_widget_label">Analog Clock</string>
+    <string name="analog_clock_widget_description">Material You analog clock — tap to open the clock</string>
 </resources>

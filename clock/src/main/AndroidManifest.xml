@@ -73,5 +73,16 @@
             android:foregroundServiceType="mediaPlayback"
             android:directBootAware="true"
             android:exported="false" />
+        <receiver
+            android:name=".widget.AnalogClockWidgetProvider"
+            android:exported="false"
+            android:label="@string/analog_clock_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/analog_clock_widget_info" />
+        </receiver>
     </application>
 </manifest>
