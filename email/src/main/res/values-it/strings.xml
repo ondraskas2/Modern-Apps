@@ -26,4 +26,7 @@
     <string name="ssl_tls">SSL/TLS</string>
     <string name="starttls">STARTTLS</string>
     <string name="listening_for_new_mail">In attesa di nuove e-mail</string>
+    <string name="settings">Impostazioni</string>
+    <string name="drafts">Bozze</string>
+    <string name="save">Salva</string>
 </resources>
