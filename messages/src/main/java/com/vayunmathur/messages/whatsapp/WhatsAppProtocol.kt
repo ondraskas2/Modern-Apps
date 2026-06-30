@@ -233,6 +233,43 @@ object WhatsAppProtocol {
     }
 
     /**
+     * Expand a 32-byte app-state sync key into the 5 sub-keys via HKDF-SHA256 with info
+     * "WhatsApp Mutation Keys" (160 bytes). Order: index, valueEncryption, valueMac,
+     * snapshotMac, patchMac. Ref whatsmeow appstate/keys.go expandAppStateKeys.
+     */
+    fun expandAppStateKeys(keyData: ByteArray): Array<ByteArray> {
+        val hkdf = HKDFBytesGenerator(SHA256Digest())
+        hkdf.init(HKDFParameters(keyData, null, "WhatsApp Mutation Keys".toByteArray(Charsets.UTF_8)))
+        val out = ByteArray(160)
+        hkdf.generateBytes(out, 0, 160)
+        return arrayOf(
+            out.copyOfRange(0, 32),
+            out.copyOfRange(32, 64),
+            out.copyOfRange(64, 96),
+            out.copyOfRange(96, 128),
+            out.copyOfRange(128, 160),
+        )
+    }
+
+    /**
+     * Decrypt an app-state mutation/record value blob: [iv(16)][ciphertext][valueMac(32)] using
+     * the valueEncryption sub-key (AES-256-CBC). MAC is not verified. Ref whatsmeow decodeMutation.
+     */
+    fun decryptAppStateValue(valueBlob: ByteArray, valueEncryptionKey: ByteArray): ByteArray? {
+        if (valueBlob.size < 16 + 32) return null
+        val content = valueBlob.copyOfRange(0, valueBlob.size - 32) // strip 32-byte valueMac
+        val iv = content.copyOfRange(0, 16)
+        val ciphertext = content.copyOfRange(16, content.size)
+        return try {
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(valueEncryptionKey, "AES"), IvParameterSpec(iv))
+            cipher.doFinal(ciphertext)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * Derive media encryption keys from a media key using HKDF.
      * Returns (iv, cipherKey, macKey, refKey) — each used in media encrypt/decrypt.
      * From whatsmeow/download.go getMediaKeys()
@@ -532,11 +569,39 @@ object WhatsAppProtocol {
             pushBytes(bytes)
         }
 
+        /**
+         * Encode a JID attribute value as a JID_PAIR (user@server) or AD_JID (user.agent:device)
+         * token, matching WhatsApp's binary wire format. The server rejects stanzas (e.g. usync,
+         * prekey fetch) whose jid attributes are written as raw strings.
+         */
+        private fun writeJid(jid: String) {
+            val at = jid.indexOf('@')
+            if (at < 0) { writeString(jid); return }
+            val userPart = jid.substring(0, at)
+            val server = jid.substring(at + 1)
+            val colon = userPart.indexOf(':')
+            val device = if (colon >= 0) userPart.substring(colon + 1).toIntOrNull() ?: 0 else 0
+            val beforeColon = if (colon >= 0) userPart.substring(0, colon) else userPart
+            val dot = beforeColon.indexOf('.')
+            val agent = if (dot >= 0) beforeColon.substring(dot + 1).toIntOrNull() ?: 0 else 0
+            val user = if (dot >= 0) beforeColon.substring(0, dot) else beforeColon
+            if ((device != 0 || agent != 0) && server == "s.whatsapp.net") {
+                pushByte(BinaryToken.AD_JID.toByte())
+                pushByte(agent.toByte())
+                pushByte(device.toByte())
+                writeString(user)
+            } else {
+                pushByte(BinaryToken.JID_PAIR)
+                if (user.isEmpty()) pushByte(BinaryToken.LIST_EMPTY) else writeString(user)
+                writeString(server)
+            }
+        }
+
         private fun writeAttributes(attrs: Map<String, String>) {
             for ((key, value) in attrs) {
                 if (value.isEmpty()) continue
                 writeString(key)
-                writeString(value)
+                if (value.contains("@")) writeJid(value) else writeString(value)
             }
         }
 
@@ -890,6 +955,35 @@ object WhatsAppProtocol {
     fun buildConversationMessage(text: String): com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message {
         return com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
             .setConversation(text)
+            .build()
+    }
+
+    /**
+     * Build a HISTORY_SYNC_ON_DEMAND peer-data-operation request. Sent E2E to our own account to
+     * ask the primary to stream older messages for a chat. Ref whatsmeow BuildHistorySyncRequest.
+     * Note: oldestMsgTimestampMs is actually seconds despite the field name.
+     */
+    fun buildHistoryOnDemandRequest(
+        chatJid: String,
+        oldestMsgId: String,
+        oldestMsgFromMe: Boolean,
+        oldestMsgTimestampSec: Long,
+        count: Int,
+    ): com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message {
+        val req = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.HistorySyncOnDemandRequest.newBuilder()
+            .setChatJid(chatJid)
+            .setOldestMsgId(oldestMsgId)
+            .setOldestMsgFromMe(oldestMsgFromMe)
+            .setOnDemandMsgCount(count)
+            .setOldestMsgTimestampMs(oldestMsgTimestampSec)
+        val pdo = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.PeerDataOperationRequestMessage.newBuilder()
+            .setPeerDataOperationRequestType(3) // HISTORY_SYNC_ON_DEMAND
+            .setHistorySyncOnDemandRequest(req)
+        val proto = com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.newBuilder()
+            .setType(com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_MESSAGE)
+            .setPeerDataOperationRequestMessage(pdo)
+        return com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message.newBuilder()
+            .setProtocolMessage(proto)
             .build()
     }
 
@@ -1954,8 +2048,8 @@ object WhatsAppProtocol {
                     }
                     com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.MESSAGE_EDIT -> "edit"
                     com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.EPHEMERAL_SETTING -> "ephemeral setting"
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE,
-                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION,
+                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION -> "history_sync"
+                    com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE -> "app_state_key"
                     com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC,
                     com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.APP_STATE_FATAL_EXCEPTION_NOTIFICATION,
                     com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.ProtocolMessage.Type.SHARE_PHONE_NUMBER,
@@ -1970,7 +2064,28 @@ object WhatsAppProtocol {
     }
 
     /**
-     * Parse an inbound <message> node. If [decryptEnc] is supplied, the <enc> payload is
+     * Extract a human-readable body/preview from a decrypted [Message] (used for history-sync
+     * backfill, where each WebMessageInfo wraps a Message). Mirrors the body logic in parseMessage.
+     */
+    fun extractMessageBody(m: com.vayunmathur.messages.whatsapp.proto.WhatsAppE2EProto.Message): String {
+        var e2e = m
+        if (e2e.hasEditedMessage() && e2e.editedMessage.hasMessage()) e2e = e2e.editedMessage.message
+        return when {
+            e2e.hasConversation() -> e2e.conversation
+            e2e.hasExtendedTextMessage() -> e2e.extendedTextMessage.text
+            e2e.hasImageMessage() -> e2e.imageMessage.caption.ifEmpty { "[Image]" }
+            e2e.hasVideoMessage() -> e2e.videoMessage.caption.ifEmpty { "[Video]" }
+            e2e.hasAudioMessage() -> "[Audio]"
+            e2e.hasDocumentMessage() -> "[Document: ${e2e.documentMessage.title}]"
+            e2e.hasStickerMessage() -> "[Sticker]"
+            e2e.hasContactMessage() -> "[Contact: ${e2e.contactMessage.displayName}]"
+            e2e.hasLocationMessage() -> "[Location]"
+            else -> ""
+        }
+    }
+
+    /**
+     * Parse an inbound <message> node...
      * Signal-decrypted (and unpadded) via the callback; otherwise the raw enc data is treated
      * as already-plaintext padded protobuf (legacy/no-crypto path).
      *
@@ -1983,7 +2098,16 @@ object WhatsAppProtocol {
     ): WhatsAppMessage? {
         if (node.tag != "message") return null
 
-        val from = node.attrs["from"] ?: return null
+        val rawFrom = node.attrs["from"] ?: return null
+        // For 1:1 chats WhatsApp now addresses the sender by LID (e.g. 13184…@s.whatsapp.net) and
+        // carries the phone number in sender_pn. Normalize to the PN so live messages map to the
+        // same conversation as history (which is keyed by phone JID). Groups/broadcast keep `from`.
+        val senderPn = node.attrs["sender_pn"]
+        val from = if (!senderPn.isNullOrEmpty() && !rawFrom.contains("@g.us") && !rawFrom.contains("broadcast")) {
+            senderPn.substringBefore(":").let { if (it.contains("@")) it else "$it@s.whatsapp.net" }
+        } else {
+            rawFrom
+        }
         val id = node.attrs["id"] ?: return null
         val type = node.attrs["type"] ?: "text"
         val timestamp = node.attrs["t"]?.toLongOrNull() ?: System.currentTimeMillis() / 1000

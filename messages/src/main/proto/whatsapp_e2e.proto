@@ -182,8 +182,103 @@ message ProtocolMessage {
     optional Type type = 2;
     optional uint32 ephemeralExpiration = 4;
     optional int64 ephemeralSettingTimestamp = 5;
+    optional HistorySyncNotification historySyncNotification = 6;
     optional Message editedMessage = 14;
     optional int64 timestampMs = 15;
+    optional PeerDataOperationRequestMessage peerDataOperationRequestMessage = 16;
+    optional AppStateSyncKeyShare appStateSyncKeyShare = 7;
+    optional AppStateSyncKeyRequest appStateSyncKeyRequest = 8;
+}
+
+message AppStateSyncKeyShare {
+    repeated AppStateSyncKey keys = 1;
+}
+message AppStateSyncKey {
+    optional AppStateSyncKeyId keyId = 1;
+    optional AppStateSyncKeyData keyData = 2;
+}
+message AppStateSyncKeyId {
+    optional bytes keyId = 1;
+}
+message AppStateSyncKeyData {
+    optional bytes keyData = 1;
+    optional int64 timestamp = 3;
+}
+message AppStateSyncKeyRequest {
+    repeated AppStateSyncKeyId keyIds = 1;
+}
+
+// Request sent to our own account to pull more history on demand. Ref waE2E.
+message PeerDataOperationRequestMessage {
+    optional int32 peerDataOperationRequestType = 1; // HISTORY_SYNC_ON_DEMAND = 3
+    optional HistorySyncOnDemandRequest historySyncOnDemandRequest = 4;
+}
+
+message HistorySyncOnDemandRequest {
+    optional string chatJid = 1;
+    optional string oldestMsgId = 2;
+    optional bool oldestMsgFromMe = 3;
+    optional int32 onDemandMsgCount = 4;
+    optional int64 oldestMsgTimestampMs = 5;
+}
+
+// Points to the (optionally inline) compressed HistorySync blob. Ref waE2E HistorySyncNotification.
+message HistorySyncNotification {
+    optional bytes fileSha256 = 1;
+    optional uint64 fileLength = 2;
+    optional bytes mediaKey = 3;
+    optional bytes fileEncSha256 = 4;
+    optional string directPath = 5;
+    optional uint32 syncType = 6;
+    optional uint32 chunkOrder = 7;
+    optional string originalMessageId = 8;
+    optional bytes initialHistBootstrapInlinePayload = 11;
+}
+
+// WhatsApp's real MessageKey field numbers (the app's MessageKey above is mis-numbered);
+// used for history-sync WebMessageInfo. Ref WACommon.MessageKey.
+message HsMsgKey {
+    optional string remoteJid = 1;
+    optional bool fromMe = 2;
+    optional string id = 3;
+    optional string participant = 4;
+}
+
+// Ref WAWebProtobufsWeb.WebMessageInfo (subset).
+message WebMessageInfo {
+    optional HsMsgKey key = 1;
+    optional Message message = 2;
+    optional uint64 messageTimestamp = 3;
+    optional string pushName = 19;
+}
+
+message HistorySyncMsg {
+    optional WebMessageInfo message = 1;
+    optional uint64 msgOrderId = 2;
+}
+
+// Ref waHistorySync.Conversation (subset).
+message HsConversation {
+    optional string id = 1;
+    repeated HistorySyncMsg messages = 2;
+    optional string newJid = 3;
+    optional uint32 unreadCount = 6;
+    optional uint64 conversationTimestamp = 12;
+    optional string name = 13;
+}
+
+// The decompressed history-sync blob. Ref waHistorySync.HistorySync (subset).
+message HistorySync {
+    optional uint32 syncType = 1;
+    repeated HsConversation conversations = 2;
+    optional uint32 chunkOrder = 5;
+    optional uint32 progress = 6;
+    repeated PhoneNumberToLIDMapping phoneNumberToLidMappings = 15;
+}
+
+message PhoneNumberToLIDMapping {
+    optional string pnJid = 1;
+    optional string lidJid = 2;
 }
 
 message SenderKeyDistributionMessage {

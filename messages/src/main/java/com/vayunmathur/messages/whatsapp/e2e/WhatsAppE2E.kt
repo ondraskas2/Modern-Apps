@@ -1,38 +1,37 @@
 package com.vayunmathur.messages.whatsapp.e2e
 
 import android.util.Log
-import com.vayunmathur.messages.signal.store.SignalProtocolStoreImpl
 import com.vayunmathur.messages.whatsapp.WhatsAppAuthData
 import com.vayunmathur.messages.whatsapp.WhatsAppDatabase
 import com.vayunmathur.messages.whatsapp.WhatsAppE2EPreKey
 import com.vayunmathur.messages.whatsapp.WhatsAppProtocol
 import kotlinx.coroutines.runBlocking
-import org.signal.libsignal.protocol.IdentityKey
-import org.signal.libsignal.protocol.SessionBuilder
-import org.signal.libsignal.protocol.SessionCipher
-import org.signal.libsignal.protocol.SignalProtocolAddress
-import org.signal.libsignal.protocol.ecc.ECKeyPair
-import org.signal.libsignal.protocol.ecc.ECPrivateKey
-import org.signal.libsignal.protocol.ecc.ECPublicKey
-import org.signal.libsignal.protocol.groups.GroupCipher
-import org.signal.libsignal.protocol.groups.GroupSessionBuilder
-import org.signal.libsignal.protocol.message.CiphertextMessage
-import org.signal.libsignal.protocol.message.PreKeySignalMessage
-import org.signal.libsignal.protocol.message.SenderKeyDistributionMessage
-import org.signal.libsignal.protocol.message.SignalMessage
-import org.signal.libsignal.protocol.state.PreKeyBundle
-import org.signal.libsignal.protocol.state.PreKeyRecord
-import org.signal.libsignal.protocol.state.SignedPreKeyRecord
+import org.whispersystems.libsignal.IdentityKey
+import org.whispersystems.libsignal.SessionBuilder
+import org.whispersystems.libsignal.SessionCipher
+import org.whispersystems.libsignal.SignalProtocolAddress
+import org.whispersystems.libsignal.ecc.Curve
+import org.whispersystems.libsignal.ecc.ECPublicKey
+import org.whispersystems.libsignal.groups.GroupCipher
+import org.whispersystems.libsignal.groups.GroupSessionBuilder
+import org.whispersystems.libsignal.groups.SenderKeyName
+import org.whispersystems.libsignal.protocol.CiphertextMessage
+import org.whispersystems.libsignal.protocol.PreKeySignalMessage
+import org.whispersystems.libsignal.protocol.SenderKeyDistributionMessage
+import org.whispersystems.libsignal.protocol.SignalMessage
+import org.whispersystems.libsignal.state.PreKeyBundle
+import org.whispersystems.libsignal.state.PreKeyRecord
+import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import java.util.Base64
-import java.util.UUID
 
 /**
- * libsignal-backed E2E crypto helpers for WhatsApp, backed by [WhatsAppDatabase].
- * Mirrors whatsmeow's send.go/message.go/prekeys.go encryption paths.
+ * Classic (whispersystems) libsignal E2E crypto for WhatsApp, backed by [WhatsAppDatabase].
+ * WhatsApp companion sessions use Signal protocol v3 (X3DH); org.signal:libsignal-android 0.86
+ * dropped X3DH, so the WhatsApp bridge uses the pure-Java org.whispersystems library here.
  *
  * The own identity key pair is reconstructed from the raw 32-byte Curve25519 keys in
- * [WhatsAppAuthData]; one-time and signed prekeys are seeded into the protocol stores so
- * inbound pkmsg decryption can resolve them.
+ * [WhatsAppAuthData]; one-time and signed prekeys are seeded into the stores so inbound pkmsg
+ * decryption can resolve them.
  */
 class WhatsAppE2E(
     private val db: WhatsAppDatabase,
@@ -46,12 +45,7 @@ class WhatsAppE2E(
         auth.registrationId,
     )
     private val preKeyStore = WhatsAppPreKeyStore(db)
-    private val kyberStore = WhatsAppKyberPreKeyStore()
     private val senderKeyStore = WhatsAppSenderKeyStore(db)
-
-    private val store = SignalProtocolStoreImpl(
-        sessionStore, identityStore, preKeyStore, preKeyStore, kyberStore, senderKeyStore,
-    )
 
     /** Raw 32-byte Curve25519 identity public key (for the prekey-upload identity node). */
     val ownIdentityPublicKey: ByteArray = b64(auth.identityPublicKey)
@@ -59,21 +53,18 @@ class WhatsAppE2E(
     private val ownAddress: SignalProtocolAddress = signalAddress(auth.wid, auth.deviceId)
 
     // -- Address mapping (whatsmeow JID.SignalAddress: name = user part, deviceId = device) --
+    // whispersystems libsignal accepts device id 0, so no remapping is needed.
 
     fun signalAddress(jid: String): SignalProtocolAddress {
         val local = jid.substringBefore("@")
         val user = local.substringBefore(":").substringBefore(".")
         val device = local.substringAfter(":", "0").toIntOrNull() ?: 0
-        // libsignal-client requires a NONZERO device id (DeviceId::new_nonzero), but WhatsApp's
-        // primary device is 0. The device id is only a local Signal store key — it never appears
-        // on the wire or in key derivation — so shift every id by +1 to keep it valid. Must be
-        // applied consistently to all addresses (see signalAddress(jid, device) below).
-        return SignalProtocolAddress(user, device + 1)
+        return SignalProtocolAddress(user, device)
     }
 
     private fun signalAddress(jid: String, device: Int): SignalProtocolAddress {
         val user = jid.substringBefore("@").substringBefore(":").substringBefore(".")
-        return SignalProtocolAddress(user, device + 1)
+        return SignalProtocolAddress(user, device)
     }
 
     fun hasSession(jid: String): Boolean = sessionStore.containsSession(signalAddress(jid))
@@ -82,9 +73,12 @@ class WhatsAppE2E(
 
     data class EncResult(val type: String, val data: ByteArray)
 
+    private fun sessionCipher(address: SignalProtocolAddress) =
+        SessionCipher(sessionStore, preKeyStore, preKeyStore, identityStore, address)
+
     /** Encrypt a padded plaintext for a peer device. Returns enc type ("msg"|"pkmsg") + bytes. */
     fun encryptDM(jid: String, paddedPlaintext: ByteArray): EncResult {
-        val cipher = SessionCipher(store, signalAddress(jid))
+        val cipher = sessionCipher(signalAddress(jid))
         val msg: CiphertextMessage = cipher.encrypt(paddedPlaintext)
         val type = when (msg.type) {
             CiphertextMessage.PREKEY_TYPE -> "pkmsg"
@@ -95,7 +89,7 @@ class WhatsAppE2E(
 
     /** Decrypt an inbound 1:1 ciphertext. [isPreKey] true for enc type "pkmsg". */
     fun decryptDM(jid: String, isPreKey: Boolean, ciphertext: ByteArray): ByteArray {
-        val cipher = SessionCipher(store, signalAddress(jid))
+        val cipher = sessionCipher(signalAddress(jid))
         return if (isPreKey) {
             cipher.decrypt(PreKeySignalMessage(ciphertext))
         } else {
@@ -105,39 +99,39 @@ class WhatsAppE2E(
 
     /** Establish an outbound session from a fetched peer prekey bundle. */
     fun processPreKeyBundle(jid: String, bundle: PreKeyBundle) {
-        val builder = SessionBuilder(store, signalAddress(jid))
+        val address = signalAddress(jid)
+        val builder = SessionBuilder(sessionStore, preKeyStore, preKeyStore, identityStore, address)
         builder.process(bundle)
     }
 
     // -- Group (sender key) --
-    // UNVERIFIED: WhatsApp's wire sender-key-name is the group JID; libsignal-client 0.86
-    // keys sender keys by a UUID distributionId. We derive a deterministic distributionId
-    // from the group JID. Interop with real WhatsApp is not runtime-tested.
+    // whispersystems keys sender keys by SenderKeyName(groupId, senderAddress), matching
+    // WhatsApp's group addressing (group JID + participant).
 
-    private fun distributionId(groupJid: String): UUID =
-        UUID.nameUUIDFromBytes(groupJid.toByteArray(Charsets.UTF_8))
+    private fun senderKeyName(groupJid: String, sender: SignalProtocolAddress) =
+        SenderKeyName(groupJid, sender)
 
     /** Create our SenderKeyDistributionMessage for a group (to be wrapped in an SKDM E2E msg). */
     fun createSenderKeyDistribution(groupJid: String): SenderKeyDistributionMessage {
         val builder = GroupSessionBuilder(senderKeyStore)
-        return builder.create(ownAddress, distributionId(groupJid))
+        return builder.create(senderKeyName(groupJid, ownAddress))
     }
 
     /** Process an inbound SenderKeyDistributionMessage from a group participant. */
-    fun processSenderKeyDistribution(senderJid: String, skdmBytes: ByteArray) {
+    fun processSenderKeyDistribution(groupJid: String, senderJid: String, skdmBytes: ByteArray) {
         val builder = GroupSessionBuilder(senderKeyStore)
-        builder.process(signalAddress(senderJid), SenderKeyDistributionMessage(skdmBytes))
+        builder.process(senderKeyName(groupJid, signalAddress(senderJid)), SenderKeyDistributionMessage(skdmBytes))
     }
 
     /** Encrypt a padded plaintext as a group skmsg using our own sender key. */
     fun encryptGroup(groupJid: String, paddedPlaintext: ByteArray): ByteArray {
-        val cipher = GroupCipher(senderKeyStore, ownAddress)
-        return cipher.encrypt(distributionId(groupJid), paddedPlaintext).serialize()
+        val cipher = GroupCipher(senderKeyStore, senderKeyName(groupJid, ownAddress))
+        return cipher.encrypt(paddedPlaintext)
     }
 
     /** Decrypt an inbound group skmsg from a participant. */
-    fun decryptGroup(senderJid: String, ciphertext: ByteArray): ByteArray {
-        val cipher = GroupCipher(senderKeyStore, signalAddress(senderJid))
+    fun decryptGroup(groupJid: String, senderJid: String, ciphertext: ByteArray): ByteArray {
+        val cipher = GroupCipher(senderKeyStore, senderKeyName(groupJid, signalAddress(senderJid)))
         return cipher.decrypt(ciphertext)
     }
 
@@ -149,9 +143,9 @@ class WhatsAppE2E(
      */
     fun ensureSignedPreKeyStored() {
         if (preKeyStore.containsSignedPreKey(auth.signedPreKeyId)) return
-        val keyPair = ECKeyPair(
-            ECPublicKey.fromPublicKeyBytes(b64(auth.signedPreKeyPublic)),
-            ECPrivateKey(b64(auth.signedPreKeyPrivate)),
+        val keyPair = org.whispersystems.libsignal.ecc.ECKeyPair(
+            Curve.decodePoint(byteArrayOf(0x05) + b64(auth.signedPreKeyPublic), 0),
+            Curve.decodePrivatePoint(b64(auth.signedPreKeyPrivate)),
         )
         val record = SignedPreKeyRecord(
             auth.signedPreKeyId,
@@ -169,7 +163,7 @@ class WhatsAppE2E(
         val entities = ArrayList<WhatsAppE2EPreKey>(count)
         for (i in 1..count) {
             val id = maxId + i
-            val record = PreKeyRecord(id, ECKeyPair.generate())
+            val record = PreKeyRecord(id, Curve.generateKeyPair())
             records.add(record)
             entities.add(WhatsAppE2EPreKey(id, record.serialize(), uploaded = false))
         }
@@ -194,7 +188,7 @@ class WhatsAppE2E(
 
         val listNode = WhatsAppProtocol.Node(
             tag = "list",
-            content = records.map { preKeyToNode(it.id, it.keyPair.publicKey.publicKeyBytes, null) },
+            content = records.map { preKeyToNode(it.id, it.keyPair.publicKey.raw32(), null) },
         )
         val signedNode = preKeyToNode(
             auth.signedPreKeyId,
@@ -227,7 +221,7 @@ class WhatsAppE2E(
         val children = mutableListOf(
             WhatsAppProtocol.Node(tag = "type", data = byteArrayOf(0x05)),
             WhatsAppProtocol.Node(tag = "identity", data = ownIdentityPublicKey),
-            preKeyToNode(oneTime.id, oneTime.keyPair.publicKey.publicKeyBytes, null),
+            preKeyToNode(oneTime.id, oneTime.keyPair.publicKey.raw32(), null),
             preKeyToNode(auth.signedPreKeyId, b64(auth.signedPreKeyPublic), b64(auth.signedPreKeySignature)),
         )
         if (accountDeviceIdentity != null) {
@@ -276,14 +270,14 @@ class WhatsAppE2E(
 
             val identityRaw = keysNode.getChildByTag("identity")?.data ?: return null
             if (identityRaw.size != 32) return null
-            val identityKey = IdentityKey(ECPublicKey.fromPublicKeyBytes(identityRaw))
+            val identityKey = IdentityKey(Curve.decodePoint(byteArrayOf(0x05) + identityRaw, 0))
 
-            var preKeyId = -1
+            var preKeyId = 0
             var preKeyPublic: ECPublicKey? = null
             keysNode.getChildByTag("key")?.let { keyNode ->
                 preKeyId = readKeyId(keyNode) ?: return null
                 val pub = keyNode.getChildByTag("value")?.data ?: return null
-                preKeyPublic = ECPublicKey.fromPublicKeyBytes(pub)
+                preKeyPublic = Curve.decodePoint(byteArrayOf(0x05) + pub, 0)
             }
 
             val skey = keysNode.getChildByTag("skey") ?: return null
@@ -291,16 +285,11 @@ class WhatsAppE2E(
             val signedPub = skey.getChildByTag("value")?.data ?: return null
             val signedSig = skey.getChildByTag("signature")?.data ?: return null
 
-            // kyberPreKeyId = -1 -> bridging treats kyber as absent (classic X3DH); the dummy
-            // KEMPublicKey only satisfies the non-null Kotlin type. Same pattern as signal module.
             PreKeyBundle(
-                registrationId, deviceId + 1,
+                registrationId, deviceId,
                 preKeyId, preKeyPublic,
-                signedPreKeyId, ECPublicKey.fromPublicKeyBytes(signedPub), signedSig,
+                signedPreKeyId, Curve.decodePoint(byteArrayOf(0x05) + signedPub, 0), signedSig,
                 identityKey,
-                -1,
-                org.signal.libsignal.protocol.kem.KEMPublicKey(ByteArray(1568) { if (it == 0) 0x07 else 0x00 }),
-                ByteArray(0),
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse prekey bundle", e)
@@ -321,6 +310,9 @@ class WhatsAppE2E(
 
         private fun b64(s: String): ByteArray = Base64.getDecoder().decode(s)
 
+        /** Raw 32-byte Curve25519 public key (whispersystems serialize() prepends a 0x05 type byte). */
+        private fun ECPublicKey.raw32(): ByteArray = serialize().copyOfRange(1, 33)
+
         /**
          * Curve25519 signature over 0x05||signedPreKeyPub using the raw 32-byte identity
          * private key. Ref whatsmeow KeyPair.Sign. Used to populate signedPreKeySignature.
@@ -329,7 +321,7 @@ class WhatsAppE2E(
             val message = ByteArray(33)
             message[0] = 0x05
             System.arraycopy(signedPreKeyPublic32, 0, message, 1, 32)
-            return ECPrivateKey(identityPrivate32).calculateSignature(message)
+            return Curve.calculateSignature(Curve.decodePrivatePoint(identityPrivate32), message)
         }
     }
 }

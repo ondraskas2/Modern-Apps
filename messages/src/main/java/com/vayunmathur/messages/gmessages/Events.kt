@@ -30,6 +30,8 @@ sealed interface GMEvent {
         val conversationType: String? = null,
         /** Source-specific "my participant" id. See [Conversation.outgoingId]. */
         val outgoingId: String? = null,
+        /** Service-specific JSON metadata to persist on the conversation row. */
+        val serviceData: String? = null,
     ) : GMEvent
 
     /** A message row appeared / was updated. Used for backfill + live sync. */
@@ -48,6 +50,8 @@ sealed interface GMEvent {
         val mediaName: String? = null,
         /** Wire status type string for status tracking. */
         val statusType: String? = null,
+        /** Service-specific JSON metadata to persist on the message row. */
+        val serviceData: String? = null,
     ) : GMEvent
 
     /** A NEW inbound message just arrived. Distinct from MessageUpdate
@@ -179,5 +183,11 @@ sealed interface GMEvent {
         val senderDeviceId: Int,
         val timestamp: Long,
         val errorMessage: String? = null,
+    ) : GMEvent
+
+    /** A source was logged out / unlinked. Consumers should drop that source's cached
+     *  conversations + messages so stale threads don't linger. */
+    data class SourceLoggedOut(
+        override val source: MessageSource,
     ) : GMEvent
 }

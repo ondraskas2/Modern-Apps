@@ -196,7 +196,10 @@ fun ComposeScreen(
                     shape = RoundedCornerShape(24.dp),
                 )
                 LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(suggestions, key = { (it.phoneE164 ?: it.displayName) + "|" + (it.source?.name ?: "device") }) { sug ->
+                    items(
+                        suggestions.distinctBy { (it.phoneE164 ?: it.displayName) + "|" + (it.source?.name ?: "device") },
+                        key = { (it.phoneE164 ?: it.displayName) + "|" + (it.source?.name ?: "device") },
+                    ) { sug ->
                         SuggestionRow(sug) {
                             selectedRecipient = sug
                             query = sug.displayName

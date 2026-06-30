@@ -103,18 +103,6 @@ fun InboxScreen(
                 .padding(padding)
                 .fillMaxSize(),
         ) {
-            // Setup prompts for each source.
-            SetupPrompts(
-                states = connectionStates,
-                onPairMessages = { backStack.add(Route.PairMessages) },
-                onSetupVoice = { backStack.add(Route.LoginVoice) },
-                onSetupTelegram = { backStack.add(Route.LoginTelegram) },
-                onSetupSignal = { backStack.add(Route.LoginSignal) },
-                onSetupWhatsApp = { backStack.add(Route.LoginWhatsApp) },
-                onSetupMessenger = { backStack.add(Route.LoginMessenger) },
-                onSetupInstagram = { backStack.add(Route.LoginInstagram) },
-            )
-
             if (conversations.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
@@ -143,35 +131,22 @@ fun InboxScreen(
             title = { Text("New conversation") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Choose which service to send from:")
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.MESSAGES_WEB.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Google Messages") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.VOICE.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Google Voice") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.TELEGRAM.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Telegram") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.SIGNAL.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Signal") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.WHATSAPP.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("WhatsApp") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.MESSENGER.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Messenger") }
-                    androidx.compose.material3.TextButton(onClick = {
-                        showSourcePicker = false
-                        backStack.add(Route.Compose(initialSource = MessageSource.INSTAGRAM.name))
-                    }, modifier = Modifier.fillMaxWidth()) { Text("Instagram") }
+                    // Only offer services that are actually connected.
+                    val connected = connectionStates
+                        .filterValues { it == SourceConnectionState.Connected }
+                        .keys
+                        .toList()
+                    if (connected.isEmpty()) {
+                        Text("No connected services. Set one up in Settings first.")
+                    } else {
+                        Text("Choose which service to send from:")
+                        connected.forEach { source ->
+                            androidx.compose.material3.TextButton(onClick = {
+                                showSourcePicker = false
+                                backStack.add(Route.Compose(initialSource = source.name))
+                            }, modifier = Modifier.fillMaxWidth()) { Text(sourceLabel(source)) }
+                        }
+                    }
                 }
             },
             confirmButton = {},
@@ -319,6 +294,16 @@ private fun SetupCard(
             )
         }
     }
+}
+
+private fun sourceLabel(source: MessageSource): String = when (source) {
+    MessageSource.MESSAGES_WEB -> "Google Messages"
+    MessageSource.VOICE -> "Google Voice"
+    MessageSource.TELEGRAM -> "Telegram"
+    MessageSource.SIGNAL -> "Signal"
+    MessageSource.WHATSAPP -> "WhatsApp"
+    MessageSource.MESSENGER -> "Messenger"
+    MessageSource.INSTAGRAM -> "Instagram"
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)

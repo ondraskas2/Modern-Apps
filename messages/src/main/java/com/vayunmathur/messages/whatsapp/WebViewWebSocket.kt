@@ -548,14 +548,22 @@ class WebViewWebSocket(
         }
     }
 
+    // Serializes the Noise encrypt + transmit so concurrent senders (acks, receipts, keepalives,
+    // history) can't race the write-nonce counter or reorder frames, which the server rejects with
+    // <stream:error><bad-mac>. Holding this across the scope.launch enqueue (Dispatchers.Main is
+    // FIFO) guarantees transmission order matches nonce order.
+    private val sendLock = Any()
+
     fun send(data: ByteArray): Boolean {
         if (!isConnected || !isHandshakeComplete) return false
         val socket = noiseSocket ?: return false
 
         return try {
-            val encrypted = socket.encrypt(data)
-            val framed = WhatsAppProtocol.buildFramedMessage(encrypted, null)
-            sendRaw(framed)
+            synchronized(sendLock) {
+                val encrypted = socket.encrypt(data)
+                val framed = WhatsAppProtocol.buildFramedMessage(encrypted, null)
+                sendRaw(framed)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send encrypted", e)
             false

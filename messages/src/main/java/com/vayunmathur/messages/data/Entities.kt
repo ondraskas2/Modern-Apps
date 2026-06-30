@@ -43,6 +43,9 @@ data class Conversation(
      *  - For [MessageSource.VOICE]: unused — the thread ID is enough.
      *  Stored so we don't have to keep the full proto Conversation around. */
     @ColumnInfo(name = "outgoing_id") val outgoingId: String? = null,
+    /** Service-specific data (JSON) for this conversation — lets each source store its own
+     *  metadata (e.g. WhatsApp mute/pin/archive, group info) without a separate database. */
+    @ColumnInfo(name = "service_data") val serviceData: String? = null,
 )
 
 /**
@@ -81,6 +84,9 @@ data class Message(
      * what's effectively per-message metadata.
      */
     @ColumnInfo(name = "reactions_json") val reactionsJson: String? = null,
+    /** Service-specific data (JSON) for this message — per-source metadata stored inline
+     *  instead of in a separate database. */
+    @ColumnInfo(name = "service_data") val serviceData: String? = null,
 )
 
 /** Aggregated reaction on a message. The relay surfaces these per-emoji

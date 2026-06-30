@@ -57,6 +57,9 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM messages WHERE conversation_id LIKE :prefix")
+    suspend fun deleteAllForConvPrefix(prefix: String)
 }
 
 /**
@@ -83,7 +86,7 @@ class MessagesConverters {
 
 @androidx.room.Database(
     entities = [Conversation::class, Message::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(MessagesConverters::class)

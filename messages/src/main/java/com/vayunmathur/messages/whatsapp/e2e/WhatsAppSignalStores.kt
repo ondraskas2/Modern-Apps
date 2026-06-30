@@ -7,33 +7,28 @@ import com.vayunmathur.messages.whatsapp.WhatsAppE2ESenderKey
 import com.vayunmathur.messages.whatsapp.WhatsAppE2ESession
 import com.vayunmathur.messages.whatsapp.WhatsAppE2ESignedPreKey
 import kotlinx.coroutines.runBlocking
-import org.signal.libsignal.protocol.IdentityKey
-import org.signal.libsignal.protocol.IdentityKeyPair
-import org.signal.libsignal.protocol.InvalidKeyIdException
-import org.signal.libsignal.protocol.SignalProtocolAddress
-import org.signal.libsignal.protocol.ecc.ECPrivateKey
-import org.signal.libsignal.protocol.ecc.ECPublicKey
-import org.signal.libsignal.protocol.groups.state.SenderKeyRecord
-import org.signal.libsignal.protocol.groups.state.SenderKeyStore
-import org.signal.libsignal.protocol.state.IdentityKeyStore
-import org.signal.libsignal.protocol.state.KyberPreKeyRecord
-import org.signal.libsignal.protocol.state.KyberPreKeyStore
-import org.signal.libsignal.protocol.state.PreKeyRecord
-import org.signal.libsignal.protocol.state.PreKeyStore
-import org.signal.libsignal.protocol.state.SessionRecord
-import org.signal.libsignal.protocol.state.SessionStore
-import org.signal.libsignal.protocol.state.SignedPreKeyRecord
-import org.signal.libsignal.protocol.state.SignedPreKeyStore
-import java.util.UUID
+import org.whispersystems.libsignal.IdentityKey
+import org.whispersystems.libsignal.IdentityKeyPair
+import org.whispersystems.libsignal.InvalidKeyIdException
+import org.whispersystems.libsignal.SignalProtocolAddress
+import org.whispersystems.libsignal.ecc.Curve
+import org.whispersystems.libsignal.groups.SenderKeyName
+import org.whispersystems.libsignal.groups.state.SenderKeyRecord
+import org.whispersystems.libsignal.groups.state.SenderKeyStore
+import org.whispersystems.libsignal.state.IdentityKeyStore
+import org.whispersystems.libsignal.state.PreKeyRecord
+import org.whispersystems.libsignal.state.PreKeyStore
+import org.whispersystems.libsignal.state.SessionRecord
+import org.whispersystems.libsignal.state.SessionStore
+import org.whispersystems.libsignal.state.SignedPreKeyRecord
+import org.whispersystems.libsignal.state.SignedPreKeyStore
 
 /**
- * libsignal protocol stores backed by [WhatsAppDatabase]. Mirrors the signal module's
- * store pattern (runBlocking bridge from suspend DAO -> synchronous libsignal callbacks).
- * The composed [org.signal.libsignal.protocol.state.SignalProtocolStore] is assembled in
- * [WhatsAppE2E].
+ * Classic (whispersystems) libsignal protocol stores backed by [WhatsAppDatabase]. WhatsApp
+ * companion sessions use Signal protocol v3 (X3DH), which org.signal:libsignal-android 0.86
+ * no longer supports, so the WhatsApp bridge uses the pure-Java org.whispersystems library.
  *
- * UNVERIFIED: runBlocking inside libsignal's synchronous store callbacks is the same
- * approach the signal module uses; correctness is assumed but not runtime-tested here.
+ * runBlocking bridges the suspend Room DAOs into libsignal's synchronous store callbacks.
  */
 class WhatsAppSessionStore(private val db: WhatsAppDatabase) : SessionStore {
 
@@ -62,12 +57,6 @@ class WhatsAppSessionStore(private val db: WhatsAppDatabase) : SessionStore {
         runBlocking { db.e2eSessionDao().delete(address.name, address.deviceId) }
     }
 
-    override fun loadExistingSessions(addresses: MutableList<SignalProtocolAddress>): List<SessionRecord> {
-        return addresses.mapNotNull { addr ->
-            runBlocking { db.e2eSessionDao().get(addr.name, addr.deviceId) }?.let { SessionRecord(it.record) }
-        }
-    }
-
     override fun deleteAllSessions(name: String) {
         runBlocking { db.e2eSessionDao().deleteAll(name) }
     }
@@ -82,28 +71,23 @@ class WhatsAppIdentityKeyStore(
 
     // Own identity built from the raw 32-byte Curve25519 key pair stored in auth.
     private val identityKeyPair: IdentityKeyPair = IdentityKeyPair(
-        IdentityKey(ECPublicKey.fromPublicKeyBytes(identityPublicKey)),
-        ECPrivateKey(identityPrivateKey),
+        IdentityKey(Curve.decodePoint(byteArrayOf(0x05) + identityPublicKey, 0)),
+        Curve.decodePrivatePoint(identityPrivateKey),
     )
 
     override fun getIdentityKeyPair(): IdentityKeyPair = identityKeyPair
 
     override fun getLocalRegistrationId(): Int = localRegistrationId
 
-    override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): IdentityKeyStore.IdentityChange {
+    override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): Boolean {
         val existing = runBlocking { db.e2eIdentityDao().get(address.name) }
         runBlocking {
             db.e2eIdentityDao().insert(WhatsAppE2EIdentity(address.name, identityKey.serialize()))
         }
-        return if (existing != null && !existing.identityKey.contentEquals(identityKey.serialize())) {
-            IdentityKeyStore.IdentityChange.REPLACED_EXISTING
-        } else {
-            IdentityKeyStore.IdentityChange.NEW_OR_UNCHANGED
-        }
+        return existing != null && !existing.identityKey.contentEquals(identityKey.serialize())
     }
 
-    // UNVERIFIED: WhatsApp uses trust-on-first-use; we always trust like whatsmeow's
-    // AutoTrustIdentity behaviour.
+    // WhatsApp uses trust-on-first-use; always trust like whatsmeow's AutoTrustIdentity.
     override fun isTrustedIdentity(
         address: SignalProtocolAddress,
         identityKey: IdentityKey,
@@ -112,7 +96,7 @@ class WhatsAppIdentityKeyStore(
 
     override fun getIdentity(address: SignalProtocolAddress): IdentityKey? {
         val entity = runBlocking { db.e2eIdentityDao().get(address.name) } ?: return null
-        return IdentityKey(entity.identityKey)
+        return IdentityKey(entity.identityKey, 0)
     }
 }
 
@@ -160,37 +144,22 @@ class WhatsAppPreKeyStore(private val db: WhatsAppDatabase) : PreKeyStore, Signe
     }
 }
 
-/**
- * Minimal no-op Kyber store. WhatsApp's classic (non-LID-PQ) bundle has no Kyber prekey,
- * so [PreKeyBundle] is always built with NULL_PRE_KEY_ID and never queries these.
- */
-class WhatsAppKyberPreKeyStore : KyberPreKeyStore {
-    override fun loadKyberPreKey(kyberPreKeyId: Int): KyberPreKeyRecord =
-        throw InvalidKeyIdException("No kyber pre key: $kyberPreKeyId")
-
-    override fun loadKyberPreKeys(): List<KyberPreKeyRecord> = emptyList()
-
-    override fun storeKyberPreKey(kyberPreKeyId: Int, record: KyberPreKeyRecord) {}
-
-    override fun containsKyberPreKey(kyberPreKeyId: Int): Boolean = false
-
-    override fun markKyberPreKeyUsed(kyberPreKeyId: Int, signedPreKeyId: Int, publicKey: ECPublicKey) {}
-}
-
 class WhatsAppSenderKeyStore(private val db: WhatsAppDatabase) : SenderKeyStore {
 
-    override fun storeSenderKey(sender: SignalProtocolAddress, distributionId: UUID, record: SenderKeyRecord) {
+    override fun storeSenderKey(senderKeyName: SenderKeyName, record: SenderKeyRecord) {
+        val sender = senderKeyName.sender
         runBlocking {
             db.e2eSenderKeyDao().insert(
-                WhatsAppE2ESenderKey(sender.name, sender.deviceId, distributionId.toString(), record.serialize())
+                WhatsAppE2ESenderKey(sender.name, sender.deviceId, senderKeyName.groupId, record.serialize())
             )
         }
     }
 
-    override fun loadSenderKey(sender: SignalProtocolAddress, distributionId: UUID): SenderKeyRecord? {
+    override fun loadSenderKey(senderKeyName: SenderKeyName): SenderKeyRecord {
+        val sender = senderKeyName.sender
         val entity = runBlocking {
-            db.e2eSenderKeyDao().get(sender.name, sender.deviceId, distributionId.toString())
-        } ?: return null
+            db.e2eSenderKeyDao().get(sender.name, sender.deviceId, senderKeyName.groupId)
+        } ?: return SenderKeyRecord()
         return SenderKeyRecord(entity.record)
     }
 }

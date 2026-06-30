@@ -60,7 +60,9 @@ class MessagesService : Service() {
         startForeground(
             SYNC_NOTIFICATION_ID,
             buildSyncNotification(MessagesSessionManager.connectionStates.value),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             } else 0,
         )
@@ -104,6 +106,19 @@ class MessagesService : Service() {
         // Default behavior: keep the service alive when the user swipes
         // the task away — they still want messages to come in.
         super.onTaskRemoved(rootIntent)
+    }
+
+    /**
+     * Android 15+ (API 35) enforces a runtime limit on dataSync foreground services and calls this
+     * when the limit is reached. We MUST stop the foreground promptly or the system throws
+     * ForegroundServiceDidNotStopInTimeException (a hard crash). Downgrade to a background service
+     * so the process/connection can keep running where allowed instead of crashing.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "FGS onTimeout (type=$fgsType) — leaving foreground to avoid crash")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

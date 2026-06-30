@@ -162,6 +162,14 @@ dependencies {
 
     // Signal protocol crypto (Double Ratchet, sealed sender, pre-keys, etc.)
     implementation("org.signal:libsignal-android:0.86.5")
+    // Classic pure-Java Signal protocol (X3DH) for the WhatsApp bridge. libsignal-android 0.86
+    // removed X3DH (PQXDH-only), which WhatsApp companion sessions require. This artifact has no
+    // native lib and a different package (org.whispersystems.libsignal.*), so it coexists with
+    // libsignal-android (used by the Signal bridge) without conflict.
+    // Classic Signal protocol (X3DH) for the WhatsApp bridge, with its protobuf 3.10 relocated
+    // into a private package (see :whatsapp-signal) so it does not collide with the app's
+    // protobuf 4.x. libsignal-android 0.86 (Signal bridge) cannot decrypt WhatsApp's X3DH pkmsgs.
+    implementation(project(mapOf("path" to ":whatsapp-signal", "configuration" to "shaded")))
 
     // OkHttp — WebSocket transport for Signal
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

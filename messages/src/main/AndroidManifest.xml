@@ -8,7 +8,7 @@
          the right one — we're maintaining a long-lived data connection,
          not tracking location or playing media. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- For showing incoming-message notifications on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Re-start the sync service after device reboot. -->
@@ -75,8 +75,12 @@
 
         <service
             android:name=".util.MessagesService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains a persistent connection to messaging services (WhatsApp, Signal, Telegram, etc.) to receive messages and deliver notifications in real time." />
+        </service>
 
         <receiver
             android:name=".util.MessagesQuickReplyReceiver"

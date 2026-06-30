@@ -141,6 +141,11 @@ object MessagesSessionManager {
             MessageSource.INSTAGRAM -> com.vayunmathur.messages.meta.InstagramClient.stop()
         }
         backfillComplete[source] = false
+        // Drop the disconnected source's cached threads so stale conversations don't linger.
+        scope.launch {
+            db.messageDao().deleteAllForConvPrefix("${source.idPrefix}:%")
+            db.conversationDao().deleteAllForSource(source)
+        }
     }
 
     suspend fun sendMessage(conversationId: String, body: String): Boolean {
@@ -728,6 +733,7 @@ object MessagesSessionManager {
                     participantCount = event.participantCount,
                     conversationType = event.conversationType,
                     outgoingId = event.outgoingId ?: existing?.outgoingId,
+                    serviceData = event.serviceData ?: existing?.serviceData,
                 )
                 db.conversationDao().upsert(merged)
                 backfillComplete[event.source] = true
@@ -745,15 +751,33 @@ object MessagesSessionManager {
                         timestamp = event.timestamp,
                         senderName = event.senderName,
                         reactionsJson = event.reactionsJson,
+                        serviceData = event.serviceData,
                     )
                 )
             }
             is GMEvent.IncomingMessage -> {
-                if (backfillComplete[event.source] == true) {
-                    _incoming.tryEmit(event)
-                }
                 val convId = "${event.source.idPrefix}:${event.conversationId}"
                 val msgId = "${event.source.idPrefix}:${event.messageId}"
+                // Ensure the conversation row exists (messages FK to it) and refresh its preview /
+                // unread, otherwise the insert crashes and the message never shows in the thread.
+                val existing = db.conversationDao().get(convId)
+                db.conversationDao().upsert(
+                    Conversation(
+                        id = convId,
+                        source = event.source,
+                        peerName = event.peerName ?: existing?.peerName,
+                        peerPhoneE164 = event.peerPhone ?: existing?.peerPhoneE164,
+                        avatarUrl = existing?.avatarUrl,
+                        lastMessagePreview = event.body,
+                        lastMessageTimestamp = maxOf(event.timestamp, existing?.lastMessageTimestamp ?: 0L),
+                        unreadCount = (existing?.unreadCount ?: 0) + 1,
+                        isGroup = existing?.isGroup ?: false,
+                        participantCount = existing?.participantCount ?: 0,
+                        conversationType = existing?.conversationType,
+                        outgoingId = existing?.outgoingId,
+                        serviceData = existing?.serviceData,
+                    )
+                )
                 db.messageDao().upsert(
                     Message(
                         id = msgId,
@@ -765,9 +789,9 @@ object MessagesSessionManager {
                         senderName = event.peerName,
                     )
                 )
-            }
-            is GMEvent.MessageDeleted -> {
-                db.messageDao().deleteById("${event.source.idPrefix}:${event.messageId}")
+                if (backfillComplete[event.source] == true) {
+                    _incoming.tryEmit(event)
+                }
             }
             is GMEvent.ConversationDeleted -> {
                 db.conversationDao().deleteById("${event.source.idPrefix}:${event.conversationId}")

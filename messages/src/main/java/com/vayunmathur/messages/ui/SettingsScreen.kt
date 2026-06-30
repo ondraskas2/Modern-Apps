@@ -74,7 +74,6 @@ fun SettingsScreen(
             )
             SourceCard(
                 title = stringResource(R.string.source_messages),
-                icon = { tint -> IconMail(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.MESSAGES_WEB] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.PairMessages) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.MESSAGES_WEB) },
@@ -82,7 +81,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = stringResource(R.string.source_voice),
-                icon = { tint -> IconInbox(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.VOICE] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginVoice) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.VOICE) },
@@ -90,7 +88,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = stringResource(R.string.source_telegram),
-                icon = { tint -> IconSend(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.TELEGRAM] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginTelegram) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.TELEGRAM) },
@@ -98,7 +95,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = stringResource(R.string.source_signal),
-                icon = { tint -> IconNavigationArrow(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.SIGNAL] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginSignal) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.SIGNAL) },
@@ -106,7 +102,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = "WhatsApp",
-                icon = { tint -> IconSend(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.WHATSAPP] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginWhatsApp) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.WHATSAPP) },
@@ -114,7 +109,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = "Messenger",
-                icon = { tint -> IconMail(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.MESSENGER] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginMessenger) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.MESSENGER) },
@@ -122,7 +116,6 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             SourceCard(
                 title = "Instagram",
-                icon = { tint -> IconInbox(Modifier.size(28.dp), tint) },
                 state = states[MessageSource.INSTAGRAM] ?: SourceConnectionState.Idle,
                 onConfigure = { backStack.add(Route.LoginInstagram) },
                 onDisconnect = { MessagesSessionManager.stop(MessageSource.INSTAGRAM) },
@@ -143,7 +136,6 @@ fun SettingsScreen(
 @Composable
 private fun SourceCard(
     title: String,
-    icon: @Composable (androidx.compose.ui.graphics.Color) -> Unit,
     state: SourceConnectionState,
     onConfigure: () -> Unit,
     onDisconnect: () -> Unit,
@@ -163,11 +155,6 @@ private fun SourceCard(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(16.dp),
         ) {
-            icon(
-                if (isConnected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
