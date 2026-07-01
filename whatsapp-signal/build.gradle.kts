@@ -1,24 +1,43 @@
-// :whatsapp-signal — provides the classic pure-Java Signal protocol
-// (org.whispersystems.libsignal.*, X3DH) that the WhatsApp bridge needs.
-// libsignal-android 0.86 (used by the Signal bridge) dropped X3DH, which
-// WhatsApp companion sessions require, so this artifact coexists under a
-// different package. Its bundled protobuf is relocated to
-// com.vayunmathur.messages.shadedproto so it does not collide with the
+// :whatsapp-signal — provides the CLASSIC X3DH libsignal
+// (org.whispersystems.libsignal.*) that the WhatsApp bridge in :messages
+// needs. The Signal bridge's libsignal-android 0.86 dropped X3DH
+// (PQXDH-only), but WhatsApp companion sessions still require it, so this
+// module bundles the old pure-Java implementation under its original
+// package. Its protobuf runtime is RELOCATED to
+// com.vayunmathur.messages.shadedproto so it doesn't collide with the
 // app's protobuf 4.x.
 //
-// NOTE: the module's original source + shadow build were never committed
-// to VCS and were lost; only the prebuilt shaded jar remained. This file
-// re-exposes that byte-identical artifact via the "shaded" configuration
-// so :messages configures and links against the exact same classes. The
-// module source / shadow build should be properly restored later (see the
-// team note from integrator); until then the vendored jar is the source
-// of truth.
+// Built as a fat/relocated jar via the Shadow plugin and exposed to
+// :messages through the consumable "shaded" configuration:
+//   implementation(project(path = ":whatsapp-signal", configuration = "shaded"))
 
-configurations.create("shaded") {
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+plugins {
+    `java-library`
+    id("com.gradleup.shadow") version "9.0.0"
+}
+
+dependencies {
+    // Classic X3DH Signal protocol. Transitively pulls curve25519-java:0.5.0
+    // and protobuf-javalite:3.10.0, both bundled into the shaded jar.
+    implementation("org.whispersystems:signal-protocol-java:2.8.1")
+}
+
+tasks.named<ShadowJar>("shadowJar") {
+    archiveClassifier.set("shaded")
+    // Relocate the bundled protobuf so it can't clash with the app's
+    // protobuf 4.x on the :messages classpath. libsignal's own generated
+    // classes are rewritten to the relocated package by Shadow.
+    relocate("com.google.protobuf", "com.vayunmathur.messages.shadedproto")
+}
+
+// Consumable configuration :messages depends on by name.
+val shaded: Configuration by configurations.creating {
     isCanBeConsumed = true
     isCanBeResolved = false
 }
 
 artifacts {
-    add("shaded", file("libs/whatsapp-signal-shaded.jar"))
+    add("shaded", tasks.named<ShadowJar>("shadowJar"))
 }
