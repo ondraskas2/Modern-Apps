@@ -1,7 +1,6 @@
 package com.vayunmathur.messages.ui.setup
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -10,8 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -25,18 +22,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.messages.Route
 import com.vayunmathur.messages.whatsapp.WhatsAppClient
-import com.vayunmathur.messages.whatsapp.WhatsAppDiag
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import com.google.zxing.common.BitMatrix
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 
 @Composable
 fun WhatsAppLoginScreen(backStack: NavBackStack<Route>) {
@@ -161,48 +154,6 @@ fun WhatsAppLoginScreen(backStack: NavBackStack<Route>) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator()
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-        DiagnosticsPanel(modifier = Modifier.fillMaxWidth().weight(1f))
-    }
-}
-
-@Composable
-private fun DiagnosticsPanel(modifier: Modifier = Modifier) {
-    val lines by WhatsAppDiag.log.collectAsState()
-    val scroll = rememberScrollState()
-    LaunchedEffect(lines.size) { scroll.scrollTo(scroll.maxValue) }
-    Column(modifier = modifier) {
-        Text(
-            text = "Diagnostics (${lines.size})",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(8.dp)
-                .verticalScroll(scroll)
-        ) {
-            if (lines.isEmpty()) {
-                Text(
-                    text = "(no events yet)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                lines.forEach { line ->
-                    Text(
-                        text = line,
-                        fontSize = 9.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
             }
         }
     }
