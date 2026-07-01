@@ -15,6 +15,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.IdentityKeyPair
@@ -36,6 +38,12 @@ import javax.crypto.spec.SecretKeySpec
 object Provisioning {
     private const val TAG = "Provisioning"
     private const val WS_PROVISIONING_URL = "wss://chat.signal.org/v1/websocket/provisioning/"
+    // How long to wait for the websocket to connect before giving up.
+    private const val CONNECT_TIMEOUT_MS = 30_000L
+    // How long to wait for the primary device to scan the QR and the server to
+    // deliver the encrypted provisioning message. Signal's provisioning session
+    // expires server-side, so we surface a refreshable error rather than hang.
+    private const val SCAN_TIMEOUT_MS = 90_000L
 
     sealed interface ProvisioningEvent {
         data class QrUrl(val url: String) : ProvisioningEvent
@@ -43,23 +51,55 @@ object Provisioning {
         data class Error(val message: String) : ProvisioningEvent
     }
 
+    // Must match Signal Desktop's link capabilities. The server refuses to add a linked
+    // device that would downgrade a capability the account already has enabled across its
+    // devices, returning a bare 409 Conflict. Desktop sends all three of these on
+    // /v1/devices/link (ts/textsecure/WebAPI.preload.ts -> linkDevice). signalmeow omits
+    // usernameChangeSyncMessage, which is why matching the bridge alone never linked.
     val signalCapabilities = JSONObject().apply {
         put("attachmentBackfill", true)
         put("spqr", true)
+        put("usernameChangeSyncMessage", true)
     }
 
     fun startProvisioning(context: Context, allowBackup: Boolean = true, deviceName: String = "Android"): Flow<ProvisioningEvent> = channelFlow {
+        val ws = SignalWebSocket(context)
         try {
             val cipher = ProvisioningCipher()
-            val ws = SignalWebSocket(context)
             val requests = Channel<com.vayunmathur.messages.signal.proto.WebSocketProtos.WebSocketRequestMessage>(Channel.UNLIMITED)
             ws.incomingRequestHandler = { requests.trySend(it) }
 
             ws.connect(WS_PROVISIONING_URL, autoReconnect = false)
-            ws.connectionEvents.first { it is SignalWebSocket.ConnectionEvent.Connected }
+            Log.d(TAG, "Connecting to provisioning websocket…")
+            val connectEvent = withTimeout(CONNECT_TIMEOUT_MS) {
+                ws.connectionEvents.first {
+                    it is SignalWebSocket.ConnectionEvent.Connected ||
+                        it is SignalWebSocket.ConnectionEvent.Disconnected ||
+                        it is SignalWebSocket.ConnectionEvent.Error ||
+                        it is SignalWebSocket.ConnectionEvent.FatalError ||
+                        it is SignalWebSocket.ConnectionEvent.LoggedOut
+                }
+            }
+            if (connectEvent !is SignalWebSocket.ConnectionEvent.Connected) {
+                throw IOException("Provisioning websocket failed to connect: $connectEvent")
+            }
+            Log.d(TAG, "Provisioning websocket connected")
+
+            // If the socket drops at any point while we're waiting, close the request
+            // channel so the pending receive() throws instead of hanging forever.
+            val disconnectWatcher = launch {
+                val ev = ws.connectionEvents.first {
+                    it is SignalWebSocket.ConnectionEvent.Disconnected ||
+                        it is SignalWebSocket.ConnectionEvent.Error ||
+                        it is SignalWebSocket.ConnectionEvent.FatalError ||
+                        it is SignalWebSocket.ConnectionEvent.LoggedOut
+                }
+                Log.w(TAG, "Provisioning websocket closed while waiting: $ev")
+                requests.close(IOException("Provisioning websocket closed: $ev"))
+            }
 
             // Step 1: Receive provisioning UUID via PUT /v1/address
-            val addressReq = requests.receive()
+            val addressReq = withTimeout(CONNECT_TIMEOUT_MS) { requests.receive() }
             if (addressReq.verb != "PUT" || addressReq.path != "/v1/address") {
                 throw IOException("Expected PUT /v1/address, got ${addressReq.verb} ${addressReq.path}")
             }
@@ -72,10 +112,12 @@ object Provisioning {
             val capabilitiesPart = if (allowBackup) "&capabilities=${Uri.encode("backup4,backup5")}" else ""
             val qrUrl = "sgnl://linkdevice?uuid=${Uri.encode(provAddress.address)}&pub_key=${Uri.encode(pubKeyBase64)}$capabilitiesPart"
             send(ProvisioningEvent.QrUrl(qrUrl))
-            Log.d(TAG, "QR URL generated")
+            Log.d(TAG, "QR URL generated: $qrUrl")
 
             // Step 3: Receive encrypted provisioning message via PUT /v1/message
-            val msgReq = requests.receive()
+            Log.d(TAG, "Waiting for primary device to scan QR (timeout ${SCAN_TIMEOUT_MS}ms)…")
+            val msgReq = withTimeout(SCAN_TIMEOUT_MS) { requests.receive() }
+            disconnectWatcher.cancel()
             if (msgReq.verb != "PUT" || msgReq.path != "/v1/message") {
                 throw IOException("Expected PUT /v1/message, got ${msgReq.verb} ${msgReq.path}")
             }
@@ -150,18 +192,48 @@ object Provisioning {
                 put("pniPqLastResortPreKey", kyberPreKeyToJson(pniPqLastResort))
             }
 
-            val response = SignalHttpClient.request(
-                method = "PUT",
-                path = "/v1/devices/link",
-                body = payload.toString().toByteArray(),
-                username = number,
-                password = password,
-            )
-            if (!response.isSuccessful) {
-                throw IOException("Device link failed: ${response.code}")
+            // Send the device-link confirmation over the websocket, matching the bridge,
+            // which sends /v1/devices/link over /v1/websocket/ rather than plain HTTPS.
+            // The connection itself is unauthenticated (no creds in the URL); auth is
+            // carried in the request headers, exactly like signalmeow's confirmDevice.
+            val basicAuth = Base64.encodeToString("$number:$password".toByteArray(), Base64.NO_WRAP)
+            val linkWs = SignalWebSocket(context)
+            linkWs.incomingRequestHandler = { /* ignore server keepalive requests during linking */ }
+            linkWs.connect("wss://${SignalHttpClient.API_HOST}/v1/websocket/", autoReconnect = false)
+            val linkResp: com.vayunmathur.messages.signal.proto.WebSocketProtos.WebSocketResponseMessage = try {
+                val linkConnect = withTimeout(CONNECT_TIMEOUT_MS) {
+                    linkWs.connectionEvents.first {
+                        it is SignalWebSocket.ConnectionEvent.Connected ||
+                            it is SignalWebSocket.ConnectionEvent.Disconnected ||
+                            it is SignalWebSocket.ConnectionEvent.Error ||
+                            it is SignalWebSocket.ConnectionEvent.FatalError ||
+                            it is SignalWebSocket.ConnectionEvent.LoggedOut
+                    }
+                }
+                if (linkConnect !is SignalWebSocket.ConnectionEvent.Connected) {
+                    throw IOException("Link websocket failed to connect: $linkConnect")
+                }
+                withTimeout(CONNECT_TIMEOUT_MS) {
+                    linkWs.sendRequest(
+                        method = "PUT",
+                        path = "/v1/devices/link",
+                        body = payload.toString().toByteArray(),
+                        headers = mapOf(
+                            "content-type" to "application/json; charset=utf-8",
+                            "authorization" to "Basic $basicAuth",
+                        ),
+                    )
+                }
+            } finally {
+                linkWs.disconnect()
+            }
+            val respBodyStr = linkResp.body?.toByteArray()?.decodeToString()
+            if (linkResp.status < 200 || linkResp.status >= 300) {
+                Log.e(TAG, "Device link failed: ${linkResp.status} ${linkResp.message} headers=${linkResp.headersList} body=$respBodyStr")
+                throw IOException("Device link failed: ${linkResp.status} ${linkResp.message} body=$respBodyStr")
             }
 
-            val respJson = JSONObject(response.body?.string() ?: throw IOException("Empty response"))
+            val respJson = JSONObject(respBodyStr ?: throw IOException("Empty response"))
             val aci = respJson.getString("uuid")
             val pni = respJson.optString("pni", "")
             val rawDeviceId = respJson.optInt("deviceId", 0)
@@ -235,6 +307,8 @@ object Provisioning {
         } catch (e: Exception) {
             Log.e(TAG, "Provisioning failed", e)
             send(ProvisioningEvent.Error(e.message ?: "Unknown error"))
+        } finally {
+            ws.disconnect()
         }
     }
 

@@ -26,7 +26,11 @@ object SignalHttpClient {
 
     val CDN_HOSTS = listOf(CDN1_HOST, CDN1_HOST, CDN2_HOST, CDN3_HOST)
 
-    val USER_AGENT = "signalmeow/0.1.0 android/${android.os.Build.VERSION.SDK_INT}"
+    // Must match the Signal bridge's User-Agent format. Signal-Server inspects this
+    // during device linking and refuses to add a device that identifies as a mobile
+    // primary platform (e.g. an "android" UA) as a *linked* device, returning a bare
+    // 409 Conflict. The bridge uses "signalmeow/0.1.0 libsignal/<ver> go/<ver>".
+    const val USER_AGENT = "signalmeow/0.1.0 libsignal/0.86.5"
     const val SIGNAL_AGENT = "MAU"
 
     const val CONTENT_TYPE_JSON = "application/json"

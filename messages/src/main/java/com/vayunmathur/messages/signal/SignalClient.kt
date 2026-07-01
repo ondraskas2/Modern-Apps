@@ -14,6 +14,8 @@ import com.vayunmathur.messages.signal.contacts.StorageServiceManager
 import com.vayunmathur.messages.signal.groups.GroupManager
 import com.vayunmathur.messages.signal.groups.SenderKeyManager
 import com.vayunmathur.messages.signal.media.AttachmentManager
+import com.vayunmathur.messages.signal.media.BackupManager
+import com.vayunmathur.messages.signal.media.BackupRestore
 import com.vayunmathur.messages.signal.receiving.ContentDispatcher
 import com.vayunmathur.messages.signal.receiving.DecryptedMessage
 import com.vayunmathur.messages.signal.receiving.EnvelopeDecryptor
@@ -191,7 +193,10 @@ object SignalClient {
         _state.value = State.NeedsSetup
     }
 
-    // Fix #14: QR auto-refresh with 45s timeout and 6 retries
+    // QR auto-refresh: Provisioning.startProvisioning() emits an Error and completes
+    // if the session times out or the websocket drops, so each completed-without-success
+    // attempt simply starts a fresh session (new QR). We only surface Disconnected once
+    // the retry budget is exhausted.
     fun startProvisioning() {
         _state.value = State.Connecting
         provisioningJob?.cancel()
@@ -200,20 +205,21 @@ object SignalClient {
             val maxQrRetries = 6
 
             while (qrRetryCount < maxQrRetries) {
+                var gotSuccess = false
+                var lastError: String? = null
                 try {
-                    var gotSuccess = false
-                    val timeoutJob = launch {
-                        delay(45_000L)
-                    }
-
-                    val provisionFlow = Provisioning.startProvisioning(appContext)
-                    provisionFlow.collect { event ->
+                    // Re-enabled backup ("link'n'sync"): the QR advertises backup4,backup5
+                    // so the primary uploads an ephemeral backup and hands us the
+                    // ephemeralBackupKey. The 409 we previously saw was a missing
+                    // capability (usernameChangeSyncMessage), now fixed — not backup.
+                    // bootSession picks up the key and runs the restore pipeline.
+                    Provisioning.startProvisioning(appContext, allowBackup = true).collect { event ->
                         when (event) {
                             is Provisioning.ProvisioningEvent.QrUrl -> {
+                                Log.d(TAG, "QR ready (attempt ${qrRetryCount + 1}/$maxQrRetries)")
                                 _state.value = State.AwaitingQrScan(event.url)
                             }
                             is Provisioning.ProvisioningEvent.Success -> {
-                                timeoutJob.cancel()
                                 gotSuccess = true
                                 val data = event.deviceData
                                 val auth = SignalAuthData(
@@ -234,37 +240,28 @@ object SignalClient {
                                 auth.save(appContext)
                                 authData = auth
                                 bootSession(auth)
-                                return@collect
                             }
                             is Provisioning.ProvisioningEvent.Error -> {
-                                timeoutJob.cancel()
+                                lastError = event.message
                                 Log.e(TAG, "Provisioning error: ${event.message}")
-                                _state.value = State.Disconnected("Provisioning failed: ${event.message}")
-                                return@collect
                             }
                         }
                     }
-
-                    if (gotSuccess) return@launch
-
-                    // If we got here without success, the flow completed or timed out
-                    timeoutJob.cancel()
-                    qrRetryCount++
-                    if (qrRetryCount >= maxQrRetries) {
-                        _state.value = State.Disconnected("Too many QR code refreshes")
-                        return@launch
-                    }
-                    Log.d(TAG, "QR scan timed out, refreshing (attempt $qrRetryCount/$maxQrRetries)")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    lastError = e.message
                     Log.e(TAG, "Provisioning attempt failed", e)
-                    qrRetryCount++
-                    if (qrRetryCount >= maxQrRetries) {
-                        _state.value = State.Disconnected("Provisioning failed: ${e.message}")
-                        return@launch
-                    }
                 }
+
+                if (gotSuccess) return@launch
+
+                qrRetryCount++
+                if (qrRetryCount >= maxQrRetries) {
+                    _state.value = State.Disconnected("Provisioning failed: ${lastError ?: "QR not scanned in time"}")
+                    return@launch
+                }
+                Log.d(TAG, "Provisioning attempt ended (lastError=$lastError), refreshing QR ($qrRetryCount/$maxQrRetries)")
             }
         }
     }
@@ -331,6 +328,26 @@ object SignalClient {
             Log.w(TAG, "sendMedia failed: ${t.message}")
             false
         }
+    }
+
+    // --- Shared media-send contracts (MEDIA_FEATURES_CONTRACTS §2) ---
+    // Image & file flow through the existing sendMedia(); location flows through sendMessage()
+    // in MessagesSessionManager (FindFamily/maps URL as text) — neither needs a new method.
+    // Poll is the only Signal-specific addition required by the contract.
+
+    /**
+     * Canonical poll contract (MEDIA_FEATURES_CONTRACTS §2b). Signal DOES support polls in
+     * this app (ContentBuilders.pollCreateMessage / DataMessage.PollCreate), so we wrap the
+     * existing [createPoll]. Note the Go bridge marks polls CapLevelRejected, but the native
+     * Signal protocol supports them and this client implements send.
+     */
+    suspend fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+    ): Boolean {
+        return createPoll(conversationId, question, options, allowMultiple)
     }
 
     // Issue #12: Group read receipt timestamps by sender ACI, send per-sender ReceiptMessage
@@ -421,6 +438,15 @@ object SignalClient {
 
         _events.emit(GMEvent.ConversationDeleted(source, conversationId))
         return true
+    }
+
+    /**
+     * Block a conversation (MEDIA_FEATURES_CONTRACTS §4). For Signal, blocking a message
+     * request is a DELETE: deleteThread(fromMessageRequest=true) sends the
+     * MessageRequestResponse DELETE sync + DeleteForMe and removes the thread locally.
+     */
+    suspend fun blockConversation(conversationId: String): Boolean {
+        return deleteThread(conversationId, fromMessageRequest = true)
     }
 
     // Fix #9: Message deletion with 24h time restriction and author verification
@@ -986,6 +1012,14 @@ object SignalClient {
                 syncStorageIfPossible()
             }
 
+            // Phase 2-6: one-shot "link & sync" history restore. If the primary handed us an
+            // ephemeralBackupKey during linking, download + decrypt + replay the backup so
+            // prior conversations/messages/media appear. Clear the key after success so it
+            // only runs once. recipientStore/groupManager are already constructed above.
+            if (auth.ephemeralBackupKey != null) {
+                kickoffBackupRestore(auth, ws, database, recipientStore)
+            }
+
             scope.launch {
                 var debounceJob: Job? = null
                 ws.connectionEvents.collect { event ->
@@ -1395,6 +1429,57 @@ object SignalClient {
         val name = contactManager?.getDisplayName(aci)
         if (name != null) nameCache[aci] = name
         return name
+    }
+
+    private fun kickoffBackupRestore(
+        auth: SignalAuthData,
+        ws: SignalWebSocket,
+        database: SignalDatabase,
+        recipientStore: SignalRecipientStore,
+    ) {
+        scope.launch {
+            try {
+                val keyB64 = auth.ephemeralBackupKey ?: return@launch
+                val ephemeralBackupKey = Base64.decode(keyB64, Base64.NO_WRAP)
+                Log.i(TAG, "Starting link & sync backup restore")
+                val manager = BackupManager(ws, auth.aci, database)
+                val meta = manager.waitForTransfer(ephemeralBackupKey)
+                if (meta == null) {
+                    Log.i(TAG, "No transfer archive available; skipping restore")
+                    clearEphemeralBackupKey()
+                    return@launch
+                }
+                val ok = manager.fetchAndProcessTransfer(meta, ephemeralBackupKey)
+                if (!ok) {
+                    Log.w(TAG, "Transfer archive processing failed; will retry on next link")
+                    return@launch
+                }
+                val restore = BackupRestore(
+                    db = database,
+                    recipientStore = recipientStore,
+                    groupManager = groupManager,
+                    selfAci = auth.aci,
+                    source = source,
+                    emit = { _events.emit(it) },
+                )
+                restore.restoreAll()
+                // One-shot: clear the key so we don't re-run on subsequent boots.
+                clearEphemeralBackupKey()
+                Log.i(TAG, "Link & sync backup restore finished")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Backup restore failed", e)
+            }
+        }
+    }
+
+    private suspend fun clearEphemeralBackupKey() {
+        val current = authData ?: return
+        if (current.ephemeralBackupKey == null) return
+        val updated = current.copy(ephemeralBackupKey = null)
+        updated.save(appContext)
+        authData = updated
     }
 
     private fun kickoffBackfill() {
