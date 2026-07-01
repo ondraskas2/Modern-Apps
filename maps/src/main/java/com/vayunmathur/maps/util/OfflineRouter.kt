@@ -100,8 +100,7 @@ object OfflineRouter {
             startTime: Long
     ): Array<RawStep>?
     private external fun updateTrafficNative(
-            zoneId: Int,
-            edgeIds: IntArray,
+            edgeIds: LongArray,
             speeds: ByteArray,
             packedSquare: Int
     )
@@ -123,7 +122,6 @@ object OfflineRouter {
     }
 
     external fun ensureTrafficLoadedNative(lat: Double, lon: Double, forceAsync: Boolean)
-    external fun ensureZoneLoadedNative(zoneId: Int): Boolean
 
     private val trafficScope = CoroutineScope(Dispatchers.IO)
 
@@ -133,13 +131,12 @@ object OfflineRouter {
             minLon: Double,
             maxLat: Double,
             maxLon: Double,
-            zoneId: Int,
             packedSquare: Int,
             forceAsync: Boolean
     ) {
         Log.d(
                 "TRAFFIC_DATA",
-                "fetchTrafficData START: bbox ($minLat,$minLon)-($maxLat,$maxLon) zone=$zoneId packed=$packedSquare forceAsync=$forceAsync"
+                "fetchTrafficData START: bbox ($minLat,$minLon)-($maxLat,$maxLon) packed=$packedSquare forceAsync=$forceAsync"
         )
         
         val block: suspend () -> Unit = {
@@ -153,15 +150,16 @@ object OfflineRouter {
                         "TRAFFIC_DATA",
                         "fetchTrafficData NETWORK DONE: status=$status, size=${bytes.size}"
                 )
-                if (status == 200 && bytes.size >= 5) {
-                    val n = bytes.size / 5
-                    val edgeIds = IntArray(n)
+                // Response layout: n * 8-byte LE u64 edge IDs, then n * 1-byte speeds.
+                if (status == 200 && bytes.size >= 9) {
+                    val n = bytes.size / 9
+                    val edgeIds = LongArray(n)
                     val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-                    for (i in 0 until n) edgeIds[i] = buffer.int
+                    for (i in 0 until n) edgeIds[i] = buffer.long
                     val speeds = ByteArray(n)
                     buffer.get(speeds)
                     Log.d("TRAFFIC_DATA", "fetchTrafficData PROCESSING: $n edges")
-                    updateTrafficNative(zoneId, edgeIds, speeds, packedSquare)
+                    updateTrafficNative(edgeIds, speeds, packedSquare)
                     notifyTrafficUpdated()
                 } else {
                     Log.w("TRAFFIC_DATA", "fetchTrafficData NO DATA: status=$status")
@@ -218,12 +216,6 @@ object OfflineRouter {
         isInitialized = init(path, presentFeeds)
         Log.d("OfflineRouter", "Initialization result: $isInitialized")
         cacheDirPath = context.cacheDir.absolutePath
-    }
-
-    fun ensureZoneLoaded(zoneId: Int) {
-        if (isInitialized) {
-            ensureZoneLoadedNative(zoneId)
-        }
     }
 
     suspend fun getRoute(

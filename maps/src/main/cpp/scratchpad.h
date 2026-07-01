@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdlib>
+#include <unordered_map>
 #include <android/log.h>
 
 #define LOG_TAG "OfflineRouterNative"
@@ -88,54 +89,30 @@ public:
 };
 
 /**
- * @brief Simple Page Table for Traffic Speeds per zone.
+ * @brief Sparse traffic-speed table keyed by 64-bit global edge ID.
+ *
+ * Edge indices are now global u64 and can exceed the 32-bit space, so the old
+ * flat 32-bit page directory can no longer address them. Traffic only covers a
+ * sparse subset of edges, so a hash map is both correct and memory-efficient.
  */
 class TrafficPageTable {
 private:
-    static constexpr uint32_t PAGE_BITS = 14;
-    static constexpr uint32_t TRAFFIC_PAGE_SIZE = (1 << PAGE_BITS);
-    static constexpr uint32_t TRAFFIC_PAGE_MASK = (TRAFFIC_PAGE_SIZE - 1);
-    static constexpr uint32_t DIR_SIZE = (1ULL << 32) >> PAGE_BITS; // Support full 32-bit ID space
-
-    uint8_t** m_directory;
-    std::vector<uint32_t> m_active_pages;
+    std::unordered_map<uint64_t, uint8_t> m_speeds;
 
 public:
-    TrafficPageTable() {
-        m_directory = (uint8_t**)calloc(DIR_SIZE, sizeof(uint8_t*));
+    TrafficPageTable() = default;
+
+    inline void set_speed(uint64_t edge_id, uint8_t speed_kph) {
+        m_speeds[edge_id] = speed_kph;
     }
 
-    ~TrafficPageTable() {
-        clear();
-        if (m_directory) free(m_directory);
-    }
-
-    inline void set_speed(uint32_t local_edge_id, uint8_t speed_kph) {
-        uint32_t dir_idx = local_edge_id >> PAGE_BITS;
-        uint32_t page_offset = local_edge_id & TRAFFIC_PAGE_MASK;
-
-        if (__builtin_expect(m_directory[dir_idx] == nullptr, 0)) {
-            uint8_t* new_page = (uint8_t*)malloc(TRAFFIC_PAGE_SIZE * sizeof(uint8_t));
-            memset(new_page, 0, TRAFFIC_PAGE_SIZE * sizeof(uint8_t));
-            m_directory[dir_idx] = new_page;
-            m_active_pages.push_back(dir_idx);
-        }
-        m_directory[dir_idx][page_offset] = speed_kph;
-    }
-
-    inline uint8_t get_speed(uint32_t local_edge_id) const {
-        uint32_t dir_idx = local_edge_id >> PAGE_BITS;
-        uint32_t page_offset = local_edge_id & TRAFFIC_PAGE_MASK;
-        if (m_directory[dir_idx] == nullptr) return 0;
-        return m_directory[dir_idx][page_offset];
+    inline uint8_t get_speed(uint64_t edge_id) const {
+        auto it = m_speeds.find(edge_id);
+        return it == m_speeds.end() ? 0 : it->second;
     }
 
     void clear() {
-        for (uint32_t page_idx : m_active_pages) {
-            if (m_directory[page_idx]) free(m_directory[page_idx]);
-            m_directory[page_idx] = nullptr;
-        }
-        m_active_pages.clear();
+        m_speeds.clear();
     }
 };
 

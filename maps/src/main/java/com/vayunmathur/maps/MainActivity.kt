@@ -90,7 +90,11 @@ class MainActivity : ComponentActivity() {
                     Triple("https://data.vayunmathur.com/amenities.db", "amenities.db", getString(R.string.downloading_amenity_database)),
                     Triple("https://data.vayunmathur.com/metadata.bin", "metadata.bin", getString(R.string.downloading_navigation_metadata)),
                     Triple("https://data.vayunmathur.com/road_names.bin", "road_names.bin", getString(R.string.downloading_road_data)),
-                    Triple("https://data.vayunmathur.com/intermediate.bin", "intermediate.bin", getString(R.string.downloading_road_data))
+                    Triple("https://data.vayunmathur.com/intermediate.bin", "intermediate.bin", getString(R.string.downloading_road_data)),
+                    Triple("https://data.vayunmathur.com/nodes.bin", "nodes.bin", getString(R.string.downloading_road_data)),
+                    Triple("https://data.vayunmathur.com/edges.bin", "edges.bin", getString(R.string.downloading_road_data)),
+                    Triple("https://data.vayunmathur.com/transit_voyages.bin", "transit_voyages.bin", getString(R.string.downloading_road_data)),
+                    Triple("https://data.vayunmathur.com/transit_attributes.bin", "transit_attributes.bin", getString(R.string.downloading_road_data))
                 )) {
                     val db = remember { buildAmenityDatabase(this@MainActivity) }
                     val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

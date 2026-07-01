@@ -36,7 +36,7 @@ enum RoadType {
 #pragma pack(push, 1)
 struct NodeMaster {
     int32_t lat_e7, lon_e7;
-    uint32_t edge_ptr;
+    uint64_t edge_ptr;
 };
 
 struct Edge {
@@ -58,16 +58,19 @@ struct TransitAttribute {
 };
 #pragma pack(pop)
 
-// --- GLOBALS ---
-const int NUM_ZONES = 64;
-NodeMaster* g_node_zones[NUM_ZONES] = {nullptr};
-Edge* g_edge_zones[NUM_ZONES] = {nullptr};
-size_t g_edge_count_in_zone[NUM_ZONES] = {0};
-TransitVoyageCompact* g_transit_voyages[NUM_ZONES] = {nullptr};
-size_t g_transit_voyage_count[NUM_ZONES] = {0};
-TransitAttribute* g_transit_attributes[NUM_ZONES] = {nullptr};
+// Sentinel for "no edge" where a u64 global edge index is expected.
+static constexpr uint64_t INVALID_EDGE = 0xFFFFFFFFFFFFFFFFULL;
 
-uint32_t g_zone_offsets[NUM_ZONES + 1] = {0};
+// --- GLOBALS ---
+// The routing graph is now a single global whole-world dataset (no zonation).
+NodeMaster* g_nodes = nullptr;          // g_node_count real nodes + 1 sentinel
+uint32_t g_node_count = 0;              // node IDs stay 32-bit
+Edge* g_edges = nullptr;
+uint64_t g_edge_count = 0;              // edge indices are global 64-bit
+TransitVoyageCompact* g_transit_voyages = nullptr;
+uint64_t g_transit_voyage_count = 0;
+TransitAttribute* g_transit_attributes = nullptr;
+
 char* g_road_names = nullptr;
 size_t g_road_names_size = 0;
 std::string g_base_path;
@@ -79,9 +82,8 @@ struct LatLon {
 
 void* g_intermediate_mmap_ptr = nullptr;
 size_t g_intermediate_mmap_size = 0;
-uint64_t* g_intermediate_zone_offsets = nullptr;
-uint32_t* g_intermediate_edge_offsets[NUM_ZONES] = {nullptr};
-uint8_t*  g_intermediate_data[NUM_ZONES] = {nullptr};  // delta-encoded coordinate bytes
+uint64_t* g_intermediate_edge_offsets = nullptr;  // length g_edge_count + 1 (u64 byte offsets)
+uint8_t*  g_intermediate_data = nullptr;          // delta-encoded coordinate bytes
 
 uint64_t g_time_scale_fixed[4]; // Heuristic scales (10ms units per mm)
 uint64_t g_edge_time_multipliers[4][16]; // Speed-to-time conversion factors for WALK/BIKE/DRIVING(fallback)
@@ -92,7 +94,7 @@ const double DEG_TO_RAD = M_PI / 180.0;
 uint32_t g_lon_to_mm_scale[4096];
 
 static RoutingScratchpad g_scratchpad;
-static TrafficPageTable g_traffic_zones[NUM_ZONES];
+static TrafficPageTable g_traffic;
 static RadixHeap g_heap; // Only one heap needed for unidirectional
 
 static std::map<int, std::vector<double>> g_traffic_by_square;
@@ -126,18 +128,13 @@ static std::vector<uint8_t> compress_gzip(const std::vector<uint8_t>& input) {
     return output;
 }
 
-inline bool is_zone_mapped(int zone) {
-    return zone >= 0 && zone < NUM_ZONES && g_node_zones[zone] != nullptr;
-}
-
-inline uint32_t find_node_idx_for_edge(int zone, uint32_t local_edge_idx) {
-    if (!is_zone_mapped(zone)) return 0;
-    uint32_t node_count = g_zone_offsets[zone + 1] - g_zone_offsets[zone];
-    int32_t low = 0, high = (int32_t)node_count - 1;
+inline uint32_t find_node_idx_for_edge(uint64_t edge_idx) {
+    // Largest node index whose edge_ptr <= edge_idx (edge_ptr is monotonic).
+    int64_t low = 0, high = (int64_t)g_node_count - 1;
     uint32_t res = 0;
     while (low <= high) {
-        int32_t mid = low + (high - low) / 2;
-        if (g_node_zones[zone][mid].edge_ptr <= local_edge_idx) {
+        int64_t mid = low + (high - low) / 2;
+        if (g_nodes[mid].edge_ptr <= edge_idx) {
             res = (uint32_t)mid;
             low = mid + 1;
         } else {
@@ -145,13 +142,6 @@ inline uint32_t find_node_idx_for_edge(int zone, uint32_t local_edge_idx) {
         }
     }
     return res;
-}
-
-inline int get_zone_for_id(uint32_t global_id) {
-    for (int i = 0; i < 64; ++i) {
-        if (global_id < g_zone_offsets[i+1]) return i;
-    }
-    return -1;
 }
 
 struct EdgeCoords {
@@ -188,25 +178,22 @@ inline uint32_t decode_edge_coords(const uint8_t* data, uint32_t byte_len) {
     return count;
 }
 
-inline EdgeCoords get_edge_coordinates(int zone, uint32_t local_edge_idx) {
-    if (zone < 0 || zone >= NUM_ZONES || !g_edge_zones[zone]) return {nullptr, 0, false};
-    const Edge& e = g_edge_zones[zone][local_edge_idx];
+inline EdgeCoords get_edge_coordinates(uint64_t edge_idx) {
+    if (!g_edges || edge_idx >= g_edge_count) return {nullptr, 0, false};
+    const Edge& e = g_edges[edge_idx];
     
     if (e.type & REVERSE_GEOMETRY_FLAG) {
-        uint32_t u_global = find_node_idx_for_edge(zone, local_edge_idx) + g_zone_offsets[zone];
+        uint32_t u_global = find_node_idx_for_edge(edge_idx);
         uint32_t v_global = e.target;
-        int zone_v = get_zone_for_id(v_global);
-        if (zone_v >= 0 && g_edge_zones[zone_v]) {
-            uint32_t v_local = v_global - g_zone_offsets[zone_v];
-            uint32_t v_node_count = g_zone_offsets[zone_v + 1] - g_zone_offsets[zone_v];
-            uint32_t s = g_node_zones[zone_v][v_local].edge_ptr;
-            uint32_t e_ptr = (v_local + 1 < v_node_count) ? g_node_zones[zone_v][v_local + 1].edge_ptr : (uint32_t)g_edge_count_in_zone[zone_v];
-            for (uint32_t k = s; k < e_ptr; ++k) {
-                if (g_edge_zones[zone_v][k].target == u_global) {
-                    if (g_intermediate_edge_offsets[zone_v] != nullptr && g_intermediate_data[zone_v] != nullptr) {
-                        uint32_t start_byte = g_intermediate_edge_offsets[zone_v][k];
-                        uint32_t end_byte = g_intermediate_edge_offsets[zone_v][k + 1];
-                        uint32_t cnt = decode_edge_coords(g_intermediate_data[zone_v] + start_byte, end_byte - start_byte);
+        if (v_global < g_node_count && g_edges) {
+            uint64_t s = g_nodes[v_global].edge_ptr;
+            uint64_t e_ptr = g_nodes[v_global + 1].edge_ptr;  // sentinel guarantees valid
+            for (uint64_t k = s; k < e_ptr; ++k) {
+                if (g_edges[k].target == u_global) {
+                    if (g_intermediate_edge_offsets != nullptr && g_intermediate_data != nullptr) {
+                        uint64_t start_byte = g_intermediate_edge_offsets[k];
+                        uint64_t end_byte = g_intermediate_edge_offsets[k + 1];
+                        uint32_t cnt = decode_edge_coords(g_intermediate_data + start_byte, (uint32_t)(end_byte - start_byte));
                         return { s_decoded_coords, cnt, true };
                     }
                     break;
@@ -214,10 +201,10 @@ inline EdgeCoords get_edge_coordinates(int zone, uint32_t local_edge_idx) {
             }
         }
     } else {
-        if (g_intermediate_edge_offsets[zone] != nullptr && g_intermediate_data[zone] != nullptr) {
-            uint32_t start_byte = g_intermediate_edge_offsets[zone][local_edge_idx];
-            uint32_t end_byte = g_intermediate_edge_offsets[zone][local_edge_idx + 1];
-            uint32_t cnt = decode_edge_coords(g_intermediate_data[zone] + start_byte, end_byte - start_byte);
+        if (g_intermediate_edge_offsets != nullptr && g_intermediate_data != nullptr) {
+            uint64_t start_byte = g_intermediate_edge_offsets[edge_idx];
+            uint64_t end_byte = g_intermediate_edge_offsets[edge_idx + 1];
+            uint32_t cnt = decode_edge_coords(g_intermediate_data + start_byte, (uint32_t)(end_byte - start_byte));
             return { s_decoded_coords, cnt, false };
         }
     }
@@ -235,21 +222,19 @@ inline LatLon get_pt_at(const EdgeCoords& ec, uint32_t idx) {
 static void load_traffic_from_db(int packed_square) {
     if (!g_db) return;
     sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(g_db, "SELECT zone_id, edge_id, speed FROM raw_traffic WHERE square_id = ?;", -1, &stmt, nullptr);
+    sqlite3_prepare_v2(g_db, "SELECT edge_id, speed FROM raw_traffic WHERE square_id = ?;", -1, &stmt, nullptr);
     sqlite3_bind_int(stmt, 1, packed_square);
     auto& segments = g_traffic_by_square[packed_square];
     segments.clear();
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int zone_id = sqlite3_column_int(stmt, 0);
-        uint32_t local_id = (uint32_t)sqlite3_column_int(stmt, 1);
-        uint8_t speed = (uint8_t)sqlite3_column_int(stmt, 2);
-        if (is_zone_mapped(zone_id) && local_id < g_edge_count_in_zone[zone_id]) {
-            g_traffic_zones[zone_id].set_speed(local_id, speed);
-            const Edge& edge = g_edge_zones[zone_id][local_id];
-            const NodeMaster& node_u = g_node_zones[zone_id][find_node_idx_for_edge(zone_id, local_id)];
-            int zone_v = get_zone_for_id(edge.target);
-            if (is_zone_mapped(zone_v)) {
-                const NodeMaster& node_v = g_node_zones[zone_v][edge.target - g_zone_offsets[zone_v]];
+        uint64_t edge_id = (uint64_t)sqlite3_column_int64(stmt, 0);
+        uint8_t speed = (uint8_t)sqlite3_column_int(stmt, 1);
+        if (g_edges && edge_id < g_edge_count) {
+            g_traffic.set_speed(edge_id, speed);
+            const Edge& edge = g_edges[edge_id];
+            const NodeMaster& node_u = g_nodes[find_node_idx_for_edge(edge_id)];
+            if (edge.target < g_node_count) {
+                const NodeMaster& node_v = g_nodes[edge.target];
                 double ratio = (edge.speed_limit > 0) ? (double)speed / edge.speed_limit : 1.0;
                 segments.push_back(node_u.lat_e7 * 1e-7); segments.push_back(node_u.lon_e7 * 1e-7);
                 segments.push_back(node_v.lat_e7 * 1e-7); segments.push_back(node_v.lon_e7 * 1e-7);
@@ -311,41 +296,27 @@ inline uint64_t get_node_spatial_id(const NodeMaster& node) {
     return latlng_to_spatial(node.lat_e7 * 1e-7, node.lon_e7 * 1e-7);
 }
 
-inline TransitAttribute get_node_transit_attr(int zone, uint32_t local_node_idx) {
-    if (zone >= 0 && zone < NUM_ZONES && g_transit_attributes[zone]) {
-        return g_transit_attributes[zone][local_node_idx];
+inline TransitAttribute get_node_transit_attr(uint32_t node_id) {
+    if (g_transit_attributes && node_id < g_node_count) {
+        return g_transit_attributes[node_id];
     }
     return { 0xFFFFFFFF, 0xFFFFFFFF };
 }
 
-inline uint32_t get_node_feed_name_off(uint32_t global_id) {
-    int zone = 0;
-    for (int i = 0; i < NUM_ZONES; ++i) {
-        if (global_id < g_zone_offsets[i+1]) { zone = i; break; }
-    }
-    if (!g_node_zones[zone]) return 0xFFFFFFFF;
-    return get_node_transit_attr(zone, global_id - g_zone_offsets[zone]).feed_name_off;
+inline uint32_t get_node_feed_name_off(uint32_t node_id) {
+    return get_node_transit_attr(node_id).feed_name_off;
 }
 
-inline uint32_t get_node_stop_code_off(uint32_t global_id) {
-    int zone = 0;
-    for (int i = 0; i < NUM_ZONES; ++i) {
-        if (global_id < g_zone_offsets[i+1]) { zone = i; break; }
-    }
-    if (!g_node_zones[zone]) return 0xFFFFFFFF;
-    return get_node_transit_attr(zone, global_id - g_zone_offsets[zone]).stop_code_off;
+inline uint32_t get_node_stop_code_off(uint32_t node_id) {
+    return get_node_transit_attr(node_id).stop_code_off;
 }
 
-inline const NodeMaster& get_node(uint32_t global_id) {
-    int zone = 0;
-    for (int i = 0; i < 64; ++i) {
-        if (global_id < g_zone_offsets[i+1]) { zone = i; break; }
-    }
-    if (!g_node_zones[zone]) {
+inline const NodeMaster& get_node(uint32_t node_id) {
+    if (!g_nodes || node_id >= g_node_count) {
         static NodeMaster null_node = {0,0,0};
         return null_node;
     }
-    return g_node_zones[zone][global_id - g_zone_offsets[zone]];
+    return g_nodes[node_id];
 }
 
 void ensure_traffic_loaded(JNIEnv* env, jobject thiz, int32_t lat_e7, int32_t lon_e7, bool force_async) {
@@ -362,14 +333,11 @@ void ensure_traffic_loaded(JNIEnv* env, jobject thiz, int32_t lat_e7, int32_t lo
         g_requested_squares.push_back(packed);
     }
 
-    uint64_t spatial = latlng_to_spatial(lat_e7 * 1e-7, lon_e7 * 1e-7);
-    int zone_id = (int)((spatial >> 58) & 0x3F);
-
     jclass clazz = env->GetObjectClass(thiz);
-    jmethodID method = env->GetMethodID(clazz, "fetchTrafficData", "(DDDDIIZ)V");
+    jmethodID method = env->GetMethodID(clazz, "fetchTrafficData", "(DDDDIZ)V");
     if (method) {
-        LOGD("ensure_traffic_loaded: CALLING fetchTrafficData for square %u (zone %d), async=%d", packed, zone_id, force_async);
-        env->CallVoidMethod(thiz, method, (double)lat_idx, (double)lon_idx, (double)lat_idx + 1.0, (double)lon_idx + 1.0, zone_id, (jint)packed, (jboolean)force_async);
+        LOGD("ensure_traffic_loaded: CALLING fetchTrafficData for square %u, async=%d", packed, force_async);
+        env->CallVoidMethod(thiz, method, (double)lat_idx, (double)lon_idx, (double)lat_idx + 1.0, (double)lon_idx + 1.0, (jint)packed, (jboolean)force_async);
         LOGD("ensure_traffic_loaded: RETURNED from fetchTrafficData for square %u", packed);
     }
 }
@@ -425,10 +393,9 @@ inline uint32_t accurate_dist_mm(int32_t lat1_e7, int32_t lon1_e7, int32_t lat2_
     return (uint32_t)dist;
 }
 
-inline uint32_t get_edge_time_10ms(int zone_id, uint32_t local_edge_id, uint32_t dist_mm, uint8_t type, uint8_t limit, int mode) {
+inline uint32_t get_edge_time_10ms(uint64_t edge_id, uint32_t dist_mm, uint8_t type, uint8_t limit, int mode) {
     if (mode == DRIVING) {
-        uint8_t traffic_speed = 0;
-        if (zone_id >= 0 && zone_id < NUM_ZONES) traffic_speed = g_traffic_zones[zone_id].get_speed(local_edge_id);
+        uint8_t traffic_speed = (edge_id != INVALID_EDGE) ? g_traffic.get_speed(edge_id) : 0;
         uint8_t effective_limit = (traffic_speed > 0) ? traffic_speed : limit;
         if (effective_limit > 0) {
             double speed_m_s = (double)effective_limit / 3.6;
@@ -439,9 +406,9 @@ inline uint32_t get_edge_time_10ms(int zone_id, uint32_t local_edge_id, uint32_t
     return (uint32_t)(((uint64_t)dist_mm * multiplier) >> 32);
 }
 
-inline uint32_t get_transit_edge_time_10ms(int zone, const Edge& edge, uint32_t current_time_from_start, uint32_t start_time_abs, uint32_t feed_off, bool is_boarding_or_transfer, uint32_t& wait_out, uint32_t& travel_out) {
+inline uint32_t get_transit_edge_time_10ms(const Edge& edge, uint32_t current_time_from_start, uint32_t start_time_abs, uint32_t feed_off, bool is_boarding_or_transfer, uint32_t& wait_out, uint32_t& travel_out) {
     wait_out = 0; travel_out = 0;
-    if (zone < 0 || !g_transit_voyages[zone]) return 0xFFFFFFFF;
+    if (!g_transit_voyages) return 0xFFFFFFFF;
 
     uint32_t voyage_offset = edge.dist_mm;
     uint32_t voyage_count = edge.speed_limit;
@@ -449,7 +416,7 @@ inline uint32_t get_transit_edge_time_10ms(int zone, const Edge& edge, uint32_t 
 
     const char* route_name = (edge.name_offset < g_road_names_size) ? (g_road_names + edge.name_offset) : "Unknown";
 
-    TransitVoyageCompact* base = g_transit_voyages[zone] + voyage_offset;
+    TransitVoyageCompact* base = g_transit_voyages + voyage_offset;
 
     if (feed_off != 0xFFFFFFFF && feed_off < g_road_names_size) {
         const char* feed_name = g_road_names + feed_off;
@@ -549,8 +516,7 @@ struct SnappedEdge {
     uint8_t type;
     uint8_t speed_limit;
     uint32_t name_offset;
-    int zone_id = -1;
-    uint32_t local_edge_idx = 0xFFFFFFFF;
+    uint64_t edge_idx = INVALID_EDGE;
     uint32_t segment_idx = 0;
 };
 
@@ -594,79 +560,75 @@ SnappedEdge find_nearest_edge(double lat, double lon, int mode) {
     best.type = 0;
     best.speed_limit = 0;
     best.name_offset = 0xFFFFFFFF;
-    best.zone_id = -1;
-    best.local_edge_idx = 0xFFFFFFFF;
+    best.edge_idx = INVALID_EDGE;
     best.segment_idx = 0;
 
+    if (!g_nodes || g_node_count == 0) return best;
+
     uint32_t minSnapDist = 0xFFFFFFFF;
-    int target_zone = (int)((target_spatial >> 58) & 0x3F);
 
-    for (int z = std::max(0, target_zone - 2); z <= std::min(NUM_ZONES - 1, target_zone + 2); ++z) {
-        if (!is_zone_mapped(z)) continue;
-        uint32_t zone_node_count = g_zone_offsets[z + 1] - g_zone_offsets[z];
-        if (zone_node_count == 0) continue;
-        uint32_t low = 0, high = zone_node_count - 1, local_center = 0;
-        while (low <= high) {
-            uint32_t mid = low + (high - low) / 2;
-            if (get_node_spatial_id(g_node_zones[z][mid]) < target_spatial) {
-                local_center = mid;
-                low = mid + 1;
-            } else {
-                if (mid == 0) break;
-                high = mid - 1;
-            }
+    // Binary search the single globally spatial-sorted node array for the node
+    // nearest (just below) the target Morton code.
+    uint32_t low = 0, high = g_node_count - 1, local_center = 0;
+    while (low <= high) {
+        uint32_t mid = low + (high - low) / 2;
+        if (get_node_spatial_id(g_nodes[mid]) < target_spatial) {
+            local_center = mid;
+            low = mid + 1;
+        } else {
+            if (mid == 0) break;
+            high = mid - 1;
         }
-        int window = 800;
-        for (int i = std::max(0, (int)local_center - window); i <= std::min((int)zone_node_count - 1, (int)local_center + window); ++i) {
-            uint32_t u_global = g_zone_offsets[z] + i;
-            const auto& node_u = g_node_zones[z][i];
-            uint32_t e_ptr = (i + 1 < zone_node_count) ? g_node_zones[z][i+1].edge_ptr : (uint32_t)g_edge_count_in_zone[z];
-            for (uint32_t j = node_u.edge_ptr; j < e_ptr; ++j) {
-                Edge& e = g_edge_zones[z][j];
-                if (e.type & TRANSIT_FLAG) continue;
-                if (!is_mode_allowed(e.type, mode)) continue;
-                int zone_v = get_zone_for_id(e.target);
-                if (!is_zone_mapped(zone_v)) continue;
+    }
 
-                EdgeCoords ec = get_edge_coordinates(z, j);
-                if (ec.coords != nullptr && ec.count >= 2) {
-                    uint32_t num_pts = ec.count;
-                    uint32_t current_dist_from_start_mm = 0;
-                    for (uint32_t p = 0; p < num_pts - 1; ++p) {
-                        const auto p1 = get_pt_at(ec, p);
-                        const auto p2 = get_pt_at(ec, p + 1);
-                        
-                        Projection proj = get_projection(pLat, pLon, p1.lat_e7, p1.lon_e7, p2.lat_e7, p2.lon_e7);
-                        if (proj.dist_mm < minSnapDist) {
-                            minSnapDist = proj.dist_mm;
-                            best.nodeA = u_global;
-                            best.nodeB = e.target;
-                            best.proj_lat = proj.lat_e7;
-                            best.proj_lon = proj.lon_e7;
-                            best.type = e.type;
-                            best.speed_limit = e.speed_limit;
-                            best.name_offset = e.name_offset;
-                            best.zone_id = z;
-                            best.local_edge_idx = j;
-                            best.segment_idx = p;
-                            
-                            uint32_t dist_to_proj_seg_mm = fast_dist_mm(p1.lat_e7, p1.lon_e7, proj.lat_e7, proj.lon_e7);
-                            best.distA_mm = current_dist_from_start_mm + dist_to_proj_seg_mm;
-                            best.distB_mm = (e.dist_mm > best.distA_mm) ? (e.dist_mm - best.distA_mm) : 0;
-                        }
-                        current_dist_from_start_mm += fast_dist_mm(p1.lat_e7, p1.lon_e7, p2.lat_e7, p2.lon_e7);
+    int window = 800;
+    for (int i = std::max(0, (int)local_center - window); i <= std::min((int)g_node_count - 1, (int)local_center + window); ++i) {
+        uint32_t u_global = (uint32_t)i;
+        const auto& node_u = g_nodes[i];
+        uint64_t e_ptr = g_nodes[i + 1].edge_ptr;  // sentinel guarantees valid
+        for (uint64_t j = node_u.edge_ptr; j < e_ptr; ++j) {
+            Edge& e = g_edges[j];
+            if (e.type & TRANSIT_FLAG) continue;
+            if (!is_mode_allowed(e.type, mode)) continue;
+            if (e.target >= g_node_count) continue;
+
+            EdgeCoords ec = get_edge_coordinates(j);
+            if (ec.coords != nullptr && ec.count >= 2) {
+                uint32_t num_pts = ec.count;
+                uint32_t current_dist_from_start_mm = 0;
+                for (uint32_t p = 0; p < num_pts - 1; ++p) {
+                    const auto p1 = get_pt_at(ec, p);
+                    const auto p2 = get_pt_at(ec, p + 1);
+
+                    Projection proj = get_projection(pLat, pLon, p1.lat_e7, p1.lon_e7, p2.lat_e7, p2.lon_e7);
+                    if (proj.dist_mm < minSnapDist) {
+                        minSnapDist = proj.dist_mm;
+                        best.nodeA = u_global;
+                        best.nodeB = e.target;
+                        best.proj_lat = proj.lat_e7;
+                        best.proj_lon = proj.lon_e7;
+                        best.type = e.type;
+                        best.speed_limit = e.speed_limit;
+                        best.name_offset = e.name_offset;
+                        best.edge_idx = j;
+                        best.segment_idx = p;
+
+                        uint32_t dist_to_proj_seg_mm = fast_dist_mm(p1.lat_e7, p1.lon_e7, proj.lat_e7, proj.lon_e7);
+                        best.distA_mm = current_dist_from_start_mm + dist_to_proj_seg_mm;
+                        best.distB_mm = (e.dist_mm > best.distA_mm) ? (e.dist_mm - best.distA_mm) : 0;
                     }
-                } else {
-                    const auto& node_v = g_node_zones[zone_v][e.target - g_zone_offsets[zone_v]];
-                    Projection p = get_projection(pLat, pLon, node_u.lat_e7, node_u.lon_e7, node_v.lat_e7, node_v.lon_e7);
-                    if (p.dist_mm < minSnapDist) {
-                        minSnapDist = p.dist_mm;
-                        best.nodeA = u_global; best.nodeB = e.target; best.proj_lat = p.lat_e7; best.proj_lon = p.lon_e7;
-                        best.distA_mm = fast_dist_mm(p.lat_e7, p.lon_e7, node_u.lat_e7, node_u.lon_e7);
-                        best.distB_mm = fast_dist_mm(p.lat_e7, p.lon_e7, node_v.lat_e7, node_v.lon_e7);
-                        best.type = e.type; best.speed_limit = e.speed_limit; best.name_offset = e.name_offset;
-                        best.zone_id = z; best.local_edge_idx = j; best.segment_idx = 0;
-                    }
+                    current_dist_from_start_mm += fast_dist_mm(p1.lat_e7, p1.lon_e7, p2.lat_e7, p2.lon_e7);
+                }
+            } else {
+                const auto& node_v = g_nodes[e.target];
+                Projection p = get_projection(pLat, pLon, node_u.lat_e7, node_u.lon_e7, node_v.lat_e7, node_v.lon_e7);
+                if (p.dist_mm < minSnapDist) {
+                    minSnapDist = p.dist_mm;
+                    best.nodeA = u_global; best.nodeB = e.target; best.proj_lat = p.lat_e7; best.proj_lon = p.lon_e7;
+                    best.distA_mm = fast_dist_mm(p.lat_e7, p.lon_e7, node_u.lat_e7, node_u.lon_e7);
+                    best.distB_mm = fast_dist_mm(p.lat_e7, p.lon_e7, node_v.lat_e7, node_v.lon_e7);
+                    best.type = e.type; best.speed_limit = e.speed_limit; best.name_offset = e.name_offset;
+                    best.edge_idx = j; best.segment_idx = 0;
                 }
             }
         }
@@ -691,7 +653,7 @@ bool prepare_routing(JNIEnv* env, jobject thiz, double sLat, double sLon, double
     LOGD("prepare_routing: start snapped to nodeA=%u, nodeB=%u", ctx.start.nodeA, ctx.start.nodeB);
     if (mode == DRIVING) ensure_traffic_loaded(env, thiz, ctx.start.proj_lat, ctx.start.proj_lon, false);
     auto push = [&](uint32_t node, uint32_t travel_dist_mm) {
-        uint32_t t_actual = get_edge_time_10ms(-1, 0, travel_dist_mm, ctx.start.type, ctx.start.speed_limit, mode);
+        uint32_t t_actual = get_edge_time_10ms(INVALID_EDGE, travel_dist_mm, ctx.start.type, ctx.start.speed_limit, mode);
         auto& entry = g_scratchpad.get_entry(node, 0);
         entry.g_fwd = t_actual;
         entry.g_bwd = t_actual;
@@ -721,18 +683,15 @@ void perform_search_loop(JNIEnv* env, jobject thiz, int mode, RoutingContext& ct
         auto& entry_u = g_scratchpad.get_entry(u, u_state);
         uint32_t u_cost = entry_u.g_fwd;
         uint32_t u_actual_time = entry_u.g_bwd;
-        int zone_u = get_zone_for_id(u);
-        if (zone_u < 0 || !g_node_zones[zone_u]) continue;
-        const auto& n_u = g_node_zones[zone_u][u - g_zone_offsets[zone_u]];
+        if (!g_nodes || u >= g_node_count) continue;
+        const auto& n_u = g_nodes[u];
 
         if (mode == DRIVING) ensure_traffic_loaded(env, thiz, n_u.lat_e7, n_u.lon_e7, false);
-        uint32_t s = n_u.edge_ptr;
-        uint32_t node_idx = u - g_zone_offsets[zone_u];
-        uint32_t node_count = g_zone_offsets[zone_u + 1] - g_zone_offsets[zone_u];
-        uint32_t e_ptr = (node_idx + 1 < node_count) ? g_node_zones[zone_u][node_idx + 1].edge_ptr : (uint32_t)g_edge_count_in_zone[zone_u];
+        uint64_t s = n_u.edge_ptr;
+        uint64_t e_ptr = g_nodes[u + 1].edge_ptr;  // sentinel guarantees valid
 
-        for (uint32_t i = s; i < e_ptr; ++i) {
-            Edge& edge = g_edge_zones[zone_u][i];
+        for (uint64_t i = s; i < e_ptr; ++i) {
+            Edge& edge = g_edges[i];
             if (!is_mode_allowed(edge.type, mode)) continue;
 
             uint32_t travel_time;
@@ -741,20 +700,20 @@ void perform_search_loop(JNIEnv* env, jobject thiz, int mode, RoutingContext& ct
                 bool is_boarding = !(entry_u.last_type & TRANSIT_FLAG);
                 bool is_transfer = !is_boarding && (edge.name_offset != entry_u.last_name_off);
 
-                TransitAttribute ta_u = get_node_transit_attr(zone_u, node_idx);
+                TransitAttribute ta_u = get_node_transit_attr(u);
                 // FIX: Only allow boarding or transfers at recognized transit stops
                 if ((is_boarding || is_transfer) && ta_u.stop_code_off == 0xFFFFFFFF) continue;
 
                 uint32_t wait, transit_move;
-                travel_time = get_transit_edge_time_10ms(zone_u, edge, u_actual_time, ctx.startTime, ta_u.feed_name_off, is_boarding || is_transfer, wait, transit_move);
+                travel_time = get_transit_edge_time_10ms(edge, u_actual_time, ctx.startTime, ta_u.feed_name_off, is_boarding || is_transfer, wait, transit_move);
                 if (travel_time == 0xFFFFFFFF) continue;
             } else {
                 // FIX: Only allow alighting from transit at recognized transit stops
                 if (mode == PUBLIC_TRANSIT && (entry_u.last_type & TRANSIT_FLAG)) {
-                    TransitAttribute ta_u = get_node_transit_attr(zone_u, node_idx);
+                    TransitAttribute ta_u = get_node_transit_attr(u);
                     if (ta_u.stop_code_off == 0xFFFFFFFF) continue;
                 }
-                travel_time = get_edge_time_10ms(zone_u, i, edge.dist_mm, edge.type, edge.speed_limit, mode);
+                travel_time = get_edge_time_10ms(i, edge.dist_mm, edge.type, edge.speed_limit, mode);
             }
 
             uint32_t v = edge.target;
@@ -804,11 +763,11 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
     uint32_t current_elapsed_10ms = 0;
     bool last_was_transit = false;
 
-    auto add_segment = [&](double lat1, double lon1, double lat2, double lon2, uint32_t name_off, uint8_t type, uint8_t limit, uint32_t dist_mm, int zone_id, uint32_t local_edge_idx, uint32_t feed_off, uint32_t code_off, uint32_t target_code_off) {
+    auto add_segment = [&](double lat1, double lon1, double lat2, double lon2, uint32_t name_off, uint8_t type, uint8_t limit, uint32_t dist_mm, uint64_t edge_idx, uint32_t feed_off, uint32_t code_off, uint32_t target_code_off) {
         double ratio = 1.0;
         uint8_t traffic_speed = 0;
-        if (zone_id >= 0 && local_edge_idx != 0xFFFFFFFF) {
-            traffic_speed = g_traffic_zones[zone_id].get_speed(local_edge_idx);
+        if (edge_idx != INVALID_EDGE) {
+            traffic_speed = g_traffic.get_speed(edge_idx);
             if (traffic_speed > 0 && limit > 0) ratio = (double)traffic_speed / limit;
         }
 
@@ -816,11 +775,11 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
         bool is_transit = false;
         if (mode == PUBLIC_TRANSIT && (type & TRANSIT_FLAG)) {
             is_transit = true;
-            if (local_edge_idx != 0xFFFFFFFF && zone_id != -1) {
+            if (edge_idx != INVALID_EDGE) {
                 bool is_boarding = !last_was_transit;
                 bool is_transfer = last_was_transit && (name_off != steps.back().name_off);
                 uint32_t wait, transit_move;
-                time_10ms = get_transit_edge_time_10ms(zone_id, g_edge_zones[zone_id][local_edge_idx], current_elapsed_10ms, ctx.startTime, feed_off, is_boarding || is_transfer, wait, transit_move);
+                time_10ms = get_transit_edge_time_10ms(g_edges[edge_idx], current_elapsed_10ms, ctx.startTime, feed_off, is_boarding || is_transfer, wait, transit_move);
                 if (time_10ms == 0xFFFFFFFF) { time_10ms = 0; wait = 0; transit_move = 0; }
 
                 if ((is_boarding || is_transfer)) {
@@ -835,7 +794,7 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                 time_10ms = 0;
             }
         } else {
-            time_10ms = get_edge_time_10ms(zone_id, local_edge_idx, dist_mm, type, limit, mode);
+            time_10ms = get_edge_time_10ms(edge_idx, dist_mm, type, limit, mode);
         }
         current_elapsed_10ms += time_10ms;
         last_was_transit = (type & TRANSIT_FLAG);
@@ -870,11 +829,10 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
     {
         uint32_t n0 = path_nodes[0];
         const auto& node0 = get_node(n0);
-        int z = ctx.start.zone_id;
-        uint32_t j = ctx.start.local_edge_idx;
+        uint64_t j = ctx.start.edge_idx;
         
-        EdgeCoords ec = get_edge_coordinates(z, j);
-        if (z >= 0 && j != 0xFFFFFFFF && ec.coords != nullptr && ec.count >= 2) {
+        EdgeCoords ec = get_edge_coordinates(j);
+        if (j != INVALID_EDGE && ec.coords != nullptr && ec.count >= 2) {
             uint32_t num_pts = ec.count;
             uint32_t seg_idx = ctx.start.segment_idx;
             
@@ -883,7 +841,7 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                 const auto p_next = get_pt_at(ec, seg_idx);
                 uint32_t d1 = fast_dist_mm(ctx.start.proj_lat, ctx.start.proj_lon, p_next.lat_e7, p_next.lon_e7);
                 add_segment(ctx.start.proj_lat * 1e-7, ctx.start.proj_lon * 1e-7, p_next.lat_e7 * 1e-7, p_next.lon_e7 * 1e-7,
-                            ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d1, z, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
+                            ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d1, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
                 
                 // Then trace backwards: P_p -> P_{p-1}
                 for (int p = (int)seg_idx; p >= 1; --p) {
@@ -891,14 +849,14 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                     const auto p_to = get_pt_at(ec, p - 1);
                     uint32_t d_seg = fast_dist_mm(p_from.lat_e7, p_from.lon_e7, p_to.lat_e7, p_to.lon_e7);
                     add_segment(p_from.lat_e7 * 1e-7, p_from.lon_e7 * 1e-7, p_to.lat_e7 * 1e-7, p_to.lon_e7 * 1e-7,
-                                ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d_seg, z, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
+                                ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d_seg, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
                 }
             } else {
                 // Snapped point to P_{seg_idx + 1}
                 const auto p_next = get_pt_at(ec, seg_idx + 1);
                 uint32_t d1 = fast_dist_mm(ctx.start.proj_lat, ctx.start.proj_lon, p_next.lat_e7, p_next.lon_e7);
                 add_segment(ctx.start.proj_lat * 1e-7, ctx.start.proj_lon * 1e-7, p_next.lat_e7 * 1e-7, p_next.lon_e7 * 1e-7,
-                            ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d1, z, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
+                            ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d1, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
                 
                 // Then trace forwards: P_p -> P_{p+1}
                 for (uint32_t p = seg_idx + 1; p < num_pts - 1; ++p) {
@@ -906,44 +864,41 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                     const auto p_to = get_pt_at(ec, p + 1);
                     uint32_t d_seg = fast_dist_mm(p_from.lat_e7, p_from.lon_e7, p_to.lat_e7, p_to.lon_e7);
                     add_segment(p_from.lat_e7 * 1e-7, p_from.lon_e7 * 1e-7, p_to.lat_e7 * 1e-7, p_to.lon_e7 * 1e-7,
-                                ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d_seg, z, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
+                                ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, d_seg, j, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
                 }
             }
         } else {
             uint32_t dist = (n0 == ctx.start.nodeA) ? ctx.start.distA_mm : ctx.start.distB_mm;
             add_segment(ctx.start.proj_lat * 1e-7, ctx.start.proj_lon * 1e-7, node0.lat_e7 * 1e-7, node0.lon_e7 * 1e-7,
-                        ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, dist, -1, 0xFFFFFFFF, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
+                        ctx.start.name_offset, ctx.start.type, ctx.start.speed_limit, dist, INVALID_EDGE, get_node_feed_name_off(n0), get_node_stop_code_off(n0), get_node_stop_code_off(n0));
         }
     }
 
     // 2. Main path segments
     for (size_t i = 0; i < path_nodes.size() - 1; ++i) {
         uint32_t u = path_nodes[i], v = path_nodes[i+1];
-        int z_u = get_zone_for_id(u);
-        if (z_u < 0 || !g_node_zones[z_u]) continue;
-        const auto& node_u = g_node_zones[z_u][u - g_zone_offsets[z_u]];
+        if (!g_nodes || u >= g_node_count) continue;
+        const auto& node_u = g_nodes[u];
         const auto& node_v = get_node(v);
 
-        uint32_t s = node_u.edge_ptr;
-        uint32_t node_idx = u - g_zone_offsets[z_u];
-        uint32_t node_count = g_zone_offsets[z_u + 1] - g_zone_offsets[z_u];
-        uint32_t e_ptr = (node_idx + 1 < node_count) ? g_node_zones[z_u][node_idx + 1].edge_ptr : (uint32_t)g_edge_count_in_zone[z_u];
+        uint64_t s = node_u.edge_ptr;
+        uint64_t e_ptr = g_nodes[u + 1].edge_ptr;  // sentinel guarantees valid
 
-        uint32_t best_e_idx = 0xFFFFFFFF;
-        for (uint32_t k = s; k < e_ptr; ++k) {
-            if (g_edge_zones[z_u][k].target == v) {
+        uint64_t best_e_idx = INVALID_EDGE;
+        for (uint64_t k = s; k < e_ptr; ++k) {
+            if (g_edges[k].target == v) {
                 best_e_idx = k; break;
             }
         }
-        if (best_e_idx == 0xFFFFFFFF) continue;
+        if (best_e_idx == INVALID_EDGE) continue;
 
-        const Edge& e = g_edge_zones[z_u][best_e_idx];
+        const Edge& e = g_edges[best_e_idx];
         uint32_t d = e.dist_mm;
         if (d == 0 || (e.type & TRANSIT_FLAG)) {
             d = accurate_dist_mm(node_u.lat_e7, node_u.lon_e7, node_v.lat_e7, node_v.lon_e7);
         }
 
-        EdgeCoords ec = get_edge_coordinates(z_u, best_e_idx);
+        EdgeCoords ec = get_edge_coordinates(best_e_idx);
         if (ec.coords != nullptr && ec.count >= 2) {
             uint32_t num_pts = ec.count;
             for (uint32_t p = 0; p < num_pts - 1; ++p) {
@@ -951,11 +906,11 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                 const auto p2 = get_pt_at(ec, p + 1);
                 uint32_t seg_dist = fast_dist_mm(p1.lat_e7, p1.lon_e7, p2.lat_e7, p2.lon_e7);
                 add_segment(p1.lat_e7 * 1e-7, p1.lon_e7 * 1e-7, p2.lat_e7 * 1e-7, p2.lon_e7 * 1e-7,
-                            e.name_offset, e.type, e.speed_limit, seg_dist, z_u, best_e_idx, get_node_feed_name_off(u), get_node_stop_code_off(u), get_node_stop_code_off(v));
+                            e.name_offset, e.type, e.speed_limit, seg_dist, best_e_idx, get_node_feed_name_off(u), get_node_stop_code_off(u), get_node_stop_code_off(v));
             }
         } else {
             add_segment(node_u.lat_e7 * 1e-7, node_u.lon_e7 * 1e-7, node_v.lat_e7 * 1e-7, node_v.lon_e7 * 1e-7,
-                        e.name_offset, e.type, e.speed_limit, d, z_u, best_e_idx, get_node_feed_name_off(u), get_node_stop_code_off(u), get_node_stop_code_off(v));
+                        e.name_offset, e.type, e.speed_limit, d, best_e_idx, get_node_feed_name_off(u), get_node_stop_code_off(u), get_node_stop_code_off(v));
         }
     }
 
@@ -963,11 +918,10 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
     {
         uint32_t nk = path_nodes.back();
         const auto& nodek = get_node(nk);
-        int z = ctx.end.zone_id;
-        uint32_t j = ctx.end.local_edge_idx;
+        uint64_t j = ctx.end.edge_idx;
         
-        EdgeCoords ec = get_edge_coordinates(z, j);
-        if (z >= 0 && j != 0xFFFFFFFF && ec.coords != nullptr && ec.count >= 2) {
+        EdgeCoords ec = get_edge_coordinates(j);
+        if (j != INVALID_EDGE && ec.coords != nullptr && ec.count >= 2) {
             uint32_t num_pts = ec.count;
             uint32_t seg_idx = ctx.end.segment_idx;
             
@@ -978,14 +932,14 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                     const auto p_to = get_pt_at(ec, p + 1);
                     uint32_t d_seg = fast_dist_mm(p_from.lat_e7, p_from.lon_e7, p_to.lat_e7, p_to.lon_e7);
                     add_segment(p_from.lat_e7 * 1e-7, p_from.lon_e7 * 1e-7, p_to.lat_e7 * 1e-7, p_to.lon_e7 * 1e-7,
-                                ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d_seg, z, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
+                                ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d_seg, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
                 }
                 
                 // Then final segment: P_seg_idx -> Proj
                 const auto p_last = get_pt_at(ec, seg_idx);
                 uint32_t d2 = fast_dist_mm(p_last.lat_e7, p_last.lon_e7, ctx.end.proj_lat, ctx.end.proj_lon);
                 add_segment(p_last.lat_e7 * 1e-7, p_last.lon_e7 * 1e-7, ctx.end.proj_lat * 1e-7, ctx.end.proj_lon * 1e-7,
-                            ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d2, z, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
+                            ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d2, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
             } else {
                 // Trace backwards: P_p -> P_{p-1} down to seg_idx + 1
                 for (int p = (int)num_pts - 1; p > (int)seg_idx + 1; --p) {
@@ -993,19 +947,19 @@ jobjectArray reconstruct_path(JNIEnv* env, int mode, const RoutingContext& ctx) 
                     const auto p_to = get_pt_at(ec, p - 1);
                     uint32_t d_seg = fast_dist_mm(p_from.lat_e7, p_from.lon_e7, p_to.lat_e7, p_to.lon_e7);
                     add_segment(p_from.lat_e7 * 1e-7, p_from.lon_e7 * 1e-7, p_to.lat_e7 * 1e-7, p_to.lon_e7 * 1e-7,
-                                ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d_seg, z, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
+                                ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d_seg, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
                 }
                 
                 // Then final segment: P_{seg_idx + 1} -> Proj
                 const auto p_last = get_pt_at(ec, seg_idx + 1);
                 uint32_t d2 = fast_dist_mm(p_last.lat_e7, p_last.lon_e7, ctx.end.proj_lat, ctx.end.proj_lon);
                 add_segment(p_last.lat_e7 * 1e-7, p_last.lon_e7 * 1e-7, ctx.end.proj_lat * 1e-7, ctx.end.proj_lon * 1e-7,
-                            ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d2, z, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
+                            ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, d2, j, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
             }
         } else {
             uint32_t dist = (nk == ctx.end.nodeA) ? ctx.end.distA_mm : ctx.end.distB_mm;
             add_segment(nodek.lat_e7 * 1e-7, nodek.lon_e7 * 1e-7, ctx.end.proj_lat * 1e-7, ctx.end.proj_lon * 1e-7,
-                        ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, dist, -1, 0xFFFFFFFF, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
+                        ctx.end.name_offset, ctx.end.type, ctx.end.speed_limit, dist, INVALID_EDGE, get_node_feed_name_off(nk), get_node_stop_code_off(nk), 0xFFFFFFFF);
         }
     }
 
@@ -1078,48 +1032,35 @@ Java_com_vayunmathur_maps_util_OfflineRouter_init(JNIEnv* env, jobject thiz, jst
         void* a = mmap(nullptr, s, PROT_READ, MAP_SHARED, fd, 0); close(fd);
         return (a == MAP_FAILED) ? nullptr : a;
     };
-    size_t s_meta; uint32_t* meta = (uint32_t*)m_file(base + "metadata.bin", s_meta);
-    if (!meta) { env->ReleaseStringUTFChars(base_path, path_raw); return false; }
-    bool has_edge_metadata = (s_meta >= NUM_ZONES * 2 * sizeof(uint32_t));
-    // Defensive: if metadata.bin is smaller than even the single-uint32-per-zone
-    // layout, we can't safely index meta[i] below -> bail out instead of SIGBUS.
-    if (s_meta < NUM_ZONES * sizeof(uint32_t)) {
-        munmap(meta, s_meta);
+    // metadata.bin is now a single u64 node_count.
+    size_t s_meta; uint64_t* meta = (uint64_t*)m_file(base + "metadata.bin", s_meta);
+    if (!meta || s_meta < sizeof(uint64_t)) {
+        if (meta) munmap(meta, s_meta);
         env->ReleaseStringUTFChars(base_path, path_raw);
         return false;
     }
-    g_zone_offsets[0] = 0;
-    if (has_edge_metadata) {
-        for (int i = 0; i < NUM_ZONES; ++i) g_zone_offsets[i+1] = g_zone_offsets[i] + meta[i*2];
-    } else {
-        for (int i = 0; i < NUM_ZONES; ++i) g_zone_offsets[i+1] = g_zone_offsets[i] + meta[i];
+    g_node_count = (uint32_t)meta[0];
+    munmap(meta, s_meta);
+
+    size_t s_n, s_e, s_t, s_ta;
+    g_nodes = (NodeMaster*)m_file(base + "nodes.bin", s_n);
+    g_edges = (Edge*)m_file(base + "edges.bin", s_e);
+    g_edge_count = s_e / sizeof(Edge);
+    g_transit_voyages = (TransitVoyageCompact*)m_file(base + "transit_voyages.bin", s_t);
+    g_transit_voyage_count = s_t / sizeof(TransitVoyageCompact);
+    g_transit_attributes = (TransitAttribute*)m_file(base + "transit_attributes.bin", s_ta);
+    if (!g_nodes || !g_edges) {
+        env->ReleaseStringUTFChars(base_path, path_raw);
+        return false;
     }
+
+    // intermediate.bin: [ u64 edge_offsets[g_edge_count + 1] ][ coord blob ].
     g_intermediate_mmap_ptr = m_file(base + "intermediate.bin", g_intermediate_mmap_size);
     if (g_intermediate_mmap_ptr) {
-        g_intermediate_zone_offsets = (uint64_t*)g_intermediate_mmap_ptr;
+        g_intermediate_edge_offsets = (uint64_t*)g_intermediate_mmap_ptr;
+        g_intermediate_data = (uint8_t*)((char*)g_intermediate_mmap_ptr + (g_edge_count + 1) * sizeof(uint64_t));
     }
-    for (int i = 0; i < NUM_ZONES; ++i) {
-        uint32_t node_count = has_edge_metadata ? meta[i*2] : meta[i];
-        if (node_count == 0) continue;
-        size_t s_n, s_e, s_t, s_ta;
-        g_node_zones[i] = (NodeMaster*)m_file(base + "nodes_zone_" + std::to_string(i) + ".bin", s_n);
-        g_edge_zones[i] = (Edge*)m_file(base + "edges_zone_" + std::to_string(i) + ".bin", s_e);
-        g_edge_count_in_zone[i] = s_e / sizeof(Edge);
-        g_transit_voyages[i] = (TransitVoyageCompact*)m_file(base + "transit_voyages_zone_" + std::to_string(i) + ".bin", s_t);
-        g_transit_voyage_count[i] = s_t / sizeof(TransitVoyageCompact);
-        g_transit_attributes[i] = (TransitAttribute*)m_file(base + "transit_attributes_zone_" + std::to_string(i) + ".bin", s_ta);
 
-        if (g_intermediate_mmap_ptr && g_intermediate_zone_offsets) {
-            uint64_t start = g_intermediate_zone_offsets[i];
-            uint64_t end = g_intermediate_zone_offsets[i+1];
-            if (start < end) {
-                g_intermediate_edge_offsets[i] = (uint32_t*)((char*)g_intermediate_mmap_ptr + start);
-                uint32_t edge_count = g_edge_count_in_zone[i];
-                g_intermediate_data[i] = (uint8_t*)((char*)g_intermediate_mmap_ptr + start + (edge_count + 1) * sizeof(uint32_t));
-            }
-        }
-    }
-    munmap(meta, s_meta);
     size_t s_r; g_road_names = (char*)m_file(base + "road_names.bin", s_r); g_road_names_size = s_r;
     for (int i = 0; i < 4096; ++i) {
         double lat_deg = ((double)((int64_t)(i - 2048) << 19)) / 1e7;
@@ -1154,7 +1095,7 @@ Java_com_vayunmathur_maps_util_OfflineRouter_init(JNIEnv* env, jobject thiz, jst
         sqlite3_exec(g_db, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
         sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT, PRIMARY KEY(name));", nullptr, nullptr, nullptr);
         sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB, PRIMARY KEY(zoom_level, tile_column, tile_row));", nullptr, nullptr, nullptr);
-        sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS raw_traffic (square_id INTEGER, zone_id INTEGER, edge_id INTEGER, speed INTEGER, PRIMARY KEY(square_id, edge_id));", nullptr, nullptr, nullptr);
+        sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS raw_traffic (square_id INTEGER, edge_id INTEGER, speed INTEGER, PRIMARY KEY(square_id, edge_id));", nullptr, nullptr, nullptr);
         sqlite3_exec(g_db, "INSERT OR IGNORE INTO metadata VALUES ('name', 'Traffic');", nullptr, nullptr, nullptr);
         sqlite3_exec(g_db, "INSERT OR IGNORE INTO metadata VALUES ('format', 'pbf');", nullptr, nullptr, nullptr);
     }
@@ -1176,20 +1117,19 @@ Java_com_vayunmathur_maps_util_OfflineRouter_findRouteNative(JNIEnv* env, jobjec
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vayunmathur_maps_util_OfflineRouter_updateTrafficNative(JNIEnv* env, jobject thiz, jint zone_id, jintArray edge_ids, jbyteArray speeds, jint packed_square) {
-    jsize len = env->GetArrayLength(edge_ids); jint* ids_ptr = env->GetIntArrayElements(edge_ids, nullptr);
+Java_com_vayunmathur_maps_util_OfflineRouter_updateTrafficNative(JNIEnv* env, jobject thiz, jlongArray edge_ids, jbyteArray speeds, jint packed_square) {
+    jsize len = env->GetArrayLength(edge_ids); jlong* ids_ptr = env->GetLongArrayElements(edge_ids, nullptr);
     jbyte* speeds_ptr = env->GetByteArrayElements(speeds, nullptr);
     std::lock_guard<std::mutex> lock(g_traffic_mutex);
 
     if (g_db) {
         sqlite3_exec(g_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
         sqlite3_stmt* stmt;
-        sqlite3_prepare_v2(g_db, "INSERT OR REPLACE INTO raw_traffic (square_id, zone_id, edge_id, speed) VALUES (?, ?, ?, ?);", -1, &stmt, nullptr);
+        sqlite3_prepare_v2(g_db, "INSERT OR REPLACE INTO raw_traffic (square_id, edge_id, speed) VALUES (?, ?, ?);", -1, &stmt, nullptr);
         for (jsize i = 0; i < len; i++) {
             sqlite3_bind_int(stmt, 1, packed_square);
-            sqlite3_bind_int(stmt, 2, zone_id);
-            sqlite3_bind_int(stmt, 3, ids_ptr[i]);
-            sqlite3_bind_int(stmt, 4, (uint8_t)speeds_ptr[i]);
+            sqlite3_bind_int64(stmt, 2, (sqlite3_int64)ids_ptr[i]);
+            sqlite3_bind_int(stmt, 3, (uint8_t)speeds_ptr[i]);
             sqlite3_step(stmt);
             sqlite3_reset(stmt);
         }
@@ -1200,17 +1140,15 @@ Java_com_vayunmathur_maps_util_OfflineRouter_updateTrafficNative(JNIEnv* env, jo
 
     auto& segments = g_traffic_by_square[packed_square];
     segments.clear();
-    size_t total_edges_in_zone = g_edge_count_in_zone[zone_id];
     for (jsize i = 0; i < len; i++) {
-        uint32_t local_id = (uint32_t)ids_ptr[i]; uint8_t speed = (uint8_t)speeds_ptr[i];
-        if (is_zone_mapped(zone_id) && local_id < total_edges_in_zone) {
-            const Edge& edge = g_edge_zones[zone_id][local_id];
+        uint64_t edge_id = (uint64_t)ids_ptr[i]; uint8_t speed = (uint8_t)speeds_ptr[i];
+        if (g_edges && edge_id < g_edge_count) {
+            const Edge& edge = g_edges[edge_id];
             if (speed < 255) {
-                g_traffic_zones[zone_id].set_speed(local_id, speed);
-                const NodeMaster& node_u = g_node_zones[zone_id][find_node_idx_for_edge(zone_id, local_id)];
-                int zone_v = get_zone_for_id(edge.target);
-                if (is_zone_mapped(zone_v)) {
-                    const NodeMaster& node_v = g_node_zones[zone_v][edge.target - g_zone_offsets[zone_v]];
+                g_traffic.set_speed(edge_id, speed);
+                const NodeMaster& node_u = g_nodes[find_node_idx_for_edge(edge_id)];
+                if (edge.target < g_node_count) {
+                    const NodeMaster& node_v = g_nodes[edge.target];
                     double ratio = (edge.speed_limit > 0) ? (double)speed / edge.speed_limit : 1.0;
                     segments.push_back(node_u.lat_e7 * 1e-7); segments.push_back(node_u.lon_e7 * 1e-7);
                     segments.push_back(node_v.lat_e7 * 1e-7); segments.push_back(node_v.lon_e7 * 1e-7);
@@ -1219,7 +1157,7 @@ Java_com_vayunmathur_maps_util_OfflineRouter_updateTrafficNative(JNIEnv* env, jo
             }
         }
     }
-    env->ReleaseIntArrayElements(edge_ids, ids_ptr, JNI_ABORT); env->ReleaseByteArrayElements(speeds, speeds_ptr, JNI_ABORT);
+    env->ReleaseLongArrayElements(edge_ids, ids_ptr, JNI_ABORT); env->ReleaseByteArrayElements(speeds, speeds_ptr, JNI_ABORT);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1355,41 +1293,4 @@ Java_com_vayunmathur_maps_util_OfflineRouter_getTrafficTileNative(JNIEnv* env, j
 extern "C" JNIEXPORT void JNICALL
 Java_com_vayunmathur_maps_util_OfflineRouter_ensureTrafficLoadedNative(JNIEnv* env, jobject thiz, jdouble lat, jdouble lon, jboolean force_async) {
     ensure_traffic_loaded(env, thiz, (int32_t)(lat * 1e7), (int32_t)(lon * 1e7), force_async);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_vayunmathur_maps_util_OfflineRouter_ensureZoneLoadedNative(JNIEnv* env, jobject thiz, jint zone_id) {
-    if (zone_id < 0 || zone_id >= NUM_ZONES) return false;
-    if (g_node_zones[zone_id] != nullptr) return true;
-    if (g_base_path.empty()) return false;
-
-    auto m_file = [&](const std::string& p, size_t& s) -> void* {
-        s = 0; int fd = open(p.c_str(), O_RDONLY); if (fd < 0) return nullptr;
-        s = lseek(fd, 0, SEEK_END); void* a = mmap(nullptr, s, PROT_READ, MAP_SHARED, fd, 0); close(fd);
-        return (a == MAP_FAILED) ? nullptr : a;
-    };
-
-    size_t s_n, s_e, s_t, s_ta;
-    void* nodes = m_file(g_base_path + "nodes_zone_" + std::to_string(zone_id) + ".bin", s_n);
-    if (!nodes) return false;
-
-    g_node_zones[zone_id] = (NodeMaster*)nodes;
-    g_edge_zones[zone_id] = (Edge*)m_file(g_base_path + "edges_zone_" + std::to_string(zone_id) + ".bin", s_e);
-    g_edge_count_in_zone[zone_id] = s_e / sizeof(Edge);
-    g_transit_voyages[zone_id] = (TransitVoyageCompact*)m_file(g_base_path + "transit_voyages_zone_" + std::to_string(zone_id) + ".bin", s_t);
-    g_transit_voyage_count[zone_id] = s_t / sizeof(TransitVoyageCompact);
-    g_transit_attributes[zone_id] = (TransitAttribute*)m_file(g_base_path + "transit_attributes_zone_" + std::to_string(zone_id) + ".bin", s_ta);
-
-    if (g_intermediate_mmap_ptr && g_intermediate_zone_offsets) {
-        uint64_t start = g_intermediate_zone_offsets[zone_id];
-        uint64_t end = g_intermediate_zone_offsets[zone_id + 1];
-        if (start < end) {
-            g_intermediate_edge_offsets[zone_id] = (uint32_t*)((char*)g_intermediate_mmap_ptr + start);
-            uint32_t edge_count = g_edge_count_in_zone[zone_id];
-            g_intermediate_data[zone_id] = (uint8_t*)((char*)g_intermediate_mmap_ptr + start + (edge_count + 1) * sizeof(uint32_t));
-        }
-    }
-
-    LOGD("Native ensureZoneLoadedNative: zone %d LOADED", zone_id);
-    return true;
 }
