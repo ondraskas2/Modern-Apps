@@ -33,3 +33,36 @@ internal fun withServiceDataFlag(serviceData: String?, key: String, value: Boole
 
 internal fun withMessageRequestFlag(serviceData: String?, value: Boolean): String =
     withServiceDataFlag(serviceData, MESSAGE_REQUEST_KEY, value)
+
+/**
+ * Overlay [incoming] serviceData JSON keys onto [existing], so independent
+ * producers (e.g. a group's participantNames update vs. a separate
+ * message-request flag) don't clobber each other's keys. Incoming keys win;
+ * keys only in existing are preserved. Falls back to the freshest non-null
+ * value if either side isn't valid JSON.
+ */
+internal fun mergeServiceData(existing: String?, incoming: String?): String? {
+    if (existing.isNullOrBlank()) return incoming
+    if (incoming.isNullOrBlank()) return existing
+    return runCatching {
+        val base = JSONObject(existing)
+        val inc = JSONObject(incoming)
+        for (key in inc.keys()) base.put(key, inc.get(key))
+        base.toString()
+    }.getOrDefault(incoming)
+}
+
+/**
+ * Participant display names for a group conversation, read from the
+ * [Conversation.serviceData] JSON array under key "participantNames".
+ * Platform clients populate this on the group's ConversationUpdate.
+ */
+fun Conversation.participantNames(): List<String> {
+    val sd = serviceData ?: return emptyList()
+    return runCatching {
+        val arr = JSONObject(sd).optJSONArray("participantNames") ?: return emptyList()
+        (0 until arr.length()).mapNotNull { i ->
+            arr.optString(i).takeIf { it.isNotBlank() }
+        }
+    }.getOrDefault(emptyList())
+}

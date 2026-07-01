@@ -177,3 +177,58 @@ an Accept/Block/Delete bar in the conversation + a "Message request" badge in th
 Build: the `:whatsapp-signal` module (classic X3DH for WhatsApp) source was lost/untracked;
 its prebuilt shaded jar was vendored to `whatsapp-signal/libs/` and re-exposed so `:messages`
 configures + compiles. Follow-up: properly restore that module's shadow build.
+
+---
+
+## 6. Group chats — per-message sender name (task #40)
+
+Shared side is implemented; platform devs only populate fields on their GROUP events.
+
+Per-message sender (gmessages/Events.kt):
+- `GMEvent.MessageUpdate`: `senderName: String?` (existing) + `senderId: String? = null` (new)
+- `GMEvent.IncomingMessage`: `senderName: String? = null` + `senderId: String? = null` (new)
+- For GROUP messages set senderName = the individual sender's display name, senderId = a
+  stable per-sender id (ACI / tg userId / JID / fbid). Keep the CONVERSATION identity in
+  `peerName` (group name), NOT the sender. 1:1 chats leave both null → UI falls back to peer.
+
+Group flag + participants:
+- `ConversationUpdate.isGroup = true` for group threads (+ `participantCount` if known).
+- Participant display names: JSON string array under key `"participantNames"` in
+  `ConversationUpdate.serviceData` (merge — preserve `isMessageRequest`/`blocked`). Read via
+  `Conversation.participantNames()`.
+
+Storage/UI (shared, done):
+- `Message` gains `sender_name` (existing) + `sender_id` columns; DB version 5 → 6
+  (`fallbackToDestructiveMigration` — local cache wiped once on upgrade).
+- `SessionManager.handleEvent` writes `senderId` on both message events and uses
+  `senderName ?: peerName` for incoming.
+- `ConversationScreen` shows the sender name once per consecutive same-sender run (coalesced
+  by `senderId ?: senderName`) when `conversation.isGroup`; group header subtitle shows
+  participant names or "N participants". 1:1 chats unchanged.
+
+---
+
+## 7. Incoming media attachments (task #44/#45 shared plumbing)
+
+URL-based inline media for received messages (no download pipeline — for sources whose media
+URLs are directly fetchable, e.g. Instagram's signed CDN links). Any platform can use it.
+
+Attach via the TYPED field on both message events (default empty → additive):
+- `GMEvent.IncomingMessage.attachments: List<MessageAttachment>`
+- `GMEvent.MessageUpdate.attachments: List<MessageAttachment>` (history backfill)
+
+Shared type `com.vayunmathur.messages.data.MessageAttachment` (@Serializable):
+`url`, `previewUrl`, `mimeType`, `attachmentType` (image|video|audio|sticker|file|share),
+`fileName`, `title`, `actionUrl`, `width`, `height`.
+
+Storage/UI (shared, done):
+- `SessionManager.handleEvent` serializes `attachments` → `Message.media_json`
+  (DB version 6 → 7, `fallbackToDestructiveMigration`).
+- `ConversationScreen` renders inline by type: image/sticker → Coil `AsyncImage`; video →
+  poster + play overlay (tap opens `url`); share → card (`previewUrl` + `title`, tap →
+  `actionUrl`); audio/file → chip (tap opens `url`). A bare `[Attachment]`/`[Image]`
+  placeholder body is suppressed when real attachments exist; genuine captions are kept.
+
+Note: an `attachmentsJson`-string variant was considered (#45) but we kept the typed
+`List<MessageAttachment>` contract, which wa-meta-dev already emits via
+`MetaProtocol.toSharedAttachments(...)`. Platform devs pass the typed list — no JSON hand-building.

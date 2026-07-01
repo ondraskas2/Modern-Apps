@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.vayunmathur.messages.data.Conversation
 import com.vayunmathur.messages.data.Message
+import com.vayunmathur.messages.data.MessageAttachment
 import com.vayunmathur.messages.data.MessageDirection
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.data.MessageState
@@ -21,6 +22,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -815,7 +818,10 @@ object MessagesSessionManager {
                 // (no schema bump). Sources that signal via serviceData
                 // directly (Signal) already carry it; honor the dedicated
                 // event field too without clobbering an existing flag.
-                val baseServiceData = event.serviceData ?: existing?.serviceData
+                // Merge serviceData key-by-key so independent producers
+                // (group participantNames vs. the message-request flag from a
+                // separate event) don't clobber each other. Incoming wins.
+                val baseServiceData = mergeServiceData(existing?.serviceData, event.serviceData)
                 val mergedServiceData = if (event.isMessageRequest) {
                     withMessageRequestFlag(baseServiceData, true)
                 } else {
@@ -851,8 +857,10 @@ object MessagesSessionManager {
                         state = if (event.outgoing) MessageState.SENT else MessageState.DELIVERED,
                         timestamp = event.timestamp,
                         senderName = event.senderName,
+                        senderId = event.senderId,
                         reactionsJson = event.reactionsJson,
                         serviceData = event.serviceData,
+                        mediaJson = attachmentsToJson(event.attachments),
                     )
                 )
             }
@@ -887,7 +895,12 @@ object MessagesSessionManager {
                         direction = MessageDirection.INCOMING,
                         state = MessageState.DELIVERED,
                         timestamp = event.timestamp,
-                        senderName = event.peerName,
+                        // In groups the sender differs from the conversation
+                        // peer; prefer the explicit sender, fall back to peer
+                        // (1:1 chats leave senderName null).
+                        senderName = event.senderName ?: event.peerName,
+                        senderId = event.senderId,
+                        mediaJson = attachmentsToJson(event.attachments),
                     )
                 )
                 if (backfillComplete[event.source] == true) {
@@ -925,6 +938,10 @@ object MessagesSessionManager {
         conversationId.startsWith("${MessageSource.INSTAGRAM.idPrefix}:") -> MessageSource.INSTAGRAM
         else -> null
     }
+
+    private fun attachmentsToJson(attachments: List<MessageAttachment>): String? =
+        if (attachments.isEmpty()) null
+        else Json.encodeToString(ListSerializer(MessageAttachment.serializer()), attachments)
 
     /** ≈ year 5138 in epoch-ms. Any persisted `last_ts` larger than this
      *  is almost certainly a stale microsecond value from before the

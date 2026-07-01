@@ -11,12 +11,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -61,14 +63,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.vayunmathur.library.ui.IconAttachment
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconNavigation
+import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.library.util.LocalSnackbarHostState
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.messages.R
 import com.vayunmathur.messages.Route
 import com.vayunmathur.messages.data.Conversation
 import com.vayunmathur.messages.data.Message
+import com.vayunmathur.messages.data.MessageAttachment
 import com.vayunmathur.messages.data.MessageDirection
 import com.vayunmathur.messages.data.MessageSource
 import com.vayunmathur.messages.data.MessageState
@@ -80,6 +85,7 @@ import com.vayunmathur.messages.util.MessagesViewModel
 import com.vayunmathur.messages.util.ReactionAction
 import com.vayunmathur.messages.util.isMessageRequest
 import com.vayunmathur.messages.util.mediaCapabilities
+import com.vayunmathur.messages.util.participantNames
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -221,11 +227,25 @@ fun ConversationScreen(
                                 fontWeight = FontWeight.SemiBold,
                             )
                             conversation?.let {
-                                Text(
-                                    it.conversationType ?: if (it.isGroup) "Group" else "",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                val subtitle = if (it.isGroup) {
+                                    val names = it.participantNames()
+                                    when {
+                                        names.isNotEmpty() -> names.joinToString(", ")
+                                        it.participantCount > 0 -> "${it.participantCount} participants"
+                                        else -> "Group"
+                                    }
+                                } else {
+                                    it.conversationType ?: ""
+                                }
+                                if (subtitle.isNotEmpty()) {
+                                    Text(
+                                        subtitle,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
@@ -493,7 +513,7 @@ private sealed interface ChatItem {
 private fun buildItems(messages: List<Message>): List<ChatItem> {
     val out = mutableListOf<ChatItem>()
     var lastDayKey: Long = Long.MIN_VALUE
-    var lastSender: String? = null
+    var lastSenderKey: String? = null
     var lastDirection: MessageDirection? = null
     messages.forEachIndexed { idx, m ->
         val dayKey = startOfDayEpoch(m.timestamp)
@@ -501,13 +521,16 @@ private fun buildItems(messages: List<Message>): List<ChatItem> {
             out += ChatItem.DayDivider(dayLabel(m.timestamp), dayKey)
             lastDayKey = dayKey
             // Day-divider always breaks a sender run.
-            lastSender = null
+            lastSenderKey = null
             lastDirection = null
         }
+        // Coalesce by a stable sender key (senderId when present, else the
+        // display name) so two group members sharing a name don't merge.
+        val senderKey = m.senderId ?: m.senderName
         val nextMessage = messages.getOrNull(idx + 1)
-        val sameRunAsPrev = m.senderName == lastSender && m.direction == lastDirection
+        val sameRunAsPrev = senderKey == lastSenderKey && m.direction == lastDirection
         val sameRunAsNext = nextMessage != null &&
-            nextMessage.senderName == m.senderName &&
+            (nextMessage.senderId ?: nextMessage.senderName) == senderKey &&
             nextMessage.direction == m.direction &&
             startOfDayEpoch(nextMessage.timestamp) == dayKey
         out += ChatItem.Msg(
@@ -516,7 +539,7 @@ private fun buildItems(messages: List<Message>): List<ChatItem> {
             isFirstInRun = !sameRunAsPrev,
             isLastInRun = !sameRunAsNext,
         )
-        lastSender = m.senderName
+        lastSenderKey = senderKey
         lastDirection = m.direction
     }
     return out
@@ -541,6 +564,128 @@ private fun DayDivider(label: String) {
         HorizontalDivider(Modifier.weight(1f))
     }
 }
+
+private fun parseAttachments(json: String?): List<MessageAttachment> {
+    if (json.isNullOrBlank()) return emptyList()
+    return runCatching {
+        Json.decodeFromString(ListSerializer(MessageAttachment.serializer()), json)
+    }.getOrNull().orEmpty()
+}
+
+private fun isPlaceholderBody(body: String): Boolean {
+    val t = body.trim()
+    return t.startsWith("[") && t.endsWith("]") && t.length <= 20
+}
+
+/** Render one inline attachment inside a message bubble. */
+@Composable
+private fun AttachmentView(att: MessageAttachment) {
+    val ctx = LocalContext.current
+    val media = att.url ?: att.previewUrl
+    val ratio = if (att.width > 0 && att.height > 0) {
+        att.width.toFloat() / att.height.toFloat()
+    } else null
+
+    fun open(url: String?) {
+        val target = url ?: return
+        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target))) }
+    }
+
+    when (att.attachmentType) {
+        "image", "sticker" -> {
+            if (media != null) {
+                val isSticker = att.attachmentType == "sticker"
+                AsyncImage(
+                    model = media,
+                    contentDescription = att.title ?: att.attachmentType,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .widthIn(max = if (isSticker) 140.dp else 260.dp)
+                        .let { m -> if (ratio != null) m.aspectRatio(ratio) else m }
+                        .clip(RoundedCornerShape(12.dp)),
+                )
+            }
+        }
+        "video" -> {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .let { m -> if (ratio != null) m.aspectRatio(ratio) else m }
+                    .clip(RoundedCornerShape(12.dp))
+                    .combinedClickableSafe { open(att.url ?: att.previewUrl) },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (att.previewUrl != null || att.url != null) {
+                    AsyncImage(
+                        model = att.previewUrl ?: att.url,
+                        contentDescription = att.title ?: "video",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                IconPlay(tint = Color.White)
+            }
+        }
+        "share" -> {
+            ShareCard(att, onClick = { open(att.actionUrl ?: att.url) })
+        }
+        "audio" -> {
+            AttachmentChip(label = att.fileName ?: "Voice message") { open(att.url) }
+        }
+        else -> {
+            AttachmentChip(label = att.fileName ?: "Attachment") { open(att.url) }
+        }
+    }
+}
+
+@Composable
+private fun ShareCard(att: MessageAttachment, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .padding(4.dp)
+            .combinedClickableSafe(onClick),
+    ) {
+        Column {
+            att.previewUrl?.let {
+                AsyncImage(
+                    model = it,
+                    contentDescription = att.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp),
+                )
+            }
+            Text(
+                att.title ?: att.actionUrl ?: "Shared link",
+                modifier = Modifier.padding(10.dp),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AttachmentChip(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .padding(10.dp)
+            .combinedClickableSafe(onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconAttachment()
+        Text(label, modifier = Modifier.padding(start = 8.dp), fontSize = 14.sp)
+    }
+}
+
+/** clickable that also works inside the long-press bubble without needing
+ *  the experimental combinedClickable ceremony at each call site. */
+private fun Modifier.combinedClickableSafe(onClick: () -> Unit): Modifier =
+    this.clickable(onClick = onClick)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -582,6 +727,11 @@ private fun MessageBubble(
                 fontWeight = FontWeight.Medium,
             )
         }
+        val attachments = remember(msg.mediaJson) { parseAttachments(msg.mediaJson) }
+        // Suppress a bare "[Image]"/"[Attachment]" placeholder body once the
+        // real media is available; keep genuine captions.
+        val showBody = msg.body.isNotBlank() &&
+            !(attachments.isNotEmpty() && isPlaceholderBody(msg.body))
         Surface(
             color = bubbleColor,
             contentColor = textColor,
@@ -598,11 +748,16 @@ private fun MessageBubble(
                     } else mod
                 },
         ) {
-            Text(
-                msg.body,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                fontSize = 15.sp,
-            )
+            Column {
+                attachments.forEach { AttachmentView(it) }
+                if (showBody) {
+                    Text(
+                        msg.body,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        fontSize = 15.sp,
+                    )
+                }
+            }
         }
         ReactionsRow(msg.reactionsJson, alignToEnd = isOutgoing)
         if (isLastInRun) {

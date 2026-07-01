@@ -86,7 +86,7 @@ class MessagesConverters {
 
 @androidx.room.Database(
     entities = [Conversation::class, Message::class],
-    version = 5,
+    version = 7,
     exportSchema = false,
 )
 @TypeConverters(MessagesConverters::class)

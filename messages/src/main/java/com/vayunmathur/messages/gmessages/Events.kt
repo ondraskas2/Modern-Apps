@@ -1,5 +1,6 @@
 package com.vayunmathur.messages.gmessages
 
+import com.vayunmathur.messages.data.MessageAttachment
 import com.vayunmathur.messages.data.MessageSource
 
 /**
@@ -49,6 +50,10 @@ sealed interface GMEvent {
         val outgoing: Boolean,
         val timestamp: Long,
         val senderName: String?,
+        /** Stable per-sender id (platform-specific: ACI, user id, JID, …).
+         *  Used to coalesce consecutive same-sender bubbles in group chats
+         *  even when two participants share a display name. */
+        val senderId: String? = null,
         val reactionsJson: String? = null,
         /** Downloaded media bytes (null if no media or download failed). */
         val mediaData: ByteArray? = null,
@@ -58,6 +63,8 @@ sealed interface GMEvent {
         val statusType: String? = null,
         /** Service-specific JSON metadata to persist on the message row. */
         val serviceData: String? = null,
+        /** Inline media attachments to render (URL-based). Empty = none. */
+        val attachments: List<MessageAttachment> = emptyList(),
     ) : GMEvent
 
     /** A NEW inbound message just arrived. Distinct from MessageUpdate
@@ -70,6 +77,14 @@ sealed interface GMEvent {
         val peerName: String?,
         val peerPhone: String?,
         val timestamp: Long,
+        /** Display name of the actual message sender. In group chats this
+         *  is the individual participant (NOT [peerName], which identifies
+         *  the conversation). Null in 1:1 chats → falls back to [peerName]. */
+        val senderName: String? = null,
+        /** Stable per-sender id for the actual sender (see MessageUpdate.senderId). */
+        val senderId: String? = null,
+        /** Inline media attachments to render (URL-based). Empty = none. */
+        val attachments: List<MessageAttachment> = emptyList(),
     ) : GMEvent
 
     /** A message was deleted on the remote side (or by us). */
