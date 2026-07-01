@@ -86,6 +86,16 @@ class MtProtoConnection(
             authKeyId = result.authKeyId
             salt = result.serverSalt
             sessionId = result.sessionId
+            // Learn the server-clock offset straight from the handshake so the FIRST
+            // authenticated request already uses server-based msg_ids (and incoming
+            // msg_id validation uses the right clock). Without this, a skewed local
+            // clock makes every post-login request fail (bad_msg 16/17/32).
+            val localTime = System.currentTimeMillis() / 1000
+            serverTimeOffset = result.serverTime.toLong() - localTime
+            serverTimeOffsetSet = true
+            MessageId.setTimeOffsetSeconds(serverTimeOffset)
+            MessageId.reset()
+            Log.d(TAG, "Server time offset from handshake: ${serverTimeOffset}s (applied to msg_id gen + validation)")
         }
         connected = true
         seqNo.set(0)
@@ -218,12 +228,27 @@ class MtProtoConnection(
                         Log.w(TAG, "Session ID mismatch, rejecting message")
                         continue
                     }
-                    val nowSeconds = (System.currentTimeMillis() / 1000) + serverTimeOffset
-                    if (!MessageId.checkMessageId(nowSeconds, decrypted.messageId)) {
-                        Log.w(TAG, "Message ID time validation failed, rejecting")
+                    val serverMsgId = decrypted.messageId
+                    // A server msg_id encodes SERVER time and is authoritative. Never drop a
+                    // valid server message against our own (possibly skewed) clock — instead
+                    // sync our time offset FROM it. This covers: reconnect with a persisted
+                    // auth key (handshake skipped, offset never set), a badly skewed device
+                    // clock (e.g. hotel wifi, ~30min off), and gradual drift. Only genuinely
+                    // malformed ids (wrong type bits) are rejected.
+                    if (!MessageId.isServerType(serverMsgId)) {
+                        Log.w(TAG, "Rejecting non-server msg_id 0x${serverMsgId.toULong().toString(16)}")
                         continue
                     }
-                    if (!MessageId.consume(decrypted.messageId)) {
+                    val localNow = System.currentTimeMillis() / 1000
+                    if (!serverTimeOffsetSet ||
+                        !MessageId.checkMessageId(localNow + serverTimeOffset, serverMsgId)
+                    ) {
+                        serverTimeOffset = MessageId.timeSeconds(serverMsgId) - localNow
+                        serverTimeOffsetSet = true
+                        MessageId.setTimeOffsetSeconds(serverTimeOffset)
+                        Log.d(TAG, "Synced server time offset from inbound msg: ${serverTimeOffset}s")
+                    }
+                    if (!MessageId.consume(serverMsgId)) {
                         Log.w(TAG, "Duplicate message ID detected, rejecting")
                         continue
                     }
@@ -315,37 +340,31 @@ class MtProtoConnection(
                 // Codes 16/17/20 are clock-related (msg_id too low/high, msg too old).
                 // Resync the server time offset and transparently resend the request
                 // rather than failing it. Ref gotd mtproto bad-msg handling.
-                val isTimeError = notification.errorCode == 16 ||
-                    notification.errorCode == 17 || notification.errorCode == 20
+                val code = notification.errorCode
+                // 16/17 = msg_id too low/high, 20 = msg too old → our clock is skewed.
+                val isTimeError = code == 16 || code == 17 || code == 20
+                // 32/33/34/35 = bad msg_seqno (too low/high / even-odd mismatch).
+                val isSeqError = code == 32 || code == 33 || code == 34 || code == 35
                 if (isTimeError) {
-                    if (!serverTimeOffsetSet) {
-                        val serverTime = MessageId.timeSeconds(msgId)
-                        val localTime = System.currentTimeMillis() / 1000
-                        serverTimeOffset = serverTime - localTime
-                        serverTimeOffsetSet = true
-                        MessageId.reset()
-                        updateSalt()
-                    }
-                    Log.d(TAG, "Time resynced: offset=${serverTimeOffset}s (error code ${notification.errorCode})")
-                    val payload = rpcEngine.getPendingPayload(notification.badMsgId)
-                    if (payload != null) {
-                        try {
-                            val newMsgId = send(payload, true)
-                            rpcEngine.migratePending(notification.badMsgId, newMsgId)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Re-send after bad_msg_notification failed: ${e.message}")
-                            rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
-                                "bad_msg_notification error code ${notification.errorCode}")
-                        }
-                    } else {
-                        rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
-                            "bad_msg_notification error code ${notification.errorCode}")
-                    }
+                    // Always resync the offset from this server message's msg_id (the
+                    // clock may have drifted since the handshake) and regenerate ids.
+                    val serverTime = MessageId.timeSeconds(msgId)
+                    val localTime = System.currentTimeMillis() / 1000
+                    serverTimeOffset = serverTime - localTime
+                    serverTimeOffsetSet = true
+                    MessageId.setTimeOffsetSeconds(serverTimeOffset)
+                    MessageId.reset()
+                    updateSalt()
+                    Log.d(TAG, "Time resynced: offset=${serverTimeOffset}s (bad_msg $code)")
+                    resendPending(notification.badMsgId, code)
+                } else if (isSeqError) {
+                    // Resend with a fresh msg_id + the next seqno (send() assigns both),
+                    // instead of blind-retrying the same bad seqno to the retry limit.
+                    Log.d(TAG, "Seqno error bad_msg $code, resending badMsgId=${notification.badMsgId}")
+                    resendPending(notification.badMsgId, code)
                 } else {
-                    // Sequence-number / structural errors (18/19/32-35 etc.) are not
-                    // transparently recoverable; surface them to the caller.
-                    rpcEngine.notifyError(notification.badMsgId, notification.errorCode,
-                        "bad_msg_notification error code ${notification.errorCode}")
+                    rpcEngine.notifyError(notification.badMsgId, code,
+                        "bad_msg_notification error code $code")
                 }
             }
             MessageFraming.TYPE_FUTURE_SALTS -> {
@@ -366,13 +385,14 @@ class MtProtoConnection(
                 buf.int32()
                 val ns = MessageFraming.parseNewSession(buf)
                 salt = ns.serverSalt
-                if (!serverTimeOffsetSet) {
-                    val serverTime = MessageId.timeSeconds(ns.firstMsgId)
-                    val localTime = System.currentTimeMillis() / 1000
-                    serverTimeOffset = serverTime - localTime
-                    serverTimeOffsetSet = true
-                    Log.d(TAG, "Server time offset set from new session: ${serverTimeOffset}s")
-                }
+                // new_session_created carries an authoritative server msg_id — refresh
+                // the time offset (and apply it to msg_id generation) unconditionally.
+                val serverTime = MessageId.timeSeconds(ns.firstMsgId)
+                val localTime = System.currentTimeMillis() / 1000
+                serverTimeOffset = serverTime - localTime
+                serverTimeOffsetSet = true
+                MessageId.setTimeOffsetSeconds(serverTimeOffset)
+                Log.d(TAG, "Server time offset from new session: ${serverTimeOffset}s")
             }
             else -> {
                 try {
@@ -469,6 +489,23 @@ class MtProtoConnection(
                 salt = valid.salt
                 Log.d(TAG, "Salt updated from future salts")
             }
+        }
+    }
+
+    // Re-send the payload of a message the server rejected with a recoverable
+    // bad_msg_notification, using a fresh msg_id + seqno (and current salt/offset).
+    private suspend fun resendPending(badMsgId: Long, code: Int) {
+        val payload = rpcEngine.getPendingPayload(badMsgId)
+        if (payload == null) {
+            rpcEngine.notifyError(badMsgId, code, "bad_msg_notification error code $code")
+            return
+        }
+        try {
+            val newMsgId = send(payload, true)
+            rpcEngine.migratePending(badMsgId, newMsgId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Re-send after bad_msg $code failed: ${e.message}")
+            rpcEngine.notifyError(badMsgId, code, "bad_msg_notification error code $code")
         }
     }
 

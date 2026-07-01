@@ -7,6 +7,17 @@ object MessageId {
     private const val MIN_RESOLUTION_NANOS = 10L
     private const val MESSAGE_ID_MODULO = 4L
 
+    // Offset (seconds) between the server clock and this device's clock, learned from
+    // the handshake / new_session_created / bad_msg time errors. msg_id encodes
+    // unixtime<<32 and MUST use SERVER time, otherwise a skewed local clock (e.g.
+    // hotel wifi) makes every outgoing msg_id invalid → bad_msg 16/17/32 and the
+    // server rejects all authenticated requests.
+    private val timeOffsetSeconds = AtomicLong(0)
+
+    fun setTimeOffsetSeconds(seconds: Long) {
+        timeOffsetSeconds.set(seconds)
+    }
+
     private const val YIELD_CLIENT = 0L
     private const val YIELD_SERVER_RESPONSE = 1L
     private const val YIELD_FROM_SERVER = 3L
@@ -19,7 +30,7 @@ object MessageId {
     }
 
     fun generate(): Long {
-        val nowNano = System.currentTimeMillis() * 1_000_000L
+        val nowNano = (System.currentTimeMillis() + timeOffsetSeconds.get() * 1000L) * 1_000_000L
         val nano = lastNano.updateAndGet { prev ->
             if (nowNano > prev) nowNano else prev + MIN_RESOLUTION_NANOS
         }
@@ -49,6 +60,11 @@ object MessageId {
     }
 
     fun timeSeconds(id: Long): Long = id ushr 32
+
+    fun isServerType(id: Long): Boolean {
+        val t = type(id)
+        return t == MessageType.FROM_SERVER || t == MessageType.SERVER_RESPONSE
+    }
 
     fun checkMessageId(nowSeconds: Long, rawId: Long): Boolean {
         val t = type(rawId)
