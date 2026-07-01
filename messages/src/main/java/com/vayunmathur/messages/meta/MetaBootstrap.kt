@@ -3,6 +3,8 @@ package com.vayunmathur.messages.meta
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -41,6 +43,12 @@ data class MetaConfig(
     val syncParamsMailbox: String = "",
     val syncParamsContact: String = "",
     val syncParamsE2ee: String = "",
+    // Page-embedded initial inbox snapshot (RelayPrefetchedStreamCache →
+    // lightspeed_web_request_for_igd). This is where the real thread rows (deleteThenInsertThread)
+    // live; the socket only carries ranges. [initialSnapshotPayload] is the inner LightSpeedData
+    // JSON string; [initialSnapshotSp] is the dependency name list (used as the /ls_resp "sp").
+    val initialSnapshotPayload: String? = null,
+    val initialSnapshotSp: List<String> = emptyList(),
     val loaded: Boolean = false,
 ) {
     fun defaultAppId(platform: MetaAuthData.Platform): Long = when {
@@ -73,6 +81,9 @@ object MetaBootstrap {
     // Matches ["MqttWebDeviceID",[],{"clientID":"..."} ...] in the SSJS config bundle.
     private val clientIdPattern =
         Regex("""\["MqttWebDeviceID",\[\],\{"clientID":"([^"]+)"""")
+    // Page-embedded Lightspeed snapshot: "payload" is a stringified LightSpeedData JSON. We select
+    // the payload that actually carries thread rows by content (see parseInitialSnapshot).
+    private val snapshotPayloadPattern = Regex(""""payload"\s*:\s*"((?:\\.|[^"\\])*)"""")
     private val parentThreadKeyPattern = Regex("""["']parent_thread_key["']\s*:\s*(-?\d+)""")
     // "version":123... inside the LSPlatformGraphQLLightspeedRequest preloader payload (the primary
     // schema-version source on the inbox page). Values may be JSON-in-JSON escaped ("version":...
@@ -134,6 +145,7 @@ object MetaBootstrap {
             val clientId = clientIdPattern.find(html)?.groupValues?.get(1) ?: ""
 
             val sync = parseSyncParams(html)
+            val snapshotPayload = parseInitialSnapshot(html)
 
             val config = MetaConfig(
                 versionId = versionId,
@@ -147,13 +159,18 @@ object MetaBootstrap {
                 syncParamsMailbox = sync.first,
                 syncParamsContact = sync.second,
                 syncParamsE2ee = sync.third,
+                initialSnapshotPayload = snapshotPayload,
+                // Resolve the snapshot's procedures via the full SP_TABLE (the page block's own
+                // dependency list is unreliable / may belong to the wrong block).
+                initialSnapshotSp = if (snapshotPayload != null) LightspeedDecoder.allDependencyNames() else emptyList(),
                 loaded = versionId != 0L,
             )
             Log.i(
                 TAG,
                 "Bootstrap for ${authData.platform}: versionId=$versionId appId=$appId " +
                     "broker=$broker ptks=$parentThreadKeys lsd=${lsd.isNotEmpty()} " +
-                    "clientId=${clientId.isNotEmpty()} loaded=${config.loaded}",
+                    "clientId=${clientId.isNotEmpty()} snapshot=${snapshotPayload != null}(len=${snapshotPayload?.length ?: 0}) " +
+                    "loaded=${config.loaded}",
             )
             config
         } catch (e: Exception) {
@@ -220,6 +237,34 @@ object MetaBootstrap {
         if (idx < 0) return null
         val region = html.substring(idx, minOf(idx + 8000, html.length))
         return lightspeedVersionPattern.find(region)?.groupValues?.get(1)?.toLongOrNull()
+    }
+
+    /**
+     * Extract the page-embedded Lightspeed inbox snapshot payload — the one that actually carries
+     * thread rows. The page contains SEVERAL lightspeed payloads (sync-transaction wrappers, ranges,
+     * etc.); we select by CONTENT: the payload whose steps reference deleteThenInsertThread /
+     * updateOrInsertThread. Returns the inner LightSpeedData JSON string, or null if none carries
+     * threads. Resolution uses the full SP_TABLE (see [load]), so we don't need the block's own
+     * dependency list. Mirrors Go modules.go LSPlatformGraphQLLightspeedRequestForIGDQuery.
+     */
+    private fun parseInitialSnapshot(html: String): String? {
+        // The page contains several lightspeed payloads (sync-transaction wrappers, ranges, etc.);
+        // pick by CONTENT — the payload whose steps reference deleteThenInsertThread/updateOrInsertThread.
+        for (m in snapshotPayloadPattern.findAll(html)) {
+            val escaped = m.groupValues[1]
+            if (!escaped.contains("deleteThenInsertThread") && !escaped.contains("updateOrInsertThread")) {
+                continue
+            }
+            val inner = try {
+                Json.parseToJsonElement("\"" + escaped + "\"").jsonPrimitive.content
+            } catch (e: Exception) {
+                continue
+            }
+            if (inner.contains("deleteThenInsertThread") || inner.contains("updateOrInsertThread")) {
+                return inner
+            }
+        }
+        return null
     }
 
     private fun parseSyncParams(html: String): Triple<String, String, String> {

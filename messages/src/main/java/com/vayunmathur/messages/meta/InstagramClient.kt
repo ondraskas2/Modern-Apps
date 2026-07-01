@@ -173,15 +173,23 @@ object InstagramClient {
                             when (evt) {
                                 is MetaProtocol.IncomingEvent.MessageReceived -> {
                                     val msg = evt.message
+                                    // 1:1 peerName = the peer's NAME only (never the numeric
+                                    // senderId, which would clobber the ConversationUpdate title via
+                                    // SessionManager's `peerName ?: existing`). Group: peerName null
+                                    // (keep the group title), sender goes in senderName/senderId.
+                                    val peerName = if (msg.isGroup) null else msg.senderName
                                     _events.emit(
                                         GMEvent.IncomingMessage(
                                             source = MessageSource.INSTAGRAM,
                                             conversationId = "ig:${msg.threadId}",
                                             messageId = msg.messageId,
                                             body = msg.text,
-                                            peerName = msg.senderName ?: msg.senderId,
+                                            peerName = peerName,
                                             peerPhone = null,
                                             timestamp = msg.timestamp,
+                                            senderName = if (msg.isGroup) msg.senderName else null,
+                                            senderId = if (msg.isGroup) msg.senderId else null,
+                                            attachments = MetaProtocol.toSharedAttachments(msg.attachments),
                                         )
                                     )
                                 }
@@ -325,6 +333,8 @@ object InstagramClient {
                                             lastPreview = null,
                                             lastTimestamp = evt.lastActivityTimestampMs,
                                             unreadCount = 0,
+                                            isGroup = evt.isGroup,
+                                            serviceData = MetaProtocol.buildParticipantNamesServiceData(evt.participantNames),
                                         )
                                     )
                                 }
@@ -370,6 +380,26 @@ object InstagramClient {
         backfillJob = scope.launch {
             Log.i(TAG, "Backfill: syncing full thread list via Lightspeed (paginated)")
             val client = mqttClient ?: return@launch
+            // The real thread rows (deleteThenInsertThread) live in the page-embedded snapshot, not
+            // the socket (which only carries ranges). Emit the snapshot through the normal /ls_resp
+            // decode+emit path so the inbox populates.
+            config.initialSnapshotPayload?.let { snapshot ->
+                try {
+                    val bytes = MetaProtocol.buildInitialSnapshotLsResp(snapshot, config.initialSnapshotSp)
+                    client.emitForProcessing(MetaProtocol.MqttMessage(MetaProtocol.TOPIC_LS_RESP, bytes))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Initial snapshot emit failed", e)
+                }
+                // Background: pull a recent history page per thread so conversations show more than
+                // just the last message.
+                scope.launch {
+                    try {
+                        client.backfillRecentMessages(snapshot, config.initialSnapshotSp)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Recent-message backfill failed", e)
+                    }
+                }
+            }
             try {
                 client.backfillThreads()
             } catch (e: Exception) {

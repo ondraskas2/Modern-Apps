@@ -409,23 +409,13 @@ class MetaMqttClient(
         // Callers that need the response's events processed (thread fetches, DB
         // syncs) re-inject it via emitForProcessing().
         val responseData = MetaProtocol.parsePublishResponse(publish.payload)
-        // Debug (#34): log every inbound frame so we can tell server-silent from
-        // response-we-drop, and whether a request_id correlates. Grep "MetaLSDebug".
-        val pendingIds = requestChannels.keys.joinToString(",")
-        Log.i(
-            "MetaLSDebug",
-            "LS← topic=${publish.topic} bytes=${publish.payload.size} " +
-                "reqId=${responseData?.requestId ?: "?"} pending=[$pendingIds]",
-        )
         if (responseData != null && responseData.requestId > 0) {
             val requestIdInt = responseData.requestId.toInt()
             val waiter = requestChannels.remove(requestIdInt)
             if (waiter != null) {
-                Log.i("MetaLSDebug", "LS← matched req=$requestIdInt")
                 waiter.complete(mqttMessage)
                 return
             }
-            Log.i("MetaLSDebug", "LS← reqId=$requestIdInt had NO waiter → emitting as server event")
         }
 
         // Server-initiated message (request_id == 0 or no waiter): emit for
@@ -538,6 +528,33 @@ class MetaMqttClient(
         }
     }
 
+    /**
+     * Eager, bounded per-thread recent-history backfill. The initial snapshot only carries ONE
+     * message per thread (the last), so conversations show a single message. For the most recent
+     * [maxThreads] threads, issue a FetchMessagesTask (task 228, direction=older) referenced at the
+     * thread's last message, and re-inject the response so its messages flow through the normal
+     * decode→IncomingMessage path. Best-effort + background: a failed/empty fetch just leaves that
+     * thread with its snapshot message. Mirrors Go backfill.go requestMoreHistory (single page).
+     */
+    suspend fun backfillRecentMessages(snapshotPayload: String, sp: List<String>, maxThreads: Int = 20) {
+        val events = LightspeedDecoder.decodePublishResponse(snapshotPayload, sp)
+        val incoming = MetaProtocol.parseAllEvents(events)
+        val lastMsgIdByThread = incoming
+            .filterIsInstance<MetaProtocol.IncomingEvent.MessageReceived>()
+            .associate { it.message.threadId to it.message.messageId }
+        val threads = incoming
+            .filterIsInstance<MetaProtocol.IncomingEvent.ThreadSynced>()
+            .distinctBy { it.threadId }
+            .take(maxThreads)
+        for (t in threads) {
+            val threadKey = t.threadId.toLongOrNull() ?: continue
+            val refTs = if (t.lastActivityTimestampMs > 0L) t.lastActivityTimestampMs else System.currentTimeMillis()
+            val refId = lastMsgIdByThread[t.threadId] ?: ""
+            val payload = MetaProtocol.buildFetchMessagesPayload(threadKey, refTs, refId, versionId)
+            makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)?.let { emitForProcessing(it) }
+        }
+    }
+
     suspend fun sendPublishPacket(
         topic: String,
         jsonData: String,
@@ -601,8 +618,6 @@ class MetaMqttClient(
 
         val responseDeferred = CompletableDeferred<MetaProtocol.MqttMessage>()
         requestChannels[packetId] = responseDeferred
-
-        Log.i("MetaLSDebug", "LS→ req=$packetId type=$type appId=$appId payload=${payload.take(500)}")
 
         val sentId = sendPublishPacket(MetaProtocol.TOPIC_LS_REQ, lsRequestJson, packetId)
         if (sentId < 0) {

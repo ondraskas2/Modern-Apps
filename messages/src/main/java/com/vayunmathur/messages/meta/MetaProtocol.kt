@@ -402,10 +402,14 @@ object MetaProtocol {
         }
     }
 
+    // Dedicated lenient parser for inbound /ls_resp envelopes: coerceInputValues so a null on any
+    // non-nullable field (with a default) can't abort the whole parse the way "name":null did (#34).
+    private val responseJson = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+
     fun parsePublishResponse(payload: ByteArray): LightspeedDecoder.PublishResponseData? {
         return try {
             val jsonStr = String(payload, Charsets.UTF_8)
-            json.decodeFromString<LightspeedDecoder.PublishResponseData>(jsonStr)
+            responseJson.decodeFromString<LightspeedDecoder.PublishResponseData>(jsonStr)
         } catch (e: Exception) {
             null
         }
@@ -1126,6 +1130,13 @@ object MetaProtocol {
         val fileName: String?,
         val url: String?,
         val size: Long?,
+        val previewUrl: String? = null,
+        // image / video / audio / sticker / file / share
+        val attachmentType: String? = null,
+        val title: String? = null,
+        val actionUrl: String? = null,
+        val width: Int? = null,
+        val height: Int? = null,
     )
 
     data class MetaMessageEnriched(
@@ -1173,6 +1184,8 @@ object MetaProtocol {
             val threadId: String,
             val threadName: String?,
             val lastActivityTimestampMs: Long,
+            val isGroup: Boolean = false,
+            val participantNames: List<String> = emptyList(),
         ) : IncomingEvent
         data class ThreadVerified(
             val threadId: String,
@@ -1188,12 +1201,202 @@ object MetaProtocol {
     }
 
     fun parseAllEvents(events: List<LightspeedDecoder.DecodedEvent>): List<IncomingEvent> {
+        // Pass 1: build contactId → display name from the contact rows in this response so 1:1
+        // thread names (where threadName is empty) can be resolved. IG has no phone numbers — the
+        // name is the contact's fullName (→ username). Mirrors Go userinfo.go GetName/GetUsername.
+        val contactNames = HashMap<String, String>()
+        for (e in events) {
+            when (e.procedureName) {
+                // LSDeleteThenInsertContact: id@0, name(fullName)@9, username(SecondaryName)@41.
+                "LSDeleteThenInsertContact" -> {
+                    val id = e.args.argLong(0)?.toString() ?: continue
+                    val name = e.args.argStr(9) ?: e.args.argStr(41) ?: continue
+                    contactNames[id] = name
+                }
+                // LSVerifyContactRowExists: id@0, name(fullName)@3, username(SecondaryName)@20.
+                "LSVerifyContactRowExists" -> {
+                    val id = e.args.argLong(0)?.toString() ?: continue
+                    val name = e.args.argStr(3) ?: e.args.argStr(20) ?: continue
+                    contactNames[id] = name
+                }
+            }
+        }
+        // Group participant names per thread (LSAddParticipantIdToGroupThread: threadKey@0,
+        // contactId@1) resolved via contactNames — for ConversationUpdate.serviceData.
+        val participantsByThread = HashMap<String, MutableList<String>>()
+        for (e in events) {
+            if (e.procedureName != "LSAddParticipantIdToGroupThread") continue
+            val tid = e.args.argLong(0)?.toString() ?: continue
+            val cid = e.args.argLong(1)?.toString() ?: continue
+            val name = contactNames[cid] ?: continue
+            participantsByThread.getOrPut(tid) { mutableListOf() }.add(name)
+        }
         val result = mutableListOf<IncomingEvent>()
+        val attachmentsByMsg = buildAttachmentMap(events)
         for (event in events) {
-            val parsed = parseSingleEvent(event)
+            val parsed = parseSingleEvent(event, contactNames, attachmentsByMsg, participantsByThread)
             if (parsed != null) result.add(parsed)
         }
         return result
+    }
+
+    /** Maps IG AttachmentType enum ints to a coarse media kind. */
+    private fun attachmentTypeName(t: Long?): String = when (t) {
+        1L, 10L, 15L -> "sticker"
+        2L, 3L, 8L -> "image"
+        4L, 9L -> "video"
+        5L, 12L -> "audio"
+        7L -> "share"
+        else -> "file"
+    }
+
+    /** Prefer a concrete media kind from the MIME. IG delivers many native photos/videos as XMA
+     * rows with an image or video mime — without this they'd be mis-typed "share" and render as a
+     * card instead of inline media. Returns null for non-media (link/post shares). */
+    private fun mediaTypeFromMime(mime: String?): String? = when {
+        mime == null -> null
+        mime.startsWith("image/") -> "image"
+        mime.startsWith("video/") -> "video"
+        mime.startsWith("audio/") -> "audio"
+        else -> null
+    }
+
+    /** Short typed label used as the message body when there's no caption (media renders separately). */
+    private fun attachmentLabel(a: MessageAttachment): String = when (a.attachmentType) {
+        "image" -> "\uD83D\uDCF7 Photo"
+        "video" -> "\uD83C\uDFA5 Video"
+        "audio" -> "\uD83C\uDFA4 Voice message"
+        "sticker" -> "\uD83D\uDDBC\uFE0F Sticker"
+        "share" -> a.title?.let { "\uD83D\uDD17 $it" } ?: "\uD83D\uDD17 Shared post"
+        else -> a.fileName?.let { "\uD83D\uDCCE $it" } ?: "\uD83D\uDCCE Attachment"
+    }
+
+    /**
+     * Build a messageId → primary MessageAttachment map from the separate IG attachment rows in the
+     * same response. Native media (blob/sticker) wins over shares (xma); CTA rows enrich the share
+     * link. URL prefers the playable/full URL, falling back to the preview thumbnail. Arg indices
+     * mirror the Go bridge table/attachments.go.
+     */
+    private fun buildAttachmentMap(events: List<LightspeedDecoder.DecodedEvent>): Map<String, MessageAttachment> {
+        val byMsg = HashMap<String, MessageAttachment>()
+        val ctaByMsg = HashMap<String, Pair<String?, String?>>() // messageId -> (actionUrl, title)
+        for (e in events) {
+            val a = e.args
+            when (e.procedureName) {
+                // LSInsertBlobAttachment: filename@0, playableUrl@3, previewUrl@8, w@14, h@15,
+                // type@29, mime@30, messageId@32, fbid@34.
+                "LSInsertBlobAttachment" -> {
+                    val mid = a.argStr(32) ?: continue
+                    byMsg[mid] = MessageAttachment(
+                        id = a.argStr(34) ?: mid,
+                        mimeType = a.argStr(30) ?: a.argStr(6),
+                        fileName = a.argStr(0),
+                        url = a.argStr(3) ?: a.argStr(8),
+                        size = a.argLong(1),
+                        previewUrl = a.argStr(8),
+                        attachmentType = mediaTypeFromMime(a.argStr(30) ?: a.argStr(6))
+                            ?: attachmentTypeName(a.argLong(29)),
+                        width = a.argLong(14)?.toInt(),
+                        height = a.argLong(15)?.toInt(),
+                    )
+                }
+                // LSInsertStickerAttachment: playableUrl@0, previewUrl@4, w@9, h@10, messageId@18, fbid@19.
+                "LSInsertStickerAttachment" -> {
+                    val mid = a.argStr(18) ?: continue
+                    byMsg[mid] = MessageAttachment(
+                        id = a.argStr(19) ?: mid,
+                        mimeType = a.argStr(3),
+                        fileName = null,
+                        url = a.argStr(0) ?: a.argStr(4),
+                        size = null,
+                        previewUrl = a.argStr(4),
+                        attachmentType = "sticker",
+                        width = a.argLong(9)?.toInt(),
+                        height = a.argLong(10)?.toInt(),
+                    )
+                }
+                // LSInsertXmaAttachment (shares): playableUrl@4, previewUrl@8, w@13, h@14, type@27,
+                // messageId@30, fbid@32, actionUrl@57, title@58, headerTitle@102.
+                "LSInsertXmaAttachment" -> {
+                    val mid = a.argStr(30) ?: continue
+                    if (byMsg[mid] == null) {
+                        byMsg[mid] = MessageAttachment(
+                            id = a.argStr(32) ?: mid,
+                            mimeType = a.argStr(7),
+                            fileName = null,
+                            url = a.argStr(8) ?: a.argStr(4),
+                            size = null,
+                            previewUrl = a.argStr(8),
+                            // Native photos/videos often arrive as XMA with a real media mime →
+                            // type by mime; genuine link/post shares (no media mime) stay "share".
+                            attachmentType = mediaTypeFromMime(a.argStr(7)) ?: "share",
+                            title = a.argStr(58) ?: a.argStr(102),
+                            actionUrl = a.argStr(57),
+                            width = a.argLong(13)?.toInt(),
+                            height = a.argLong(14)?.toInt(),
+                        )
+                    }
+                }
+                // LSInsertAttachment (legacy): filename@1, playableUrl@5, previewUrl@10, type@34,
+                // mime@35, messageId@37, fbid@39, title@66.
+                "LSInsertAttachment" -> {
+                    val mid = a.argStr(37) ?: continue
+                    if (byMsg[mid] == null) {
+                        byMsg[mid] = MessageAttachment(
+                            id = a.argStr(39) ?: mid,
+                            mimeType = a.argStr(35),
+                            fileName = a.argStr(1),
+                            url = a.argStr(5) ?: a.argStr(10),
+                            size = a.argLong(2),
+                            previewUrl = a.argStr(10),
+                            attachmentType = mediaTypeFromMime(a.argStr(35))
+                                ?: attachmentTypeName(a.argLong(34)),
+                            title = a.argStr(66),
+                        )
+                    }
+                }
+                // LSInsertAttachmentCta: messageId@5, title@6, actionUrl@9, nativeUrl@10.
+                "LSInsertAttachmentCta" -> {
+                    val mid = a.argStr(5) ?: continue
+                    ctaByMsg[mid] = (a.argStr(9) ?: a.argStr(10)) to a.argStr(6)
+                }
+            }
+        }
+        // Enrich share attachments with their CTA link/title. A CTA row (LSInsertAttachmentCta,
+        // e.g. igd_web_post_share) means this is a genuine reel/post/link SHARE — force type "share"
+        // (card), even if its XMA carried a video/image mime. Native media has no CTA, so it keeps
+        // its mime-based image/video/audio type and renders inline.
+        for ((mid, cta) in ctaByMsg) {
+            val existing = byMsg[mid] ?: continue
+            byMsg[mid] = existing.copy(
+                attachmentType = "share",
+                actionUrl = existing.actionUrl ?: cta.first,
+                title = existing.title ?: cta.second,
+            )
+        }
+        return byMsg
+    }
+
+    /**
+     * Resolve a thread's display name from LSDeleteThenInsertThread args (verified on-device):
+     *  - Group (threadType@9 == 2): title is threadName@3 (e.g. "stemengers").
+     *  - 1:1 (threadType@9 == 1): threadName@3 is null; the display name ("<handle> · Instagram")
+     *    is at idx 36. (idx 36 on a group is a creation/context snippet, so it's gated to 1:1.)
+     *  - Fallback: the contactId→name map (contactId == 1:1 threadKey).
+     * IG has no phone numbers — never fall back to one. Mirrors Go chatinfo.go/userinfo.go.
+     */
+    private fun resolveThreadName(
+        args: List<Any?>,
+        threadId: String,
+        contactNames: Map<String, String>,
+    ): String? {
+        val name3 = args.argStr(3)
+        if (!name3.isNullOrEmpty()) return name3
+        if (args.argLong(9) == 1L) {
+            val name36 = args.argStr(36)
+            if (!name36.isNullOrEmpty()) return name36
+        }
+        return contactNames[threadId]
     }
 
     // Typed positional accessors for Lightspeed args. Indices match the Go
@@ -1217,7 +1420,12 @@ object MetaProtocol {
         else -> false
     }
 
-    private fun parseSingleEvent(event: LightspeedDecoder.DecodedEvent): IncomingEvent? {
+    private fun parseSingleEvent(
+        event: LightspeedDecoder.DecodedEvent,
+        contactNames: Map<String, String> = emptyMap(),
+        attachmentsByMsg: Map<String, MessageAttachment> = emptyMap(),
+        participantsByThread: Map<String, List<String>> = emptyMap(),
+    ): IncomingEvent? {
         val args = event.args
         return when (event.procedureName) {
             // Shared layout (table/messages.go LSUpsertMessage/LSInsertMessage/
@@ -1232,15 +1440,28 @@ object MetaProtocol {
                 if (isUnsent && event.procedureName == "LSDeleteThenInsertMessage") {
                     return IncomingEvent.MessageDeleted(threadId, messageId)
                 }
+                // text@0 is empty for attachment/sticker/share messages (the content is in separate
+                // attachment rows, matched by messageId). Attach the media and give a typed body
+                // label so it's never blank before/without inline rendering.
+                val rawText = args.argStr(0)
+                val attachment = attachmentsByMsg[messageId]
+                val attachments = if (attachment != null) listOf(attachment) else emptyList()
+                val body = when {
+                    !rawText.isNullOrEmpty() -> rawText
+                    attachment != null -> attachmentLabel(attachment)
+                    (args.argLong(11) ?: 0L) != 0L -> "\uD83D\uDDBC\uFE0F Sticker"
+                    else -> "\uD83D\uDCCE Attachment"
+                }
                 IncomingEvent.MessageReceived(
                     MetaMessageEnriched(
                         messageId = messageId,
                         threadId = threadId,
                         senderId = args.argLong(10)?.toString() ?: "",
-                        senderName = null,
-                        text = args.argStr(0) ?: "",
+                        senderName = contactNames[args.argLong(10)?.toString()],
+                        text = body,
                         timestamp = args.argLong(5) ?: System.currentTimeMillis(),
                         isGroup = (threadId.toLongOrNull() ?: 0) < 0,
+                        attachments = attachments,
                         replyToMessageId = args.argStr(23),
                         isUnsent = isUnsent,
                     )
@@ -1360,16 +1581,28 @@ object MetaProtocol {
                 IncomingEvent.MessageRequestReceived(threadId)
             }
             "LSDeleteThenInsertThread" -> {
-                // lastActivityTimestampMs@0, threadName@3, threadKey@7, folderName@10
+                // lastActivityTimestampMs@0, threadName@3, threadKey@7, threadType@9, folderName@10
                 val threadId = args.argLong(7)?.toString() ?: return null
                 val folderName = args.argStr(10)
                 if (folderName == FOLDER_SPAM) return null
-                IncomingEvent.ThreadSynced(threadId, args.argStr(3), args.argLong(0) ?: 0L)
+                IncomingEvent.ThreadSynced(
+                    threadId = threadId,
+                    threadName = resolveThreadName(args, threadId, contactNames),
+                    lastActivityTimestampMs = args.argLong(0) ?: 0L,
+                    isGroup = args.argLong(9) == 2L,
+                    participantNames = participantsByThread[threadId] ?: emptyList(),
+                )
             }
             "LSUpdateOrInsertThread" -> {
-                // lastActivityTimestampMs@0, threadName@3, threadKey@7
+                // lastActivityTimestampMs@0, threadName@3, threadKey@7, threadType@9
                 val threadId = args.argLong(7)?.toString() ?: return null
-                IncomingEvent.ThreadSynced(threadId, args.argStr(3), args.argLong(0) ?: 0L)
+                IncomingEvent.ThreadSynced(
+                    threadId = threadId,
+                    threadName = resolveThreadName(args, threadId, contactNames),
+                    lastActivityTimestampMs = args.argLong(0) ?: 0L,
+                    isGroup = args.argLong(9) == 2L,
+                    participantNames = participantsByThread[threadId] ?: emptyList(),
+                )
             }
             else -> null
         }
@@ -1404,6 +1637,48 @@ object MetaProtocol {
 
     fun buildAppSettingsJson(versionId: Long): String {
         return json.encodeToString(AppSettingsPublish(schemaVersion = versionId.toString()))
+    }
+
+    @Serializable
+    private data class SnapshotLsResp(
+        @SerialName("request_id") val requestId: Long = 0,
+        val payload: String,
+        val sp: List<String>,
+    )
+
+    /**
+     * Wrap the page-embedded snapshot (inner LightSpeedData JSON [payload] + dependency names [sp])
+     * into a synthetic /ls_resp envelope so it can be pushed through the exact same decode+emit path
+     * as a real socket response (emitForProcessing → handleIncomingMessage → decodePublishResponse).
+     * kotlinx re-escapes [payload] as a JSON string; the decoder unescapes it back.
+     */
+    fun buildInitialSnapshotLsResp(payload: String, sp: List<String>): ByteArray =
+        json.encodeToString(SnapshotLsResp(payload = payload, sp = sp)).toByteArray(Charsets.UTF_8)
+
+    /** Map parsed IG attachments to the shared UI attachment model (data.MessageAttachment). */
+    fun toSharedAttachments(
+        attachments: List<MessageAttachment>,
+    ): List<com.vayunmathur.messages.data.MessageAttachment> =
+        attachments.mapNotNull { a ->
+            val url = a.url ?: a.previewUrl ?: return@mapNotNull null
+            com.vayunmathur.messages.data.MessageAttachment(
+                url = url,
+                previewUrl = a.previewUrl,
+                mimeType = a.mimeType,
+                attachmentType = a.attachmentType ?: "file",
+                fileName = a.fileName,
+                title = a.title,
+                actionUrl = a.actionUrl,
+                width = a.width ?: 0,
+                height = a.height ?: 0,
+            )
+        }
+
+    /** {"participantNames":["a","b"]} for ConversationUpdate.serviceData, or null if empty. */
+    fun buildParticipantNamesServiceData(names: List<String>): String? {
+        if (names.isEmpty()) return null
+        val arr = JsonArray(names.map { JsonPrimitive(it) })
+        return JsonObject(mapOf("participantNames" to arr)).toString()
     }
 
     fun removeVariationSelectors(s: String): String {

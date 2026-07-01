@@ -155,7 +155,10 @@ object LightspeedDecoder {
 
     @Serializable
     data class LightSpeedData(
-        val name: String = "",
+        // The wire sends "name":null on /ls_resp payloads, so this MUST be nullable — a
+        // non-nullable String throws JsonDecodingException and the whole response decodes to zero
+        // events (that was the #34 "non-empty response → 0 events" bug).
+        val name: String? = null,
         val step: JsonElement = JsonNull,
     )
 
@@ -856,6 +859,10 @@ object LightspeedDecoder {
         "fillDeanonCacheForE2EEThread" to "LSFillDeanonCacheForE2EEThread",
     )
 
+    /** All known stored-procedure short names (SP_TABLE keys). Used to resolve a page-snapshot
+     * payload without relying on that block's own (small) dependency list. */
+    fun allDependencyNames(): List<String> = SP_TABLE.keys.toList()
+
     fun spToDepMap(sp: List<String>): Map<String, String> {
         val map = mutableMapOf<String, String>()
         for (entry in sp) {
@@ -867,9 +874,12 @@ object LightspeedDecoder {
 
     fun decodePublishResponse(payload: String, sp: List<String>): List<DecodedEvent> {
         return try {
-            val lsData = Json { ignoreUnknownKeys = true }
+            val lsData = Json { ignoreUnknownKeys = true; coerceInputValues = true }
                 .decodeFromString<LightSpeedData>(payload)
-            val dependencies = spToDepMap(sp)
+            // Resolve against the FULL SP_TABLE (not just the response's declared sp): a response can
+            // call a stored procedure — e.g. insertBlobAttachment for a photo — that its own sp list
+            // omits, which would silently drop that row. SP_TABLE is authoritative and superset-safe.
+            val dependencies = spToDepMap(allDependencyNames())
             val decoder = Decoder(dependencies)
             decoder.decode(lsData.step)
             decoder.getEvents()
