@@ -59,8 +59,6 @@ class MtProtoConnection(
         kotlinx.coroutines.channels.Channel.UNLIMITED
     )
 
-    private var serverTimeOffset: Long = 0L
-    private var serverTimeOffsetSet = false
     private val futureSalts = mutableListOf<MessageFraming.FutureSalt>()
     private val pongDeferreds = mutableMapOf<Long, CompletableDeferred<Unit>>()
 
@@ -88,14 +86,14 @@ class MtProtoConnection(
             sessionId = result.sessionId
             // Learn the server-clock offset straight from the handshake so the FIRST
             // authenticated request already uses server-based msg_ids (and incoming
-            // msg_id validation uses the right clock). Without this, a skewed local
-            // clock makes every post-login request fail (bad_msg 16/17/32).
-            val localTime = System.currentTimeMillis() / 1000
-            serverTimeOffset = result.serverTime.toLong() - localTime
-            serverTimeOffsetSet = true
-            MessageId.setTimeOffsetSeconds(serverTimeOffset)
+            // msg_id validation uses the right clock). Stored globally in MessageId so
+            // generation and validation share one value. (On reconnect with a persisted
+            // auth key this block is skipped — the readLoop then syncs from the first
+            // inbound server message instead.)
+            val handshakeOffset = result.serverTime.toLong() - (System.currentTimeMillis() / 1000)
+            MessageId.setTimeOffsetSeconds(handshakeOffset)
             MessageId.reset()
-            Log.d(TAG, "Server time offset from handshake: ${serverTimeOffset}s (applied to msg_id gen + validation)")
+            Log.d(TAG, "Server time offset from handshake: ${handshakeOffset}s (applied to msg_id gen + validation)")
         }
         connected = true
         seqNo.set(0)
@@ -230,23 +228,22 @@ class MtProtoConnection(
                     }
                     val serverMsgId = decrypted.messageId
                     // A server msg_id encodes SERVER time and is authoritative. Never drop a
-                    // valid server message against our own (possibly skewed) clock — instead
-                    // sync our time offset FROM it. This covers: reconnect with a persisted
-                    // auth key (handshake skipped, offset never set), a badly skewed device
-                    // clock (e.g. hotel wifi, ~30min off), and gradual drift. Only genuinely
-                    // malformed ids (wrong type bits) are rejected.
+                    // valid server message against our own (possibly skewed) clock — sync the
+                    // GLOBAL time offset FROM it (same offset used for outgoing generation, so
+                    // the two can't diverge). Covers reconnect-with-persisted-authkey (handshake
+                    // skipped), large clock skew, drift, and multiple connections. Only sync
+                    // from genuine server-typed ids (never from a stray local-timed msg), and
+                    // only reject truly malformed ids.
                     if (!MessageId.isServerType(serverMsgId)) {
                         Log.w(TAG, "Rejecting non-server msg_id 0x${serverMsgId.toULong().toString(16)}")
                         continue
                     }
                     val localNow = System.currentTimeMillis() / 1000
-                    if (!serverTimeOffsetSet ||
-                        !MessageId.checkMessageId(localNow + serverTimeOffset, serverMsgId)
+                    if (!MessageId.isOffsetInitialized() ||
+                        !MessageId.checkMessageId(localNow + MessageId.timeOffsetSeconds(), serverMsgId)
                     ) {
-                        serverTimeOffset = MessageId.timeSeconds(serverMsgId) - localNow
-                        serverTimeOffsetSet = true
-                        MessageId.setTimeOffsetSeconds(serverTimeOffset)
-                        Log.d(TAG, "Synced server time offset from inbound msg: ${serverTimeOffset}s")
+                        MessageId.setTimeOffsetSeconds(MessageId.timeSeconds(serverMsgId) - localNow)
+                        Log.d(TAG, "Synced server time offset from inbound msg: ${MessageId.timeOffsetSeconds()}s")
                     }
                     if (!MessageId.consume(serverMsgId)) {
                         Log.w(TAG, "Duplicate message ID detected, rejecting")
@@ -348,14 +345,11 @@ class MtProtoConnection(
                 if (isTimeError) {
                     // Always resync the offset from this server message's msg_id (the
                     // clock may have drifted since the handshake) and regenerate ids.
-                    val serverTime = MessageId.timeSeconds(msgId)
-                    val localTime = System.currentTimeMillis() / 1000
-                    serverTimeOffset = serverTime - localTime
-                    serverTimeOffsetSet = true
-                    MessageId.setTimeOffsetSeconds(serverTimeOffset)
+                    val newOffset = MessageId.timeSeconds(msgId) - (System.currentTimeMillis() / 1000)
+                    MessageId.setTimeOffsetSeconds(newOffset)
                     MessageId.reset()
                     updateSalt()
-                    Log.d(TAG, "Time resynced: offset=${serverTimeOffset}s (bad_msg $code)")
+                    Log.d(TAG, "Time resynced: offset=${newOffset}s (bad_msg $code)")
                     resendPending(notification.badMsgId, code)
                 } else if (isSeqError) {
                     // Resend with a fresh msg_id + the next seqno (send() assigns both),
@@ -386,13 +380,10 @@ class MtProtoConnection(
                 val ns = MessageFraming.parseNewSession(buf)
                 salt = ns.serverSalt
                 // new_session_created carries an authoritative server msg_id — refresh
-                // the time offset (and apply it to msg_id generation) unconditionally.
-                val serverTime = MessageId.timeSeconds(ns.firstMsgId)
-                val localTime = System.currentTimeMillis() / 1000
-                serverTimeOffset = serverTime - localTime
-                serverTimeOffsetSet = true
-                MessageId.setTimeOffsetSeconds(serverTimeOffset)
-                Log.d(TAG, "Server time offset from new session: ${serverTimeOffset}s")
+                // the (global) time offset used for generation + validation.
+                val nsOffset = MessageId.timeSeconds(ns.firstMsgId) - (System.currentTimeMillis() / 1000)
+                MessageId.setTimeOffsetSeconds(nsOffset)
+                Log.d(TAG, "Server time offset from new session: ${nsOffset}s")
             }
             else -> {
                 try {
@@ -482,7 +473,7 @@ class MtProtoConnection(
     }
 
     private fun updateSalt() {
-        val now = (System.currentTimeMillis() / 1000) + serverTimeOffset
+        val now = MessageId.serverNowSeconds()
         synchronized(futureSalts) {
             val valid = futureSalts.firstOrNull { it.validSince <= now && now < it.validUntil }
             if (valid != null) {

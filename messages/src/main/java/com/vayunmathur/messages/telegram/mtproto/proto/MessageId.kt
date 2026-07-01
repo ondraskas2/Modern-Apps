@@ -8,15 +8,27 @@ object MessageId {
     private const val MESSAGE_ID_MODULO = 4L
 
     // Offset (seconds) between the server clock and this device's clock, learned from
-    // the handshake / new_session_created / bad_msg time errors. msg_id encodes
+    // the handshake / new_session_created / inbound server msg_ids. msg_id encodes
     // unixtime<<32 and MUST use SERVER time, otherwise a skewed local clock (e.g.
     // hotel wifi) makes every outgoing msg_id invalid → bad_msg 16/17/32 and the
-    // server rejects all authenticated requests.
+    // server rejects all authenticated requests. This is the SINGLE source of truth
+    // for the offset — used for BOTH outgoing generation AND incoming validation, and
+    // shared across connections (Telegram server time is universal), so generation and
+    // validation can never diverge.
     private val timeOffsetSeconds = AtomicLong(0)
+    private val offsetInitialized = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun setTimeOffsetSeconds(seconds: Long) {
         timeOffsetSeconds.set(seconds)
+        offsetInitialized.set(true)
     }
+
+    fun timeOffsetSeconds(): Long = timeOffsetSeconds.get()
+
+    fun isOffsetInitialized(): Boolean = offsetInitialized.get()
+
+    /** Current server time in seconds (local clock + learned offset). */
+    fun serverNowSeconds(): Long = System.currentTimeMillis() / 1000 + timeOffsetSeconds.get()
 
     private const val YIELD_CLIENT = 0L
     private const val YIELD_SERVER_RESPONSE = 1L

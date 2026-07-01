@@ -18,6 +18,7 @@ data class AuthResult(
     val authKeyId: ByteArray,
     val serverSalt: Long,
     val sessionId: Long,
+    val serverTime: Int,
 )
 
 class KeyExchange(private val transport: TcpTransport, private val dc: Int = 2) {
@@ -211,7 +212,7 @@ class KeyExchange(private val transport: TcpTransport, private val dc: Int = 2) 
         val sessionId = ByteBuffer.wrap(sessionIdBytes).order(ByteOrder.LITTLE_ENDIAN).long
 
         Log.i(TAG, "Key exchange complete")
-        return AuthResult(authKey, authKeyId, serverSalt, sessionId)
+        return AuthResult(authKey, authKeyId, serverSalt, sessionId, serverTime)
     }
 
     private suspend fun sendUnencrypted(data: ByteArray) {

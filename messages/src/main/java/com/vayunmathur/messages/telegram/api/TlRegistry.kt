@@ -35,6 +35,20 @@ object TlRegistry {
             0x2f2f21bf.toInt() -> decodeUpdateReadHistoryOutbox(buf)
             0x635b4c09.toInt() -> UpdateChannel(buf.int64())
             0x922e6e10.toInt() -> decodeUpdateReadChannelInbox(buf)
+            // updateUserStatus#e5bdf8de user_id:long status:UserStatus — ubiquitous
+            // (contacts going online/offline). Must be consumed or it misaligns the
+            // whole updates/difference vector (its UserStatus payload then reads as a
+            // bogus constructor), which drops the trailing users/chats → empty peer
+            // cache → send failures + orphan-message FK crashes.
+            0xe5bdf8de.toInt() -> { buf.int64(); TlSkip.skipUserStatus(buf); IgnoredUpdate }
+            // updateNewAuthorization#8951abef flags:# hash:long date:flags.0?int
+            //   device:flags.0?string location:flags.0?string
+            0x8951abef.toInt() -> {
+                val f = Fields.decode(buf)
+                buf.int64() // hash
+                if (f.has(0)) { buf.int32(); buf.string(); buf.string() } // date, device, location
+                IgnoredUpdate
+            }
 
             // Auth
             0x5e002502.toInt() -> AuthSentCode.decode(buf)

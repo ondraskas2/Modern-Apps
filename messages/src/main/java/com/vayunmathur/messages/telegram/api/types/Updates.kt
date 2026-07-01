@@ -82,6 +82,14 @@ object UpdateLoginToken : TlObject {
     override fun encode(buf: TlBuffer) {}
 }
 
+// Sentinel for update constructors we intentionally skip (fields consumed to keep
+// the surrounding updates/difference vector aligned) but don't act on. Returning
+// this instead of UnknownObject means decodeById advanced the buffer correctly.
+object IgnoredUpdate : TlObject {
+    override val typeId = 0
+    override fun encode(buf: TlBuffer) {}
+}
+
 data class UpdateUserTyping(val userId: Long, val actionTypeId: Int) : TlObject {
     override val typeId = 0x2a17bf5c.toInt()
     override fun encode(buf: TlBuffer) {}

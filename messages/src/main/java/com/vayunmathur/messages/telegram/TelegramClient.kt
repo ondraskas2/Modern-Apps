@@ -65,6 +65,10 @@ object TelegramClient {
 
     private val peerCache = ConcurrentHashMap<Long, TlObject>()
     private val userNameCache = ConcurrentHashMap<Long, String>()
+    // Conversations we've already emitted a ConversationUpdate for. Used by the
+    // orphan-message safety net so a live incoming MessageUpdate always has its
+    // parent Conversation row (FK) in place before it's written.
+    private val emittedConversations = ConcurrentHashMap.newKeySet<String>()
     private val channelMetaCache = ConcurrentHashMap<Long, Channel>()
     // peer id -> profile photo (photo_id + dc_id), captured during TL decode
     private val photoCache = ConcurrentHashMap<Long, ProfilePhoto>()
@@ -888,6 +892,24 @@ object TelegramClient {
         scope.launch { fetchUpdatesState(client) }
     }
 
+    /**
+     * Orphan-message safety net: guarantees a Conversation row (FK parent) exists
+     * before we emit a MessageUpdate for [chatId]. Backfill emits the full
+     * ConversationUpdate; this covers live messages that arrive before/without
+     * backfill so the DB insert can't hit a FOREIGN KEY violation.
+     */
+    private suspend fun ensureConversationRow(chatId: String) {
+        if (!emittedConversations.add(chatId)) return
+        val peerName = chatId.substringBefore('_').toLongOrNull()?.let { userNameCache[it] }
+        _events.emit(GMEvent.ConversationUpdate(source, chatId, peerName, null, null, null, 0, 0))
+    }
+
+    /** Emit a MessageUpdate, first ensuring its parent conversation row exists. */
+    private suspend fun emitMessageUpdate(update: GMEvent.MessageUpdate) {
+        ensureConversationRow(update.conversationId)
+        _events.emit(update)
+    }
+
     private fun startUpdateListener(client: TelegramApiClient) {
         updateJob?.cancel()
         updateJob = scope.launch {
@@ -953,7 +975,7 @@ object TelegramClient {
                     PtsAction.APPLY -> {
                         val chatId = update.userId.toString()
                         val msgId = "${chatId}_${update.id}"
-                        _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, null))
+                        emitMessageUpdate(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, null))
                         if (!update.out) {
                             _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.userId], null, update.date.toLong() * 1000))
                         }
@@ -967,7 +989,7 @@ object TelegramClient {
                     PtsAction.APPLY -> {
                         val chatId = update.chatId.toString()
                         val msgId = "${chatId}_${update.id}"
-                        _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId]))
+                        emitMessageUpdate(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId]))
                         if (!update.out) {
                             _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.fromId], null, update.date.toLong() * 1000))
                         }
@@ -1037,7 +1059,7 @@ object TelegramClient {
                     PtsAction.APPLY -> when (val msg = update.message) {
                         is Message -> {
                             val chatId = peerToId(msg.peerId)
-                            _events.emit(msg.toMessageUpdate(chatId))
+                            emitMessageUpdate(msg.toMessageUpdate(chatId))
                             launchMediaFetch(msg, chatId)
                             if (!msg.out) {
                                 _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
@@ -1058,7 +1080,7 @@ object TelegramClient {
                     PtsAction.APPLY -> when (val msg = update.message) {
                         is Message -> {
                             val chatId = peerToId(msg.peerId)
-                            _events.emit(msg.toMessageUpdate(chatId))
+                            emitMessageUpdate(msg.toMessageUpdate(chatId))
                             launchMediaFetch(msg, chatId)
                             if (!msg.out) {
                                 _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
@@ -1102,7 +1124,7 @@ object TelegramClient {
                         if (msg.editDate > 0) {
                             _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
                         }
-                        _events.emit(msg.toMessageUpdate(chatId))
+                        emitMessageUpdate(msg.toMessageUpdate(chatId))
                     }
                 }
             }
@@ -1117,7 +1139,7 @@ object TelegramClient {
                         if (msg.editDate > 0) {
                             _events.emit(GMEvent.MessageEdited(source, chatId, "${chatId}_${msg.id}", renderBody(msg), msg.editDate.toLong() * 1000))
                         }
-                        _events.emit(msg.toMessageUpdate(chatId))
+                        emitMessageUpdate(msg.toMessageUpdate(chatId))
                     }
                 }
             }
@@ -1450,6 +1472,7 @@ object TelegramClient {
                     // Emit immediately (with any already-cached avatar), then fetch the avatar
                     // asynchronously and re-emit so the conversation list isn't blocked on downloads.
                     val pid = peerNumericId
+                    emittedConversations.add(chatId) // backfill provides the full conversation row
                     emitConv(pid?.let { avatarPathCache[it] })
                     if (pid != null && photoCache[pid] != null) {
                         scope.launch {
@@ -1473,7 +1496,7 @@ object TelegramClient {
                         cacheUsers(extractUsers(histResult))
                         for (msg in histMsgs) {
                             when (msg) {
-                                is Message -> _events.emit(msg.toMessageUpdate(chatId))
+                                is Message -> emitMessageUpdate(msg.toMessageUpdate(chatId))
                                 is MessageService -> handleServiceMessageEvent(msg, chatId)
                             }
                         }
@@ -1539,7 +1562,12 @@ object TelegramClient {
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "recoverGap failed: ${t.message}")
+            // A gap-recovery parse failure (e.g. an unhandled update constructor in
+            // updates.difference.other_updates) must NOT leave the client without
+            // conversations/peers. Fall back to a full dialogs resync so the inbox +
+            // peer access_hashes still populate (fixes send + orphan-message FK crash).
+            Log.w(TAG, "recoverGap failed: ${t.message} — falling back to full backfill")
+            kickoffBackfill()
         } finally {
             gapRecovering.set(false)
         }
@@ -1595,7 +1623,7 @@ object TelegramClient {
         when (msg) {
             is Message -> {
                 val chatId = peerToId(msg.peerId)
-                _events.emit(msg.toMessageUpdate(chatId))
+                emitMessageUpdate(msg.toMessageUpdate(chatId))
             }
             is MessageService -> {
                 val chatId = peerToId(msg.peerId)
@@ -1616,7 +1644,7 @@ object TelegramClient {
             when (msg) {
                 is Message -> {
                     val chatId = peerToId(msg.peerId)
-                    _events.emit(msg.toMessageUpdate(chatId))
+                    emitMessageUpdate(msg.toMessageUpdate(chatId))
                 }
                 is MessageService -> {
                     val chatId = peerToId(msg.peerId)
