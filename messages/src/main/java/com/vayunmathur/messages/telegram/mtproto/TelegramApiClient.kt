@@ -38,18 +38,22 @@ class TelegramApiClient {
     var onDisconnected: (suspend () -> Unit)? = null
 
     companion object {
-        // Production DC endpoints. Must match Telegram's current built-in DC list
-        // (tdesktop kBuiltInDcs). Stale IPs here surface only via QR login's cross-DC
-        // migration (auth.loginTokenMigrateTo → connect to the account's home DC):
-        // an outdated endpoint returns fingerprints outside our RSA key set, which
-        // manifests as "No matching RSA key found". DC2 (default) is left on its
-        // proven-working address to avoid regressing the phone-login path.
+        // Production DC endpoints. Must be real Telegram main-DC IPs — every main DC
+        // presents RSA fingerprint 0xd09d1d85de64fd85 (the prod key in RsaKey.kt).
+        // A non-standard/legacy endpoint presents a different fingerprint and fails
+        // KeyExchange with "No matching RSA key found". This surfaces via QR login's
+        // cross-DC migration (auth.loginTokenMigrateTo → connect to the home DC).
+        // IPs cross-checked against gotd dcs/prod.go and Telegram's canonical list.
+        // gotd uses the SAME 2-key RSA set as this app, so its main-DC IPs are the
+        // trusted reference (DC1-4 below match gotd exactly). tdesktop's kBuiltInDcs
+        // is NOT reliable here: its DC5 (149.154.171.5) returned fp 0xc3b42b026ce86b21
+        // on-device (a non-main-DC key we don't have) — so DC5 uses canonical 91.108.56.130.
         val DC_ADDRESSES = mapOf(
-            1 to ("149.154.175.50" to 443),
+            1 to ("149.154.175.52" to 443),
             2 to ("149.154.167.41" to 443),
             3 to ("149.154.175.100" to 443),
             4 to ("149.154.167.91" to 443),
-            5 to ("149.154.171.5" to 443),
+            5 to ("91.108.56.130" to 443),
         )
     }
 
