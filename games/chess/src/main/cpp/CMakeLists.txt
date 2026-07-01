@@ -47,17 +47,11 @@ target_include_directories(stockfish PRIVATE
     ${SF}/src/nnue
 )
 
-# Pin the version-string git info to the submodule's pinned commit so the binary
-# does not embed __DATE__ (which changes every build and breaks reproducible
-# builds). These mirror what the Stockfish Makefile derives from git for the
-# pinned commit c2e562e7.
 target_compile_definitions(stockfish PRIVATE
     STOCKFISH_LIBRARY
     NNUE_EMBEDDING_OFF
     __ANDROID__
     ANDROID
-    GIT_SHA=c2e562e7
-    GIT_DATE=20260619
 )
 
 target_compile_options(stockfish PRIVATE
