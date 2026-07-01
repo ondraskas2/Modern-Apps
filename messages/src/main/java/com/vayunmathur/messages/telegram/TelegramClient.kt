@@ -989,9 +989,10 @@ object TelegramClient {
                     PtsAction.APPLY -> {
                         val chatId = update.chatId.toString()
                         val msgId = "${chatId}_${update.id}"
-                        emitMessageUpdate(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId]))
+                        // Basic group chat: sender is the individual member; conversation is the group.
+                        emitMessageUpdate(GMEvent.MessageUpdate(source, chatId, msgId, update.message, update.out, update.date.toLong() * 1000, userNameCache[update.fromId], update.fromId.toString()))
                         if (!update.out) {
-                            _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.fromId], null, update.date.toLong() * 1000))
+                            _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, update.message, userNameCache[update.chatId], null, update.date.toLong() * 1000, userNameCache[update.fromId], update.fromId.toString()))
                         }
                     }
                 }
@@ -1062,7 +1063,7 @@ object TelegramClient {
                             emitMessageUpdate(msg.toMessageUpdate(chatId))
                             launchMediaFetch(msg, chatId)
                             if (!msg.out) {
-                                _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                                _events.emit(msg.toIncomingMessage(chatId))
                             }
                         }
                         is MessageService -> {
@@ -1083,7 +1084,7 @@ object TelegramClient {
                             emitMessageUpdate(msg.toMessageUpdate(chatId))
                             launchMediaFetch(msg, chatId)
                             if (!msg.out) {
-                                _events.emit(GMEvent.IncomingMessage(source, chatId, "${chatId}_${msg.id}", renderBody(msg), senderName(msg.fromId), null, msg.date.toLong() * 1000))
+                                _events.emit(msg.toIncomingMessage(chatId))
                             }
                         }
                         is MessageService -> {
@@ -1846,6 +1847,19 @@ object TelegramClient {
         return null
     }
 
+    private fun isGroupPeer(peer: TlObject): Boolean = peer is PeerChat || peer is PeerChannel
+
+    /**
+     * Per-message sender for GROUP threads: (display name, stable sender id = tg userId).
+     * For 1:1 chats returns (null, null) so the UI falls back to the peer identity, per
+     * the group sender-name contract (#42). Outgoing/self and unknown senders yield nulls.
+     */
+    private fun groupSender(peerId: TlObject, fromId: TlObject?): Pair<String?, String?> {
+        if (!isGroupPeer(peerId)) return null to null
+        val uid = (fromId as? PeerUser)?.userId ?: return null to null
+        return userNameCache[uid] to uid.toString()
+    }
+
     private fun resolvePeerName(peer: TlObject): String? = when (peer) {
         is PeerUser -> userNameCache[peer.userId]
         is PeerChat -> userNameCache[peer.chatId]
@@ -2136,6 +2150,7 @@ object TelegramClient {
         val msgId = "${chatId}_${this.id}"
         val body = renderBody(this)
         val tsMs = this.date.toLong() * 1000L
+        val (sName, sId) = groupSender(this.peerId, this.fromId)
         return GMEvent.MessageUpdate(
             source = source,
             conversationId = chatId,
@@ -2143,7 +2158,25 @@ object TelegramClient {
             body = body,
             outgoing = this.out,
             timestamp = tsMs,
-            senderName = senderName(this.fromId),
+            senderName = sName,
+            senderId = sId,
+        )
+    }
+
+    private fun Message.toIncomingMessage(chatId: String): GMEvent.IncomingMessage {
+        val (sName, sId) = groupSender(this.peerId, this.fromId)
+        // peerName is the CONVERSATION identity: the group name for groups, the peer for 1:1.
+        val peerNm = if (isGroupPeer(this.peerId)) resolvePeerName(this.peerId) else senderName(this.fromId)
+        return GMEvent.IncomingMessage(
+            source = source,
+            conversationId = chatId,
+            messageId = "${chatId}_${this.id}",
+            body = renderBody(this),
+            peerName = peerNm,
+            peerPhone = null,
+            timestamp = this.date.toLong() * 1000L,
+            senderName = sName,
+            senderId = sId,
         )
     }
 
