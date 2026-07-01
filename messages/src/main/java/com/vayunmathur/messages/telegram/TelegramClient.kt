@@ -56,6 +56,10 @@ object TelegramClient {
     private var backfillJob: Job? = null
     private var updateJob: Job? = null
     private var qrRefreshJob: Job? = null
+    // Serializes QR token export/refresh/migrate so the expiry timer and an
+    // updateLoginToken push can't run overlapping handshakes on the same/again
+    // -disconnected client (which previously raced during DC migration).
+    private val qrRefreshing = AtomicBoolean(false)
     private var pendingPhone: String? = null
     private var phoneCodeHash: String? = null
 
@@ -270,9 +274,15 @@ object TelegramClient {
     }
 
     private suspend fun refreshLoginToken() {
-        val client = apiClient ?: return
         if (_state.value !is State.AwaitingQrScan) return
-        exportLoginToken(client, firstCall = false)
+        // Drop overlapping refreshes (expiry timer + updateLoginToken can both fire).
+        if (!qrRefreshing.compareAndSet(false, true)) return
+        try {
+            val client = apiClient ?: return
+            exportLoginToken(client, firstCall = false)
+        } finally {
+            qrRefreshing.set(false)
+        }
     }
 
     private suspend fun handleLoginToken(result: TlObject) {
@@ -315,7 +325,19 @@ object TelegramClient {
             client.connect(dcId)
             apiClient = client
             startUpdateListener(client)
-            val result = client.invoke(AuthImportLoginToken(token)) { TlRegistry.decode(it) }
+            // First request on this brand-new DC session must carry
+            // initConnection/invokeWithLayer, exactly like the initial export.
+            val importInit = InitConnection(
+                apiId = API_ID,
+                deviceModel = "Android",
+                systemVersion = "14",
+                appVersion = "1.0",
+                systemLangCode = "en",
+                langPack = "",
+                langCode = "en",
+                inner = AuthImportLoginToken(token),
+            )
+            val result = client.invoke(importInit) { TlRegistry.decode(it) }
             handleLoginToken(result)
         } catch (t: Throwable) {
             handleQrError(t)
