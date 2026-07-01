@@ -40,4 +40,6 @@
     <string name="set_an_alarm">Ustaw alarm</string>
     <string name="set_a_timer">Ustaw minutnik</string>
     <string name="field_hours">Godziny</string>
+    <string name="analog_clock_widget_label">Zegar analogowy</string>
+    <string name="analog_clock_widget_description">Zegar analogowy Material You — dotknij, aby otworzyć zegar</string>
 </resources>
