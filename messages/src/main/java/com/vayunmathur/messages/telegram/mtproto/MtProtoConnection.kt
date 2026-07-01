@@ -374,9 +374,12 @@ class MtProtoConnection(
                 buf.int32()
                 val ns = MessageFraming.parseNewSession(buf)
                 salt = ns.serverSalt
-                // new_session_created carries an authoritative server msg_id — refresh
-                // the (global) time offset used for generation + validation.
-                val nsOffset = MessageId.timeSeconds(ns.firstMsgId) - (System.currentTimeMillis() / 1000)
+                // Derive the offset from the ENVELOPE msg_id (msgId) — the server-timed
+                // id of the message carrying new_session_created. Do NOT use
+                // ns.firstMsgId: that field is the CLIENT's first msg_id (our own
+                // outgoing message), so on a reconnect where our first request went out
+                // with offset 0 it ≈ localNow → a bogus ~0s offset.
+                val nsOffset = MessageId.timeSeconds(msgId) - (System.currentTimeMillis() / 1000)
                 MessageId.setTimeOffsetSeconds(nsOffset)
                 Log.d(TAG, "Server time offset from new session: ${nsOffset}s")
             }
