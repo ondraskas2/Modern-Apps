@@ -849,15 +849,15 @@ object TelegramClient {
                 existingAuthKey = authKey,
                 existingAuthKeyId = authKeyId,
                 existingSalt = auth.salt ?: 0L,
-                existingSessionId = auth.sessionId,
+                // Do NOT reuse a persisted session id. connect() starts a fresh session
+                // with seqno=0; reusing an old session id makes the server expect a
+                // continued (higher) seqno → bad_msg 32 "msg_seqno too low" on every
+                // request, blocking all backfill. Per MTProto only the auth key is
+                // long-lived; a new session id per connection is correct and the server
+                // re-syncs via new_session_created.
             )
             apiClient = client
             client.onDisconnected = { handleDisconnect() }
-            // Persist the MTProto session id so reconnects resume the same session
-            // (and its server-side state) instead of re-backfilling from scratch.
-            if (auth.sessionId == null) {
-                runCatching { auth.copy(sessionId = client.sessionId).save(appContext) }
-            }
             reconnectAttempt = 0
             _state.value = State.Connected
             startUpdateListener(client)
