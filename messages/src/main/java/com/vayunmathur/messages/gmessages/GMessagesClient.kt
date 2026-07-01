@@ -394,6 +394,22 @@ object GMessagesClient {
         return sendWithInfos(webId, infos, replyToMessageId = null)
     }
 
+    /**
+     * Polls are not supported by Google Messages (no poll concept in libgm's
+     * SEND_MESSAGE proto) — contract §2b lists this platform as a no-op. Always
+     * returns false; the capability layer hides the poll entry for this platform.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+    ): Boolean {
+        Log.i(TAG, "sendPoll unsupported on Google Messages")
+        return false
+    }
+
     /** Common SEND_MESSAGE plumbing — builds the envelope and awaits a response. */
     private suspend fun sendWithInfos(
         webId: String,

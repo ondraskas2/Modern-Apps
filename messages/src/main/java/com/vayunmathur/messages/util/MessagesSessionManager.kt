@@ -262,6 +262,55 @@ object MessagesSessionManager {
         return ok
     }
 
+    /**
+     * Create a poll on [conversationId]. Inserts a PENDING preview row so
+     * the UI updates immediately, then routes to the per-source client's
+     * canonical `sendPoll` (see MEDIA_FEATURES_CONTRACTS.md §2b). Sources
+     * whose protocol has no poll concept (SMS/RCS) return false.
+     */
+    suspend fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+    ): Boolean {
+        val source = sourceFor(conversationId) ?: return false
+        val pendingId = "${source.idPrefix}:pending:${System.currentTimeMillis()}"
+        db.messageDao().upsert(
+            Message(
+                id = pendingId,
+                conversationId = conversationId,
+                body = "📊 $question",
+                direction = MessageDirection.OUTGOING,
+                state = MessageState.PENDING,
+                timestamp = System.currentTimeMillis(),
+                senderName = null,
+            )
+        )
+        val ok = when (source) {
+            MessageSource.MESSAGES_WEB -> GMessagesClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.VOICE -> GVoiceClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.TELEGRAM -> TelegramClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.SIGNAL -> SignalClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.WHATSAPP -> WhatsAppClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.MESSENGER -> MetaClient.sendPoll(conversationId, question, options, allowMultiple)
+            MessageSource.INSTAGRAM -> InstagramClient.sendPoll(conversationId, question, options, allowMultiple)
+        }
+        db.messageDao().updateState(pendingId, if (ok) MessageState.SENT else MessageState.FAILED)
+        return ok
+    }
+
+    /**
+     * Share a location on [conversationId]. Location is ALWAYS sent as the
+     * FindFamily share URL [text] (minted at send time by the UI) via the
+     * normal text path — no native location pins on any platform, per
+     * product. Platform clients' own sendLocation methods are left unused.
+     */
+    suspend fun sendLocation(conversationId: String, text: String): Boolean {
+        sourceFor(conversationId) ?: return false
+        return sendMessage(conversationId, text)
+    }
+
     suspend fun markRead(conversationId: String) {
         // Always update the local row immediately so the unread badge clears.
         db.conversationDao().markRead(conversationId)
@@ -325,6 +374,48 @@ object MessagesSessionManager {
             MessageSource.WHATSAPP -> false
             MessageSource.MESSENGER -> false
             MessageSource.INSTAGRAM -> false
+        }
+        if (ok) db.conversationDao().deleteById(conversationId)
+        return ok
+    }
+
+    /**
+     * Accept a message request on [conversationId]. Routes to the
+     * per-source client (Signal/Messenger/Instagram support this; others
+     * return false). On success the message-request flag is cleared from
+     * the local row's serviceData so the Accept/Block bar disappears.
+     */
+    suspend fun acceptMessageRequest(conversationId: String): Boolean {
+        val source = sourceFor(conversationId) ?: return false
+        val ok = when (source) {
+            MessageSource.SIGNAL -> SignalClient.acceptMessageRequest(conversationId)
+            MessageSource.MESSENGER -> MetaClient.acceptMessageRequest(conversationId)
+            MessageSource.INSTAGRAM -> InstagramClient.acceptMessageRequest(conversationId)
+            else -> false
+        }
+        if (ok) {
+            val existing = db.conversationDao().get(conversationId)
+            if (existing != null) {
+                db.conversationDao().upsert(
+                    existing.copy(serviceData = withMessageRequestFlag(existing.serviceData, false))
+                )
+            }
+        }
+        return ok
+    }
+
+    /**
+     * Block (and drop) a message-request conversation. For Signal this
+     * sends a MessageRequestResponse DELETE via
+     * [SignalClient.deleteThread] with `fromMessageRequest = true`; other
+     * sources have no block path yet. The local row is removed on success.
+     */
+    suspend fun blockConversation(conversationId: String): Boolean {
+        val source = sourceFor(conversationId) ?: return false
+        val ok = when (source) {
+            MessageSource.SIGNAL ->
+                SignalClient.deleteThread(conversationId, fromMessageRequest = true)
+            else -> false
         }
         if (ok) db.conversationDao().deleteById(conversationId)
         return ok
@@ -720,6 +811,16 @@ object MessagesSessionManager {
                 // than holding the stale huge value via maxOf.
                 val priorTs = existing?.lastMessageTimestamp
                     ?.takeIf { it < STALE_MICROSECOND_THRESHOLD_MS } ?: 0L
+                // Persist the message-request flag into serviceData JSON
+                // (no schema bump). Sources that signal via serviceData
+                // directly (Signal) already carry it; honor the dedicated
+                // event field too without clobbering an existing flag.
+                val baseServiceData = event.serviceData ?: existing?.serviceData
+                val mergedServiceData = if (event.isMessageRequest) {
+                    withMessageRequestFlag(baseServiceData, true)
+                } else {
+                    baseServiceData
+                }
                 val merged = Conversation(
                     id = id,
                     source = event.source,
@@ -733,7 +834,7 @@ object MessagesSessionManager {
                     participantCount = event.participantCount,
                     conversationType = event.conversationType,
                     outgoingId = event.outgoingId ?: existing?.outgoingId,
-                    serviceData = event.serviceData ?: existing?.serviceData,
+                    serviceData = mergedServiceData,
                 )
                 db.conversationDao().upsert(merged)
                 backfillComplete[event.source] = true
@@ -795,6 +896,20 @@ object MessagesSessionManager {
             }
             is GMEvent.ConversationDeleted -> {
                 db.conversationDao().deleteById("${event.source.idPrefix}:${event.conversationId}")
+            }
+            is GMEvent.MessageRequestReceived -> {
+                // Meta/Instagram signal message requests out-of-band; flag
+                // the existing conversation row's serviceData so the UI can
+                // show the Accept/Block bar.
+                val convId = "${event.source.idPrefix}:${event.conversationId}"
+                val existing = db.conversationDao().get(convId)
+                if (existing != null) {
+                    db.conversationDao().upsert(
+                        existing.copy(
+                            serviceData = withMessageRequestFlag(existing.serviceData, true),
+                        )
+                    )
+                }
             }
             else -> Unit
         }

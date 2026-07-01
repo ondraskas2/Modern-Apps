@@ -1002,7 +1002,19 @@ object MetaProtocol {
         )
     }
 
-    fun buildCreatePollPayload(threadKey: Long, question: String, options: List<String>, versionId: Long): String {
+    /**
+     * Build a CreatePollTask payload. [allowMultiple] is accepted to match the shared poll
+     * contract, but the Meta CreatePollTask schema (messagix socket/threads.go) has no
+     * multiple-choice field, so it currently has no wire representation — Messenger/Instagram
+     * polls accept multiple votes per the server default.
+     */
+    fun buildCreatePollPayload(
+        threadKey: Long,
+        question: String,
+        options: List<String>,
+        versionId: Long,
+        allowMultiple: Boolean = false,
+    ): String {
         val task = CreatePollTask(threadKey = threadKey, questionText = question, options = options)
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(

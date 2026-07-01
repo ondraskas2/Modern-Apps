@@ -77,9 +77,52 @@ class MessagesViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /** Create a poll on [conversationId] (routes to the platform client). */
+    fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+        onResult: (Boolean) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            onResult(
+                MessagesSessionManager.sendPoll(conversationId, question, options, allowMultiple)
+            )
+        }
+    }
+
+    /**
+     * Share a location on [conversationId]. [text] is the FindFamily share
+     * URL minted at send time; sent as a normal message on every platform.
+     */
+    fun sendLocation(
+        conversationId: String,
+        text: String,
+        onResult: (Boolean) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            onResult(MessagesSessionManager.sendLocation(conversationId, text))
+        }
+    }
+
     fun deleteConversation(conversationId: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             onResult(MessagesSessionManager.deleteConversation(conversationId))
+        }
+    }
+
+    /** Accept a message request (Signal/Messenger/Instagram). */
+    fun acceptMessageRequest(conversationId: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            onResult(MessagesSessionManager.acceptMessageRequest(conversationId))
+        }
+    }
+
+    /** Block + drop a message-request conversation. */
+    fun blockConversation(conversationId: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            onResult(MessagesSessionManager.blockConversation(conversationId))
         }
     }
 

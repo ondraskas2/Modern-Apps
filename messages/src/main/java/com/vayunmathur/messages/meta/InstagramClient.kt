@@ -600,10 +600,25 @@ object InstagramClient {
         return true
     }
 
-    suspend fun createPoll(conversationId: String, question: String, options: List<String>): Boolean {
+    /**
+     * Send a poll (Instagram CreatePollTask). [allowMultiple] is part of the shared contract;
+     * the Meta poll task schema has no multiple-choice field, so it is currently advisory only.
+     */
+    suspend fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+    ): Boolean {
         val threadId = extractThreadId(conversationId)?.toLongOrNull() ?: return false
         val client = mqttClient ?: return false
-        val payload = MetaProtocol.buildCreatePollPayload(threadId, question, options, client.versionId)
+        val payload = MetaProtocol.buildCreatePollPayload(
+            threadKey = threadId,
+            question = question,
+            options = options,
+            versionId = client.versionId,
+            allowMultiple = allowMultiple,
+        )
         return client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) != null
     }
 

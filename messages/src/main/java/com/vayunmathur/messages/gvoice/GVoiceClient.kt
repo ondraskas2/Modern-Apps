@@ -256,6 +256,22 @@ object GVoiceClient {
     }
 
     /**
+     * Polls are not supported by Google Voice (no poll concept in libgv's SendSMS
+     * proto) — contract §2b lists this platform as a no-op. Always returns false;
+     * the capability layer hides the poll entry for this platform.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun sendPoll(
+        conversationId: String,
+        question: String,
+        options: List<String>,
+        allowMultiple: Boolean,
+    ): Boolean {
+        Log.i(TAG, "sendPoll unsupported on Google Voice")
+        return false
+    }
+
+    /**
      * Mark every message in [conversationId] as read via
      * `thread/updateattributes`. Mirrors `Client.UpdateThreadAttributes`
      * in `pkg/libgv/client.go` with `Read=true`.

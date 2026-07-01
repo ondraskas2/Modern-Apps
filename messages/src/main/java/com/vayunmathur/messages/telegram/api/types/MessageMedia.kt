@@ -205,6 +205,65 @@ data class DocumentAttributeImageSize(val w: Int, val h: Int) : TlObject {
     override fun encode(buf: TlBuffer) { buf.putId(typeId); buf.putInt32(w); buf.putInt32(h) }
 }
 
+// Poll types for sending native polls. Mirrors telegram.tl:
+//   textWithEntities#751f3146, pollAnswer#4b7d786a, poll#966e2dbf, inputMediaPoll#883a4108
+// Binary layout verified against gotd generated encoders (EncodeBare).
+data class TextWithEntities(
+    val text: String,
+    val entities: List<MessageEntity> = emptyList(),
+) : TlObject {
+    override val typeId = 0x751f3146.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        buf.putString(text)
+        buf.putVectorHeader(entities.size)
+        for (e in entities) e.encode(buf)
+    }
+}
+
+// option is a per-answer identifier the server echoes back in vote results;
+// callers pass a unique byte per answer (typically its index).
+data class PollAnswer(val text: String, val option: ByteArray) : TlObject {
+    override val typeId = 0x4b7d786a.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        buf.putInt32(0) // flags
+        TextWithEntities(text).encode(buf)
+        buf.putBytes(option)
+    }
+}
+
+data class Poll(
+    val question: String,
+    val answers: List<PollAnswer>,
+    val multipleChoice: Boolean = false,
+    val quiz: Boolean = false,
+    val id: Long = 0, // 0 for a new poll; server assigns the real id
+) : TlObject {
+    override val typeId = 0x966e2dbf.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        buf.putInt64(id)
+        var flags = 0
+        if (multipleChoice) flags = flags or (1 shl 2)
+        if (quiz) flags = flags or (1 shl 3)
+        buf.putInt32(flags)
+        TextWithEntities(question).encode(buf)
+        buf.putVectorHeader(answers.size)
+        for (a in answers) a.encode(buf)
+        buf.putInt64(0) // hash
+    }
+}
+
+data class InputMediaPoll(val poll: Poll) : TlObject {
+    override val typeId = 0x883a4108.toInt()
+    override fun encode(buf: TlBuffer) {
+        buf.putId(typeId)
+        buf.putInt32(0) // flags (no correct_answers / solution for a regular poll)
+        poll.encode(buf)
+    }
+}
+
 // Web page media
 data class MessageMediaWebPage(
     val url: String = "",
