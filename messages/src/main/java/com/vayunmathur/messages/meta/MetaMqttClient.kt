@@ -75,6 +75,14 @@ class MetaMqttClient(
     var versionId: Long = config.versionId
     var appId: String = config.defaultAppId(authData.platform).toString()
 
+    // Web device id (MqttWebDeviceID.ClientID) — MUST be stable AND identical in both the MQTT
+    // broker URL (cid=) and the CONNECT "d" field, and should match the id the inbox page
+    // registered server-side, or the socket connects + pings but the server silently drops all
+    // Lightspeed requests (FetchThreads never answered). Prefer the scraped page value; fall back to
+    // a cookie, then a single generated UUID reused for the whole session (never regenerated).
+    private val clientId: String =
+        config.clientId.ifEmpty { authData.cookies["cid"] ?: java.util.UUID.randomUUID().toString() }
+
     // DB SyncManager (#10).
     private val syncManager = MetaSyncManager(
         platform = authData.platform,
@@ -190,8 +198,7 @@ class MetaMqttClient(
             MetaAuthData.Platform.INSTAGRAM -> MetaProtocol.INSTAGRAM_MQTT_URL
         }
         val sep = if (baseUrl.endsWith("?") || baseUrl.endsWith("&")) "" else if (baseUrl.contains("?")) "&" else "?"
-        val cid = authData.cookies["cid"] ?: java.util.UUID.randomUUID().toString()
-        return "${baseUrl}${sep}sid=$sessionId&cid=$cid"
+        return "${baseUrl}${sep}sid=$sessionId&cid=$clientId"
     }
 
     private suspend fun sendData(data: ByteArray): Boolean {
@@ -207,7 +214,7 @@ class MetaMqttClient(
             sessionId = sessionId,
             appId = authData.cookies["appId"]?.toLongOrNull()
                 ?: config.defaultAppId(authData.platform),
-            cid = authData.cookies["cid"] ?: java.util.UUID.randomUUID().toString(),
+            cid = clientId,
             platform = authData.platform,
             previouslyConnected = previouslyConnected,
             versionId = versionId,
@@ -402,13 +409,23 @@ class MetaMqttClient(
         // Callers that need the response's events processed (thread fetches, DB
         // syncs) re-inject it via emitForProcessing().
         val responseData = MetaProtocol.parsePublishResponse(publish.payload)
+        // Debug (#34): log every inbound frame so we can tell server-silent from
+        // response-we-drop, and whether a request_id correlates. Grep "MetaLSDebug".
+        val pendingIds = requestChannels.keys.joinToString(",")
+        Log.i(
+            "MetaLSDebug",
+            "LS← topic=${publish.topic} bytes=${publish.payload.size} " +
+                "reqId=${responseData?.requestId ?: "?"} pending=[$pendingIds]",
+        )
         if (responseData != null && responseData.requestId > 0) {
             val requestIdInt = responseData.requestId.toInt()
             val waiter = requestChannels.remove(requestIdInt)
             if (waiter != null) {
+                Log.i("MetaLSDebug", "LS← matched req=$requestIdInt")
                 waiter.complete(mqttMessage)
                 return
             }
+            Log.i("MetaLSDebug", "LS← reqId=$requestIdInt had NO waiter → emitting as server event")
         }
 
         // Server-initiated message (request_id == 0 or no waiter): emit for
@@ -584,6 +601,8 @@ class MetaMqttClient(
 
         val responseDeferred = CompletableDeferred<MetaProtocol.MqttMessage>()
         requestChannels[packetId] = responseDeferred
+
+        Log.i("MetaLSDebug", "LS→ req=$packetId type=$type appId=$appId payload=${payload.take(500)}")
 
         val sentId = sendPublishPacket(MetaProtocol.TOPIC_LS_REQ, lsRequestJson, packetId)
         if (sentId < 0) {

@@ -37,6 +37,7 @@ data class MetaConfig(
     val lsdToken: String = "",
     val fbDtsg: String = "",
     val jazoest: String = "",
+    val clientId: String = "",
     val syncParamsMailbox: String = "",
     val syncParamsContact: String = "",
     val syncParamsE2ee: String = "",
@@ -66,6 +67,12 @@ object MetaBootstrap {
     private val dtsgPattern =
         Regex("""\["DTSGInitData",\[\],\{"token":"([^"]+)""")
     private val jazoestPattern = Regex("""jazoest=(\d+)""")
+    // MqttWebDeviceID clientID — the web device id the inbox page registers server-side. It MUST be
+    // reused as the MQTT cid (broker url) and CONNECT "d" field, otherwise the server accepts the
+    // socket + pings but silently drops Lightspeed (LS) requests → FetchThreads never answered.
+    // Matches ["MqttWebDeviceID",[],{"clientID":"..."} ...] in the SSJS config bundle.
+    private val clientIdPattern =
+        Regex("""\["MqttWebDeviceID",\[\],\{"clientID":"([^"]+)"""")
     private val parentThreadKeyPattern = Regex("""["']parent_thread_key["']\s*:\s*(-?\d+)""")
     // "version":123... inside the LSPlatformGraphQLLightspeedRequest preloader payload (the primary
     // schema-version source on the inbox page). Values may be JSON-in-JSON escaped ("version":...
@@ -124,6 +131,7 @@ object MetaBootstrap {
             val lsd = lsdPattern.find(html)?.groupValues?.get(1) ?: ""
             val dtsg = dtsgPattern.find(html)?.groupValues?.get(1) ?: ""
             val jazoest = jazoestPattern.find(html)?.groupValues?.get(1) ?: ""
+            val clientId = clientIdPattern.find(html)?.groupValues?.get(1) ?: ""
 
             val sync = parseSyncParams(html)
 
@@ -135,6 +143,7 @@ object MetaBootstrap {
                 lsdToken = lsd,
                 fbDtsg = dtsg,
                 jazoest = jazoest,
+                clientId = clientId,
                 syncParamsMailbox = sync.first,
                 syncParamsContact = sync.second,
                 syncParamsE2ee = sync.third,
@@ -143,7 +152,8 @@ object MetaBootstrap {
             Log.i(
                 TAG,
                 "Bootstrap for ${authData.platform}: versionId=$versionId appId=$appId " +
-                    "broker=$broker ptks=$parentThreadKeys lsd=${lsd.isNotEmpty()} loaded=${config.loaded}",
+                    "broker=$broker ptks=$parentThreadKeys lsd=${lsd.isNotEmpty()} " +
+                    "clientId=${clientId.isNotEmpty()} loaded=${config.loaded}",
             )
             config
         } catch (e: Exception) {
