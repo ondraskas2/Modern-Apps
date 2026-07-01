@@ -1020,6 +1020,10 @@ object SignalClient {
                 kickoffBackupRestore(auth, ws, database, recipientStore)
             }
 
+            // Surface any groups we already know about (from a prior storage sync / restore)
+            // as conversations, so group threads appear without waiting for a new message.
+            syncGroupConversations()
+
             scope.launch {
                 var debounceJob: Job? = null
                 ws.connectionEvents.collect { event ->
@@ -1198,20 +1202,28 @@ object SignalClient {
         when (val content = msg.content) {
             is MessageContent.TextMessage -> {
                 val msgId = "${chatId}_${msg.timestamp}"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, content.body, false, msg.timestamp, senderName))
-                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, content.body, senderName, null, msg.timestamp))
-                _events.emit(GMEvent.ConversationUpdate(
-                    source = source, conversationId = chatId,
-                    peerName = senderName, peerPhone = null, avatarUrl = null,
-                    lastPreview = content.body, lastTimestamp = msg.timestamp,
-                    unreadCount = 1, conversationType = "Signal",
-                ))
+                if (content.groupId != null) {
+                    emitGroupMessage(content.groupId, msgId, content.body, msg.senderAci, senderName, msg.timestamp)
+                } else {
+                    _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, content.body, false, msg.timestamp, senderName, senderId = msg.senderAci))
+                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, content.body, senderName, null, msg.timestamp))
+                    _events.emit(GMEvent.ConversationUpdate(
+                        source = source, conversationId = chatId,
+                        peerName = senderName, peerPhone = null, avatarUrl = null,
+                        lastPreview = content.body, lastTimestamp = msg.timestamp,
+                        unreadCount = 1, conversationType = "Signal",
+                    ))
+                }
             }
             is MessageContent.Attachment -> {
                 val msgId = "${chatId}_${msg.timestamp}"
                 val body = content.body ?: "[Attachment]"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName))
-                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                if (content.groupId != null) {
+                    emitGroupMessage(content.groupId, msgId, body, msg.senderAci, senderName, msg.timestamp)
+                } else {
+                    _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName, senderId = msg.senderAci))
+                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                }
             }
             is MessageContent.Reaction -> {
                 // Reactions are handled by updating the message
@@ -1351,8 +1363,12 @@ object SignalClient {
             is MessageContent.Sticker -> {
                 val msgId = "${chatId}_${msg.timestamp}"
                 val body = content.emoji ?: "[Sticker]"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName))
-                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                if (content.groupId != null) {
+                    emitGroupMessage(content.groupId, msgId, body, msg.senderAci, senderName, msg.timestamp)
+                } else {
+                    _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName, senderId = msg.senderAci))
+                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                }
             }
             is MessageContent.ProfileKeyUpdate -> {
                 captureProfileKey(content.senderAci, content.profileKey)
@@ -1389,8 +1405,12 @@ object SignalClient {
                 val msgId = "${chatId}_${msg.timestamp}"
                 val optionsList = content.options.joinToString(", ")
                 val body = "Poll: ${content.question}\nOptions: $optionsList"
-                _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName))
-                _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                if (content.groupId != null) {
+                    emitGroupMessage(content.groupId, msgId, body, msg.senderAci, senderName, msg.timestamp)
+                } else {
+                    _events.emit(GMEvent.MessageUpdate(source, chatId, msgId, body, false, msg.timestamp, senderName, senderId = msg.senderAci))
+                    _events.emit(GMEvent.IncomingMessage(source, chatId, msgId, body, senderName, null, msg.timestamp))
+                }
             }
             is MessageContent.PollVote -> {
                 Log.d(TAG, "Received poll vote for timestamp ${content.targetTimestamp}")
@@ -1422,6 +1442,64 @@ object SignalClient {
                 Log.d(TAG, "Unknown content: ${content.description}")
             }
         }
+    }
+
+    private suspend fun resolveGroupInfo(groupId: String): GroupManager.SignalGroup? {
+        val gm = groupManager ?: return null
+        gm.getCachedGroup(groupId)?.let { return it }
+        val masterKey = db?.groupDao()?.get(groupId)?.masterKey ?: return null
+        return try {
+            gm.getOrFetchGroup(groupId, masterKey)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resolve group $groupId: ${e.message}")
+            null
+        }
+    }
+
+    // Emit a group message with per-message sender identity (name + ACI) so group threads
+    // render each sender, plus a group ConversationUpdate (isGroup + title + participant count).
+    private suspend fun emitGroupMessage(
+        groupId: String,
+        msgId: String,
+        body: String,
+        senderAci: String,
+        senderName: String?,
+        timestamp: Long,
+    ) {
+        val resolvedSender = senderName ?: resolveDisplayName(senderAci) ?: senderAci.take(8)
+        val group = resolveGroupInfo(groupId)
+        val title = group?.title
+        val participantCount = group?.members?.size ?: 0
+        val participantNames = group?.members?.mapNotNull { m ->
+            resolveDisplayName(m.aci.toString())
+        }.orEmpty()
+        val serviceData = if (participantNames.isNotEmpty()) {
+            JSONObject().put("participantNames", org.json.JSONArray(participantNames)).toString()
+        } else {
+            null
+        }
+        _events.emit(
+            GMEvent.MessageUpdate(
+                source, groupId, msgId, body, false, timestamp,
+                senderName = resolvedSender, senderId = senderAci,
+            )
+        )
+        _events.emit(
+            GMEvent.IncomingMessage(
+                source, groupId, msgId, body,
+                peerName = title, peerPhone = null, timestamp = timestamp,
+                senderName = resolvedSender, senderId = senderAci,
+            )
+        )
+        _events.emit(
+            GMEvent.ConversationUpdate(
+                source = source, conversationId = groupId,
+                peerName = title, peerPhone = null, avatarUrl = null,
+                lastPreview = body, lastTimestamp = timestamp,
+                unreadCount = 1, isGroup = true, participantCount = participantCount,
+                conversationType = "Signal", serviceData = serviceData,
+            )
+        )
     }
 
     private suspend fun resolveDisplayName(aci: String): String? {
@@ -1524,8 +1602,58 @@ object SignalClient {
         scope.launch {
             try {
                 mgr.syncStorage(masterKey)
+                // Storage sync stores group master keys but never creates conversation rows;
+                // surface them so groups appear without waiting for a live group message.
+                syncGroupConversations()
             } catch (e: Exception) {
                 Log.w(TAG, "Storage sync failed: ${e.message}")
+            }
+        }
+    }
+
+    // Surface Signal group conversations proactively. Storage-service sync stores group master
+    // keys but never emits a conversation, and backup restore is one-shot — so without this,
+    // groups only appear when a NEW group message arrives (hence "no groups on a fresh
+    // session"). Enumerate known groups and emit a group ConversationUpdate for any that don't
+    // already have a row, so we never clobber an existing thread's unread/preview.
+    private fun syncGroupConversations() {
+        val gm = groupManager ?: return
+        val database = db ?: return
+        scope.launch {
+            try {
+                val groups = SignalGroupStore(database).getAllGroups()
+                if (groups.isEmpty()) return@launch
+                val appDb = buildMessagesDatabase(appContext)
+                var surfaced = 0
+                for (entity in groups) {
+                    try {
+                        val convId = "${source.idPrefix}:${entity.groupId}"
+                        if (appDb.conversationDao().get(convId) != null) continue
+                        val group = gm.getOrFetchGroup(entity.groupId, entity.masterKey) ?: continue
+                        if (group.title.isBlank() && group.members.isEmpty()) continue
+                        val participantNames = group.members.mapNotNull { resolveDisplayName(it.aci.toString()) }
+                        val serviceData = if (participantNames.isNotEmpty()) {
+                            JSONObject().put("participantNames", org.json.JSONArray(participantNames)).toString()
+                        } else {
+                            null
+                        }
+                        _events.emit(
+                            GMEvent.ConversationUpdate(
+                                source = source, conversationId = entity.groupId,
+                                peerName = group.title.ifBlank { null }, peerPhone = null, avatarUrl = null,
+                                lastPreview = null, lastTimestamp = 0L, unreadCount = 0,
+                                isGroup = true, participantCount = group.members.size,
+                                conversationType = "Signal", serviceData = serviceData,
+                            )
+                        )
+                        surfaced++
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to surface group ${entity.groupId}: ${e.message}")
+                    }
+                }
+                Log.i(TAG, "syncGroupConversations: surfaced $surfaced group conversation(s)")
+            } catch (e: Exception) {
+                Log.w(TAG, "syncGroupConversations failed: ${e.message}")
             }
         }
     }

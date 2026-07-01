@@ -7,6 +7,7 @@ import com.vayunmathur.messages.signal.groups.GroupManager
 import com.vayunmathur.messages.signal.proto.backup.Backup
 import com.vayunmathur.messages.signal.store.SignalDatabase
 import com.vayunmathur.messages.signal.store.SignalRecipientStore
+import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -129,6 +130,11 @@ class BackupRestore(
         val serviceData = JSONObject()
             .put("isMessageRequest", target.isMessageRequest)
             .put("blocked", target.blocked)
+            .apply {
+                if (target.participantNames.isNotEmpty()) {
+                    put("participantNames", JSONArray(target.participantNames))
+                }
+            }
             .toString()
 
         emit(
@@ -142,6 +148,7 @@ class BackupRestore(
                 lastTimestamp = lastTimestamp,
                 unreadCount = unread,
                 isGroup = target.isGroup,
+                participantCount = target.participantCount,
                 conversationType = "Signal",
                 serviceData = serviceData,
             )
@@ -156,6 +163,8 @@ class BackupRestore(
         val isGroup: Boolean,
         val isMessageRequest: Boolean,
         val blocked: Boolean,
+        val participantCount: Int = 0,
+        val participantNames: List<String> = emptyList(),
     )
 
     private data class RenderedItem(
@@ -203,6 +212,10 @@ class BackupRestore(
         } catch (e: Exception) {
             null
         }
+        val participantNames = group.snapshot.membersList.mapNotNull { member ->
+            val aci = aciToUuid(member.userId.toByteArray()) ?: return@mapNotNull null
+            resolveRecipientName(aci) ?: aci.take(8)
+        }
         return ChatTarget(
             conversationId = groupId,
             name = title,
@@ -210,6 +223,8 @@ class BackupRestore(
             isGroup = true,
             isMessageRequest = !group.whitelisted && !group.blocked,
             blocked = group.blocked,
+            participantCount = group.snapshot.membersCount,
+            participantNames = participantNames,
         )
     }
 
@@ -217,18 +232,30 @@ class BackupRestore(
         val outgoing = item.hasOutgoing()
         val timestamp = item.dateSent
 
-        // Author ACI: self for outgoing, otherwise the chat item's author recipient.
+        // Resolve the actual author (self for outgoing, else the chat item's author recipient).
+        val authorContact = if (outgoing) {
+            null
+        } else {
+            getBackupRecipient(item.authorId)
+                ?.takeIf { it.destinationCase == Backup.Recipient.DestinationCase.CONTACT }
+                ?.contact
+        }
         val authorAci = if (outgoing) {
             selfAci
         } else {
-            val authorRecipient = getBackupRecipient(item.authorId)
-            val contact = authorRecipient?.takeIf {
-                it.destinationCase == Backup.Recipient.DestinationCase.CONTACT
-            }?.contact
-            contact?.let { aciToUuid(it.aci.toByteArray()) } ?: target.conversationId
+            authorContact?.let { aciToUuid(it.aci.toByteArray()) } ?: target.conversationId
         }
         val messageId = "${authorAci}_$timestamp"
-        val senderName = if (outgoing) null else target.name
+        val senderId = authorAci
+        // Per-message sender name: individual sender in groups; peer in 1:1; null for our own.
+        val senderName = when {
+            outgoing -> null
+            target.isGroup -> {
+                val phone = authorContact?.let { if (it.e164 != 0L) "+${it.e164}" else null }
+                authorContact?.let { contactDisplayName(it, phone) } ?: authorAci.take(8)
+            }
+            else -> target.name
+        }
 
         val unread = item.hasIncoming() && !item.incoming.read
 
@@ -251,6 +278,7 @@ class BackupRestore(
                     outgoing = outgoing,
                     timestamp = timestamp,
                     senderName = senderName,
+                    senderId = senderId,
                     mediaData = media?.data,
                     mediaMime = media?.mime,
                     mediaName = media?.fileName,
@@ -267,6 +295,7 @@ class BackupRestore(
                     outgoing = outgoing,
                     timestamp = timestamp,
                     senderName = senderName,
+                    senderId = senderId,
                 )
                 return RenderedItem(event, body, timestamp, unread)
             }
@@ -348,6 +377,11 @@ class BackupRestore(
             if (nick != null) return nick
         }
         return phone
+    }
+
+    private suspend fun resolveRecipientName(aci: String): String? {
+        val r = recipientStore.getRecipient(aci) ?: return null
+        return r.contactName ?: r.profileName ?: r.e164
     }
 
     private fun aciToUuid(bytes: ByteArray): String? {
