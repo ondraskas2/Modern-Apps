@@ -665,8 +665,19 @@ object MetaProtocol {
         val text: String,
     )
 
-    fun buildFetchThreadsPayload(versionId: Long, syncGroup: Int = 1, parentThreadKey: Long = -1): String {
-        val task = FetchThreadsTask(syncGroup = syncGroup, parentThreadKey = parentThreadKey)
+    fun buildFetchThreadsPayload(
+        versionId: Long,
+        syncGroup: Int = 1,
+        parentThreadKey: Long = -1,
+        referenceThreadKey: Long = 0,
+        referenceActivityTimestamp: Long = 9999999999999,
+    ): String {
+        val task = FetchThreadsTask(
+            syncGroup = syncGroup,
+            parentThreadKey = parentThreadKey,
+            referenceThreadKey = referenceThreadKey,
+            referenceActivityTimestamp = referenceActivityTimestamp,
+        )
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
             label = TASK_LABELS["FetchThreadsTask"] ?: "145",

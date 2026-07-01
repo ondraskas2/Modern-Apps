@@ -385,16 +385,10 @@ object MetaClient {
     private fun kickoffBackfill() {
         backfillJob?.cancel()
         backfillJob = scope.launch {
-            Log.i(TAG, "Backfill: syncing thread list via Lightspeed")
+            Log.i(TAG, "Backfill: syncing full thread list via Lightspeed (paginated)")
             val client = mqttClient ?: return@launch
             try {
-                val payload = MetaProtocol.buildFetchThreadsPayload(client.versionId)
-                client.makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)
-                    ?.let { client.emitForProcessing(it) }
-
-                val payloadSG95 = MetaProtocol.buildFetchThreadsPayload(client.versionId, syncGroup = 95)
-                client.makeLSRequest(payloadSG95, MetaProtocol.LS_REQUEST_TYPE_TASK)
-                    ?.let { client.emitForProcessing(it) }
+                client.backfillThreads()
             } catch (e: Exception) {
                 Log.e(TAG, "Backfill failed", e)
             }

@@ -37,6 +37,10 @@ class MetaMqttClient(
         const val MAX_RECONNECT_ATTEMPTS = 10
         const val ACK_TIMEOUT_MS = 30000L
         const val ERROR_24_COOLDOWN_MS = 10 * 60 * 1000L
+
+        // Thread sync groups to page through on initial backfill: 1 = primary inbox (MailBox),
+        // 95 = general/other. Mirrors the Go bridge ready-event FetchThreadsTask fan-out.
+        val THREAD_SYNC_GROUPS = listOf(1, 95)
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -417,6 +421,60 @@ class MetaMqttClient(
      */
     suspend fun emitForProcessing(message: MetaProtocol.MqttMessage) {
         _messages.emit(message)
+    }
+
+    /**
+     * Fetch the FULL DM thread list after connect, following pagination so every conversation
+     * (not just the first page) syncs into the DB. Mirrors the Go bridge's ready-event
+     * FetchThreadsTask fan-out (events.go) + StartThreadBackfill/FetchMoreThreads
+     * (threadbackfill.go): for each parent thread key and each thread sync group (1 = primary
+     * inbox, 95 = general/other), page backwards using the LSUpsertSyncGroupThreadsRange cursor
+     * (minThreadKey / minLastActivityTimestampMs) until hasMoreBefore is false or the cursor stops
+     * advancing. Each response is re-injected via [emitForProcessing] so its threads + messages go
+     * through the normal event → DB path.
+     *
+     * NOTE: Instagram message-requests ("pending" folder) are served by a separate GraphQL query
+     * (IGListMessageRequests) in the Go bridge, not a socket task, so they are not covered here —
+     * see the task #26 report for that follow-up.
+     */
+    suspend fun backfillThreads(maxPagesPerGroup: Int = 30) {
+        val parentKeys = config.parentThreadKeys.ifEmpty { listOf(-1L) }
+        for (syncGroup in THREAD_SYNC_GROUPS) {
+            for (parentThreadKey in parentKeys) {
+                paginateThreadGroup(syncGroup, parentThreadKey, maxPagesPerGroup)
+            }
+        }
+    }
+
+    private suspend fun paginateThreadGroup(syncGroup: Int, parentThreadKey: Long, maxPages: Int) {
+        var referenceThreadKey = 0L
+        var referenceActivityTimestamp = 9999999999999L
+        var prevMinThreadKey = Long.MIN_VALUE
+        var page = 0
+        while (page++ < maxPages) {
+            val payload = MetaProtocol.buildFetchThreadsPayload(
+                versionId = versionId,
+                syncGroup = syncGroup,
+                parentThreadKey = parentThreadKey,
+                referenceThreadKey = referenceThreadKey,
+                referenceActivityTimestamp = referenceActivityTimestamp,
+            )
+            val response = makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK) ?: break
+            emitForProcessing(response)
+
+            // Decode the same response to read the pagination cursor for this sync group.
+            val responseData = MetaProtocol.parsePublishResponse(response.payload) ?: break
+            val events = LightspeedDecoder.decodePublishResponse(responseData.payload, responseData.sp)
+            val range = MetaProtocol.parseSyncGroupRanges(events)
+                .firstOrNull { it.syncGroup == syncGroup.toLong() } ?: break
+
+            if (!range.hasMoreBefore) break
+            // Guard against a stuck cursor (hasMoreBefore may never flip false on the server).
+            if (range.minThreadKey == prevMinThreadKey) break
+            prevMinThreadKey = range.minThreadKey
+            referenceThreadKey = range.minThreadKey
+            referenceActivityTimestamp = range.minLastActivityTimestampMs
+        }
     }
 
     suspend fun sendPublishPacket(
