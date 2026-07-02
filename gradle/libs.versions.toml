@@ -79,6 +79,7 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 androidx-camera-video = { group = "androidx.camera", name = "camera-video", version.ref = "camerax" }
+androidx-camera-compose = { group = "androidx.camera", name = "camera-compose", version.ref = "camerax" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 geckoview = { module = "org.mozilla.geckoview:geckoview-arm64-v8a", version.ref = "geckoview" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }

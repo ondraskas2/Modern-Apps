@@ -14,16 +14,13 @@ import android.graphics.Shader
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Patterns
-import android.view.MotionEvent
 import android.view.OrientationEventListener
-import androidx.camera.core.CameraSelector
+import androidx.camera.compose.CameraXViewfinder
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
-import androidx.camera.view.PreviewView
+import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
+import androidx.camera.viewfinder.core.ImplementationMode
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -39,6 +36,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,7 +76,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -92,7 +89,6 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -102,9 +98,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.vayunmathur.camera.R
 import com.vayunmathur.camera.Route
 import com.vayunmathur.camera.util.AspectRatioOption
@@ -181,7 +174,7 @@ private enum class CameraSetting {
 }
 
 /** Which camera pipeline drives the preview for the current mode. */
-private enum class SessionKind { CONTROLLER, HIGH_SPEED, VIDEO }
+private enum class SessionKind { PHOTO, HIGH_SPEED, VIDEO }
 
 private fun Modifier.selectedPill(
     selected: Boolean,
@@ -192,7 +185,6 @@ private fun Modifier.selectedPill(
 @Composable
 fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val view = LocalView.current
 
     val cameraMode by viewModel.cameraMode.collectAsState()
@@ -224,9 +216,12 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     val sessionKind = when {
         isSloMo -> SessionKind.HIGH_SPEED
         isVideoType -> SessionKind.VIDEO
-        else -> SessionKind.CONTROLLER
+        else -> SessionKind.PHOTO
     }
     val highSpeedActive by viewModel.highSpeedActive.collectAsState()
+    val photoSessionActive by viewModel.photoSessionActive.collectAsState()
+    val surfaceRequest by viewModel.surfaceRequest.collectAsState()
+    val coordinateTransformer = remember { MutableCoordinateTransformer() }
     val availableZoomLevels by viewModel.availableZoomLevels.collectAsState()
     val bokehShader = remember { lazy { RuntimeShader(BOKEH_SHADER) } }
 
@@ -262,113 +257,51 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
         onDispose { listener.disable() }
     }
 
-    val controller = remember {
-        LifecycleCameraController(context).apply {
-            // Capture at the active sensor's maximum resolution rather than CameraX's
-            // capped default. HIGHEST_AVAILABLE_STRATEGY picks the largest supported
-            // output size, and PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE unlocks the
-            // full-res (maximum-resolution) sensor sizes. Re-resolved per bound camera,
-            // so front/back each get their own max.
-            imageCaptureResolutionSelector = ResolutionSelector.Builder()
-                .setAllowedResolutionMode(
-                    ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
-                )
-                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                .build()
-        }
-    }
-
     // Gallery thumbnail (loaded off the main thread in the ViewModel)
     val galleryBitmap by viewModel.galleryThumbnail.collectAsState()
 
-    LaunchedEffect(lensFacing) {
-        controller.cameraSelector = CameraSelector.Builder()
-            .requireLensFacing(lensFacing)
-            .build()
-    }
-
-    LaunchedEffect(lensFacing, sessionKind) {
-        if (sessionKind != SessionKind.CONTROLLER) return@LaunchedEffect
-        delay(500)
-        val zoomState = controller.zoomState.value
-        viewModel.updateZoomLevels(
-            zoomState?.minZoomRatio ?: 1f,
-            zoomState?.maxZoomRatio ?: 1f
-        )
-    }
-
     LaunchedEffect(Unit) {
         viewModel.updateLocation()
-        controller.isPinchToZoomEnabled = true
-    }
-
-    // Sync controller's zoom state back to ViewModel (for pinch-to-zoom)
-    DisposableEffect(controller, lifecycleOwner) {
-        val observer = androidx.lifecycle.Observer<androidx.camera.core.ZoomState> { state ->
-            state?.let { viewModel.setZoomRatio(it.zoomRatio) }
-        }
-        controller.zoomState.observe(lifecycleOwner, observer)
-        onDispose { controller.zoomState.removeObserver(observer) }
     }
 
     LaunchedEffect(flashMode) {
-        controller.imageCaptureFlashMode = viewModel.getImageCaptureFlashMode()
+        viewModel.applyImageCaptureFlashMode()
     }
 
     LaunchedEffect(torchEnabled) {
-        if (isVideoType) viewModel.applyVideoTorch(torchEnabled)
-        else controller.enableTorch(torchEnabled)
-    }
-
-    LaunchedEffect(zoomRatio) {
-        val zoomState = controller.zoomState.value
-        if (kotlin.math.abs((zoomState?.zoomRatio ?: 0f) - zoomRatio) > 0.05f) {
-            val clamped = zoomState?.let { zoomRatio.coerceIn(it.minZoomRatio, it.maxZoomRatio) } ?: zoomRatio
-            controller.setZoomRatio(clamped)
-        }
+        viewModel.enableTorch(torchEnabled)
     }
 
     LaunchedEffect(exposureComp) {
-        if (isVideoType) {
-            viewModel.applyVideoExposureCompensation(exposureComp)
-        } else {
-            controller.cameraInfo?.let { camera ->
-                val range = camera.exposureState.exposureCompensationRange
-                val index = (exposureComp * range.upper).toInt().coerceIn(range.lower, range.upper)
-                controller.cameraControl?.setExposureCompensationIndex(index)
-            }
-        }
+        viewModel.applyExposureCompensation(exposureComp)
     }
 
-    LaunchedEffect(cameraMode) {
+    // Analyzer selection for the photo modes. Keyed on photoSessionActive so the analyzer is
+    // re-applied to the freshly-bound ImageAnalysis after every (re)bind (mode switch / flip).
+    LaunchedEffect(cameraMode, photoSessionActive) {
         when {
             cameraMode == CameraMode.SLOW_MO -> {
                 maskBitmap = null
-                controller.setEnabledUseCases(0)
-                controller.clearImageAnalysisAnalyzer()
+                viewModel.setImageAnalyzer(null)
                 viewModel.setQrResult(null)
             }
             isPhotoType -> {
-                controller.setEnabledUseCases(CameraController.IMAGE_CAPTURE or CameraController.IMAGE_ANALYSIS)
                 when (cameraMode) {
                     CameraMode.PORTRAIT -> {
-                        // Analyzer lifecycle (create/close) managed by DisposableEffect(cameraMode) below.
+                        // Analyzer lifecycle (create/close) managed by DisposableEffect below.
                     }
                     CameraMode.PANORAMA, CameraMode.PHOTOSPHERE -> {
                         maskBitmap = null
-                        controller.setImageAnalysisAnalyzer(
-                            ContextCompat.getMainExecutor(context)
-                        ) @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class) { imageProxy ->
-                            viewModel.panoramaEngine.latestFrame = imageProxy.toBitmap()
-                            imageProxy.close()
-                        }
+                        viewModel.setImageAnalyzer(
+                            ImageAnalysis.Analyzer { imageProxy ->
+                                viewModel.panoramaEngine.latestFrame = imageProxy.toBitmap()
+                                imageProxy.close()
+                            }
+                        )
                     }
                     else -> {
                         maskBitmap = null
-                        controller.setImageAnalysisAnalyzer(
-                            ContextCompat.getMainExecutor(context),
-                            QrAnalyzer { text -> viewModel.setQrResult(text) }
-                        )
+                        viewModel.setImageAnalyzer(QrAnalyzer { text -> viewModel.setQrResult(text) })
                     }
                 }
             }
@@ -380,13 +313,14 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
     }
 
     // Owns the PORTRAIT bokeh segmenter so it is closed (and its mask recycled) on mode change.
-    DisposableEffect(cameraMode) {
+    // Also keyed on photoSessionActive so the analyzer re-attaches after a rebind.
+    DisposableEffect(cameraMode, photoSessionActive) {
         val analyzer = if (cameraMode == CameraMode.PORTRAIT) {
             BokehAnalyzer(context) { mask ->
                 maskBitmap?.recycle()
                 maskBitmap = mask
             }.also {
-                controller.setImageAnalysisAnalyzer(ContextCompat.getMainExecutor(context), it)
+                viewModel.setImageAnalyzer(it)
             }
         } else null
         onDispose {
@@ -396,50 +330,14 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
         }
     }
 
-    // Manage camera binding: controller for normal modes, high-speed session for slo-mo
-    val highSpeedPreviewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-    }
-
-    val regularPreviewView = remember {
-        PreviewView(context).apply {
-            this.controller = controller
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-    }
-
-    val videoPreviewView = remember {
-        PreviewView(context).apply {
-            scaleType = PreviewView.ScaleType.FIT_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        }
-    }
-
+    // Unified session binding: tear down the previous session, then bind the one for this mode.
     LaunchedEffect(lensFacing, sessionKind) {
+        viewModel.teardownSession()
+        delay(250)
         when (sessionKind) {
-            SessionKind.HIGH_SPEED -> {
-                controller.unbind()
-                viewModel.teardownVideoSession()
-                viewModel.teardownHighSpeedSession()
-                delay(250)
-                viewModel.setupHighSpeedSession(highSpeedPreviewView.surfaceProvider)
-            }
-            SessionKind.VIDEO -> {
-                controller.unbind()
-                viewModel.teardownHighSpeedSession()
-                viewModel.teardownVideoSession()
-                delay(250)
-                viewModel.setupVideoSession(videoPreviewView.surfaceProvider)
-            }
-            SessionKind.CONTROLLER -> {
-                viewModel.teardownHighSpeedSession()
-                viewModel.teardownVideoSession()
-                controller.bindToLifecycle(lifecycleOwner)
-            }
+            SessionKind.HIGH_SPEED -> viewModel.setupHighSpeedSession()
+            SessionKind.VIDEO -> viewModel.setupVideoSession()
+            SessionKind.PHOTO -> viewModel.setupPhotoSession()
         }
     }
 
@@ -493,7 +391,6 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                         .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    @OptIn(ExperimentalComposeUiApi::class)
                     val previewModifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(previewAspectRatio)
@@ -542,39 +439,34 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                     }
                                 }
                             )
-                            .pointerInteropFilter { event ->
-                                if (event.action == MotionEvent.ACTION_UP) {
-                                    if (isVideoType) {
-                                        val point = videoPreviewView.meteringPointFactory
-                                            .createPoint(event.x, event.y)
-                                        val action = FocusMeteringAction.Builder(point).build()
-                                        viewModel.startVideoFocusAndMetering(action)
-                                    } else {
-                                        val factory = SurfaceOrientedMeteringPointFactory(
-                                            event.x, event.y
-                                        )
-                                        val point = factory.createPoint(event.x, event.y)
-                                        val action = FocusMeteringAction.Builder(point).build()
-                                        controller.cameraControl?.startFocusAndMetering(action)
-                                    }
+                            .pointerInput(Unit) {
+                                detectTapGestures { tapOffset ->
+                                    val request = surfaceRequest ?: return@detectTapGestures
+                                    val transformed = with(coordinateTransformer) { tapOffset.transform() }
+                                    val factory = SurfaceOrientedMeteringPointFactory(
+                                        request.resolution.width.toFloat(),
+                                        request.resolution.height.toFloat()
+                                    )
+                                    val point = factory.createPoint(transformed.x, transformed.y)
+                                    viewModel.startFocusAndMetering(
+                                        FocusMeteringAction.Builder(point).build()
+                                    )
                                 }
-                                false
+                            }
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, _, zoom, _ ->
+                                    if (zoom != 1f) viewModel.setZoomRatio(viewModel.zoomRatio.value * zoom)
+                                }
                             }
 
-                    if (isSloMo) {
-                        AndroidView(
-                            factory = { highSpeedPreviewView },
-                            modifier = previewModifier
-                        )
-                    } else if (isVideoType) {
-                        AndroidView(
-                            factory = { videoPreviewView },
-                            modifier = previewModifier
-                        )
-                    } else {
-                        AndroidView(
-                            factory = { regularPreviewView },
-                            modifier = previewModifier
+                    surfaceRequest?.let { request ->
+                        CameraXViewfinder(
+                            surfaceRequest = request,
+                            modifier = previewModifier,
+                            implementationMode = ImplementationMode.EMBEDDED,
+                            coordinateTransformer = coordinateTransformer,
+                            alignment = Alignment.Center,
+                            contentScale = if (isSloMo) ContentScale.Crop else ContentScale.Fit
                         )
                     }
 
@@ -678,7 +570,7 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                 else viewModel.startPanorama()
                             }
                             isSloMo && highSpeedActive -> viewModel.toggleHighSpeedRecording()
-                            isPhotoType -> viewModel.takePhoto(controller)
+                            isPhotoType -> viewModel.takePhoto()
                             else -> viewModel.toggleRecording()
                         }
                     },

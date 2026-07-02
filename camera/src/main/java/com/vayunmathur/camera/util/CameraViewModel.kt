@@ -11,22 +11,23 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.Camera
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.HighSpeedVideoSessionConfig
 import androidx.camera.video.MediaStoreOutputOptions
-import androidx.camera.video.Quality
-import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -60,6 +61,15 @@ data class ExposureTimeStop(val label: String, val nanos: Long?)
 
 class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     companion object {
+        /**
+         * AV1/Opus recording is disabled: CameraX's Recorder muxes an incomplete `av1C`
+         * (empty configOBUs — no sequence-header OBU) and Android raw Opus CSD, producing
+         * files the system thumbnailer and ExoPlayer can't decode (0x0 playback, no
+         * thumbnail) even on hardware that supports AV1. Falls back to the default
+         * H.264 + AAC. Flip to true to re-enable once the muxing writes a complete av1C.
+         */
+        private const val ENABLE_AV1_OPUS_RECORDING = false
+
         val EXPOSURE_TIME_STOPS = listOf(
             ExposureTimeStop("Auto", null),
             ExposureTimeStop("1/4000s", 250_000L),
@@ -160,20 +170,29 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     val panoramaEngine = PanoramaEngine(app)
 
-    // High-speed session state
+    // Unified manual session state (all modes bind through one CameraXViewfinder).
+    private val _surfaceRequest = MutableStateFlow<SurfaceRequest?>(null)
+    val surfaceRequest = _surfaceRequest.asStateFlow()
+
     private var cameraProvider: ProcessCameraProvider? = null
+    private var sessionLifecycleOwner: ManualLifecycleOwner? = null
+    private var boundCamera: Camera? = null
+    private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
+
+    /** True once the photo session's use cases (incl. ImageAnalysis) are bound. */
+    private val _photoSessionActive = MutableStateFlow(false)
+    val photoSessionActive = _photoSessionActive.asStateFlow()
+
+    // High-speed session state
     private var highSpeedVideoCapture: VideoCapture<Recorder>? = null
     private var highSpeedRecording: Recording? = null
-    private var highSpeedCamera: androidx.camera.core.Camera? = null
-    private var highSpeedLifecycleOwner: ManualLifecycleOwner? = null
 
     private val _highSpeedActive = MutableStateFlow(false)
     val highSpeedActive = _highSpeedActive.asStateFlow()
 
     // Manual video session state (VIDEO / TIMELAPSE modes)
     private var videoCapture: VideoCapture<Recorder>? = null
-    private var videoCamera: androidx.camera.core.Camera? = null
-    private var videoLifecycleOwner: ManualLifecycleOwner? = null
 
     private val _videoSessionActive = MutableStateFlow(false)
     val videoSessionActive = _videoSessionActive.asStateFlow()
@@ -277,8 +296,12 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun setZoomRatio(ratio: Float) {
-        _zoomRatio.value = ratio
-        (videoCamera ?: highSpeedCamera)?.cameraControl?.setZoomRatio(ratio)
+        val cam = boundCamera
+        val clamped = cam?.cameraInfo?.zoomState?.value?.let {
+            ratio.coerceIn(it.minZoomRatio, it.maxZoomRatio)
+        } ?: ratio
+        _zoomRatio.value = clamped
+        cam?.cameraControl?.setZoomRatio(clamped)
     }
 
     fun updateZoomLevels(minZoom: Float, maxZoom: Float) {
@@ -306,9 +329,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    suspend fun setupHighSpeedSession(
-        surfaceProvider: Preview.SurfaceProvider
-    ): Boolean {
+    suspend fun setupHighSpeedSession(): Boolean {
         return try {
             val provider = ProcessCameraProvider.awaitInstance(app)
             cameraProvider = provider
@@ -331,7 +352,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             Log.d("SloMo", "High-speed supported qualities: $supportedQualities")
 
             val preview = Preview.Builder().build()
-            preview.surfaceProvider = surfaceProvider
+            preview.setSurfaceProvider { request -> _surfaceRequest.value = request }
 
             val recorder = Recorder.Builder().build()
             val videoCapture = VideoCapture.withOutput(recorder)
@@ -354,15 +375,15 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             sloMoFps = bestRange.upper
             Log.d("SloMo", "High-speed session configured at ${bestRange.upper}fps, slow-mo baked in")
 
-            val hsOwner = ManualLifecycleOwner()
-            hsOwner.start()
-            highSpeedLifecycleOwner = hsOwner
-            highSpeedCamera = provider.bindToLifecycle(hsOwner, selector, configBuilder.build())
+            val owner = ManualLifecycleOwner()
+            owner.start()
+            sessionLifecycleOwner = owner
+            boundCamera = provider.bindToLifecycle(owner, selector, configBuilder.build())
 
             // Set anti-banding to reduce flicker under artificial light
             try {
                 val cam2Control = androidx.camera.camera2.interop.Camera2CameraControl.from(
-                    highSpeedCamera!!.cameraControl
+                    boundCamera!!.cameraControl
                 )
                 cam2Control.setCaptureRequestOptions(
                     androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
@@ -376,8 +397,9 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 Log.w("SloMo", "Could not set anti-banding", e)
             }
 
-            highSpeedCamera?.cameraInfo?.zoomState?.value?.let {
+            boundCamera?.cameraInfo?.zoomState?.value?.let {
                 updateZoomLevels(it.minZoomRatio, it.maxZoomRatio)
+                _zoomRatio.value = it.zoomRatio
             }
             _highSpeedActive.value = true
             true
@@ -387,25 +409,72 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun teardownHighSpeedSession() {
-        highSpeedRecording?.stop()
-        highSpeedRecording = null
-        highSpeedLifecycleOwner?.destroy()
-        highSpeedLifecycleOwner = null
-        cameraProvider?.unbindAll()
-        highSpeedVideoCapture = null
-        highSpeedCamera = null
-        cameraProvider = null
-        _highSpeedActive.value = false
+    /**
+     * Binds a manual Preview + ImageCapture + ImageAnalysis session for the photo modes
+     * (PHOTO / PORTRAIT / PANORAMA / PHOTOSPHERE / QR). ImageCapture requests the sensor's
+     * maximum resolution; if the 3-stream max-res combination exceeds a device's stream-config
+     * limits, it falls back to a default ImageCapture resolution.
+     */
+    suspend fun setupPhotoSession(): Boolean {
+        return try {
+            val provider = ProcessCameraProvider.awaitInstance(app)
+            cameraProvider = provider
+            provider.unbindAll()
+
+            val selector = CameraSelector.Builder()
+                .requireLensFacing(_lensFacing.value)
+                .build()
+
+            val preview = Preview.Builder().build()
+            preview.setSurfaceProvider { request -> _surfaceRequest.value = request }
+
+            val owner = ManualLifecycleOwner()
+            owner.start()
+            sessionLifecycleOwner = owner
+
+            fun bind(maxRes: Boolean): Camera {
+                val selectorBuilder = ResolutionSelector.Builder()
+                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                if (maxRes) {
+                    // HIGHEST_AVAILABLE + PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE unlocks the
+                    // full-res (maximum-resolution) sensor sizes, re-resolved per bound camera.
+                    selectorBuilder.setAllowedResolutionMode(
+                        ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+                    )
+                }
+                val capture = ImageCapture.Builder()
+                    .setResolutionSelector(selectorBuilder.build())
+                    .setFlashMode(getImageCaptureFlashMode())
+                    .build()
+                imageCapture = capture
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                imageAnalysis = analysis
+                return provider.bindToLifecycle(owner, selector, preview, capture, analysis)
+            }
+
+            boundCamera = try {
+                bind(maxRes = true)
+            } catch (e: Exception) {
+                Log.w("PhotoSession", "Max-res 3-stream bind failed; falling back to default resolution", e)
+                provider.unbindAll()
+                bind(maxRes = false)
+            }
+
+            boundCamera?.cameraInfo?.zoomState?.value?.let {
+                updateZoomLevels(it.minZoomRatio, it.maxZoomRatio)
+                _zoomRatio.value = it.zoomRatio
+            }
+            _photoSessionActive.value = true
+            true
+        } catch (e: Exception) {
+            Log.e("PhotoSession", "Failed to set up photo session", e)
+            false
+        }
     }
 
-    /**
-     * Binds a manual Preview + VideoCapture session for VIDEO/TIMELAPSE, encoding AV1 + Opus
-     * when the device has a hardware AV1 encoder and the camera reports AV1 support. Falls back
-     * to CameraX default codecs (H.264 + AAC) otherwise, and again if binding the AV1 session
-     * throws (a present encoder can still reject a given resolution/profile).
-     */
-    suspend fun setupVideoSession(surfaceProvider: Preview.SurfaceProvider): Boolean {
+    suspend fun setupVideoSession(): Boolean {
         return try {
             val provider = ProcessCameraProvider.awaitInstance(app)
             cameraProvider = provider
@@ -416,18 +485,19 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 .build()
             val cameraInfo = provider.getCameraInfo(selector)
 
-            val useAv1 = CodecSupport.isHardwareAv1EncoderAvailable && av1SupportedByCamera(cameraInfo)
-            val useOpus = CodecSupport.isOpusEncoderAvailable
+            val useAv1 = ENABLE_AV1_OPUS_RECORDING &&
+                CodecSupport.isHardwareAv1EncoderAvailable && av1SupportedByCamera(cameraInfo)
+            val useOpus = ENABLE_AV1_OPUS_RECORDING && CodecSupport.isOpusEncoderAvailable
             Log.d("VideoSession", "Codec selection: av1=$useAv1, opus=$useOpus")
 
             val preview = Preview.Builder().build()
-            preview.surfaceProvider = surfaceProvider
+            preview.setSurfaceProvider { request -> _surfaceRequest.value = request }
 
             val owner = ManualLifecycleOwner()
             owner.start()
-            videoLifecycleOwner = owner
+            sessionLifecycleOwner = owner
 
-            fun bind(av1: Boolean, opus: Boolean): androidx.camera.core.Camera {
+            fun bind(av1: Boolean, opus: Boolean): Camera {
                 val recorderBuilder = Recorder.Builder()
                 if (av1) recorderBuilder.setVideoMimeType(MediaFormat.MIMETYPE_VIDEO_AV1)
                 if (opus) recorderBuilder.setAudioMimeType(MediaFormat.MIMETYPE_AUDIO_OPUS)
@@ -437,7 +507,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 return provider.bindToLifecycle(owner, selector, preview, capture)
             }
 
-            videoCamera = try {
+            boundCamera = try {
                 bind(useAv1, useOpus)
             } catch (e: Exception) {
                 if (!useAv1 && !useOpus) throw e
@@ -446,8 +516,9 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 bind(av1 = false, opus = false)
             }
 
-            videoCamera?.cameraInfo?.zoomState?.value?.let {
+            boundCamera?.cameraInfo?.zoomState?.value?.let {
                 updateZoomLevels(it.minZoomRatio, it.maxZoomRatio)
+                _zoomRatio.value = it.zoomRatio
             }
             _videoSessionActive.value = true
             true
@@ -465,33 +536,55 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         false
     }
 
-    fun teardownVideoSession() {
+    /** Tears down whatever session is currently bound and clears the shared preview surface. */
+    fun teardownSession() {
         currentRecording?.stop()
         currentRecording = null
-        videoLifecycleOwner?.destroy()
-        videoLifecycleOwner = null
+        highSpeedRecording?.stop()
+        highSpeedRecording = null
+        imageAnalysis?.clearAnalyzer()
+        sessionLifecycleOwner?.destroy()
+        sessionLifecycleOwner = null
         cameraProvider?.unbindAll()
+        boundCamera = null
+        imageCapture = null
+        imageAnalysis = null
         videoCapture = null
-        videoCamera = null
+        highSpeedVideoCapture = null
         cameraProvider = null
+        _surfaceRequest.value = null
+        _photoSessionActive.value = false
+        _highSpeedActive.value = false
         _videoSessionActive.value = false
     }
 
-    // --- Manual video session control wiring (mirrors what the controller provided) ---
+    // --- Unified manual session control wiring (targets the single bound camera) ---
 
-    fun startVideoFocusAndMetering(action: FocusMeteringAction) {
-        videoCamera?.cameraControl?.startFocusAndMetering(action)
+    fun startFocusAndMetering(action: FocusMeteringAction) {
+        boundCamera?.cameraControl?.startFocusAndMetering(action)
     }
 
-    fun applyVideoTorch(enabled: Boolean) {
-        videoCamera?.cameraControl?.enableTorch(enabled)
+    fun enableTorch(enabled: Boolean) {
+        boundCamera?.cameraControl?.enableTorch(enabled)
     }
 
-    fun applyVideoExposureCompensation(value: Float) {
-        val cam = videoCamera ?: return
+    fun applyExposureCompensation(value: Float) {
+        val cam = boundCamera ?: return
         val range = cam.cameraInfo.exposureState.exposureCompensationRange
         val index = (value * range.upper).toInt().coerceIn(range.lower, range.upper)
         cam.cameraControl.setExposureCompensationIndex(index)
+    }
+
+    /** Pushes the current flash mode onto the bound ImageCapture (runtime-mutable, no rebind). */
+    fun applyImageCaptureFlashMode() {
+        imageCapture?.flashMode = getImageCaptureFlashMode()
+    }
+
+    /** Swaps the analyzer on the bound ImageAnalysis without rebinding. */
+    fun setImageAnalyzer(analyzer: ImageAnalysis.Analyzer?) {
+        val analysis = imageAnalysis ?: return
+        if (analyzer == null) analysis.clearAnalyzer()
+        else analysis.setAnalyzer(ContextCompat.getMainExecutor(app), analyzer)
     }
 
     private fun startRecordingTimer() {
@@ -550,7 +643,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // --- Standard recording ---
 
-    fun takePhoto(controller: LifecycleCameraController) {
+    fun takePhoto() {
         val timer = _timerDuration.value
         if (timer.seconds > 0) {
             viewModelScope.launch {
@@ -559,14 +652,15 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                     delay(1000)
                 }
                 _timerCountdown.value = 0
-                capturePhoto(controller)
+                capturePhoto()
             }
         } else {
-            capturePhoto(controller)
+            capturePhoto()
         }
     }
 
-    private fun capturePhoto(controller: LifecycleCameraController) {
+    private fun capturePhoto() {
+        val capture = imageCapture ?: return
         _isCapturing.value = true
         val contentValues = MediaStoreSaver.imageValues("IMG_${MediaStoreSaver.timestamp()}.jpg")
 
@@ -582,7 +676,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
         val stop = EXPOSURE_TIME_STOPS[_exposureTimeIndex.value]
         val cam2Control = try {
-            controller.cameraControl?.let {
+            boundCamera?.cameraControl?.let {
                 androidx.camera.camera2.interop.Camera2CameraControl.from(it)
             }
         } catch (e: Exception) { Log.w("CameraViewModel", "Camera2 control unavailable", e); null }
@@ -606,7 +700,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
             if (stop.nanos != null && stop.nanos >= 250_000_000L) {
                 startLongExposureCountdown(stop.nanos)
             }
-            controller.takePicture(
+            capture.takePicture(
                 outputOptions,
                 ContextCompat.getMainExecutor(app),
                 object : ImageCapture.OnImageSavedCallback {
