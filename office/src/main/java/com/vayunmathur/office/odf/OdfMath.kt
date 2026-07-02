@@ -23,6 +23,13 @@ sealed class MathNode {
     data class Sqrt(val radicand: MathNode) : MathNode()
     data class Root(val radicand: MathNode, val index: MathNode) : MathNode()
     data class Fenced(val open: String, val close: String, val body: MathNode) : MathNode()
+    data class Under(val base: MathNode, val under: MathNode) : MathNode()
+    data class Over(val base: MathNode, val over: MathNode) : MathNode()
+    data class UnderOver(val base: MathNode, val under: MathNode, val over: MathNode) : MathNode()
+    data class Table(val rows: List<TableRow>) : MathNode()
+    data class TableRow(val cells: List<MathNode>) : MathNode()
+    /** mmultiscripts (best-effort): pre/post sub/sup scripts flattened around the base. */
+    data class Multiscripts(val base: MathNode, val postSub: MathNode?, val postSup: MathNode?, val preSub: MathNode?, val preSup: MathNode?) : MathNode()
 }
 
 object OdfMath {
@@ -101,6 +108,35 @@ object OdfMath {
                 val close = attr(parser, "close") ?: ")"
                 Fenced(open, close, Row(parseChildren(parser, "mfenced")))
             }
+            "munder" -> {
+                val kids = parseChildren(parser, "munder")
+                MathNode.Under(kids.getOrElse(0) { Row(emptyList()) }, kids.getOrElse(1) { Row(emptyList()) })
+            }
+            "mover" -> {
+                val kids = parseChildren(parser, "mover")
+                MathNode.Over(kids.getOrElse(0) { Row(emptyList()) }, kids.getOrElse(1) { Row(emptyList()) })
+            }
+            "munderover" -> {
+                val kids = parseChildren(parser, "munderover")
+                MathNode.UnderOver(kids.getOrElse(0) { Row(emptyList()) }, kids.getOrElse(1) { Row(emptyList()) }, kids.getOrElse(2) { Row(emptyList()) })
+            }
+            "mtable" -> {
+                val rows = parseChildren(parser, "mtable").filterIsInstance<MathNode.TableRow>()
+                MathNode.Table(rows)
+            }
+            "mtr", "mlabeledtr" -> {
+                val cells = parseChildren(parser, parser.name)
+                MathNode.TableRow(cells)
+            }
+            "mtd" -> Row(parseChildren(parser, "mtd"))
+            "mmultiscripts" -> {
+                val kids = parseChildren(parser, "mmultiscripts")
+                // base, then (postsub, postsup) pairs; <mprescripts/> is dropped so pre-scripts fold in after it.
+                val base = kids.getOrElse(0) { Row(emptyList()) }
+                val postSub = kids.getOrNull(1)
+                val postSup = kids.getOrNull(2)
+                MathNode.Multiscripts(base, postSub, postSup, null, null)
+            }
             "semantics" -> Row(parseChildren(parser, "semantics"))
             "annotation", "annotation-xml" -> { skip(parser); null }
             else -> { val tag = parser.name; Row(parseChildren(parser, tag)) }
@@ -139,5 +175,21 @@ object OdfMath {
         is MathNode.Sqrt -> "\u221A(${toText(node.radicand)})"
         is MathNode.Root -> "root[${toText(node.index)}](${toText(node.radicand)})"
         is MathNode.Fenced -> "${node.open}${toText(node.body)}${node.close}"
+        is MathNode.Under -> "${toText(node.base)}_${toText(node.under)}"
+        is MathNode.Over -> "${toText(node.base)}^${toText(node.over)}"
+        is MathNode.UnderOver -> "${toText(node.base)}_${toText(node.under)}^${toText(node.over)}"
+        is MathNode.Table -> node.rows.joinToString("; ") { toText(it) }
+        is MathNode.TableRow -> node.cells.joinToString(", ") { toText(it) }
+        is MathNode.Multiscripts -> {
+            val pre = buildString {
+                node.preSub?.let { append("_").append(toText(it)) }
+                node.preSup?.let { append("^").append(toText(it)) }
+            }
+            val post = buildString {
+                node.postSub?.let { append("_").append(toText(it)) }
+                node.postSup?.let { append("^").append(toText(it)) }
+            }
+            "$pre${toText(node.base)}$post"
+        }
     }
 }

@@ -122,6 +122,39 @@ object OdfFormulaEngine {
         return n - 1
     }
 
+    /** 0-based column index -> letters (0 -> A, 26 -> AA). */
+    private fun indexToCol(index: Int): String {
+        if (index < 0) return "A"
+        var n = index + 1
+        val sb = StringBuilder()
+        while (n > 0) { val rem = (n - 1) % 26; sb.insert(0, ('A' + rem)); n = (n - 1) / 26 }
+        return sb.toString()
+    }
+
+    private fun factD(k: Int): Double { var r = 1.0; for (i in 2..k) r *= i; return r }
+
+    private fun romanToArabic(roman: String): Int {
+        val map = mapOf('I' to 1, 'V' to 5, 'X' to 10, 'L' to 50, 'C' to 100, 'D' to 500, 'M' to 1000)
+        val s = roman.trim().uppercase()
+        var total = 0
+        for (i in s.indices) {
+            val cur = map[s[i]] ?: continue
+            val next = if (i + 1 < s.length) map[s[i + 1]] ?: 0 else 0
+            if (cur < next) total -= cur else total += cur
+        }
+        return total
+    }
+
+    private fun arabicToRoman(value: Int): String {
+        if (value <= 0 || value >= 4000) return value.toString()
+        val nums = intArrayOf(1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1)
+        val syms = arrayOf("M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I")
+        var v = value
+        val sb = StringBuilder()
+        for (i in nums.indices) { while (v >= nums[i]) { sb.append(syms[i]); v -= nums[i] } }
+        return sb.toString()
+    }
+
     // ---- Value model -------------------------------------------------------
 
     private sealed class Value {
@@ -177,6 +210,10 @@ object OdfFormulaEngine {
         val sheetName: String = ""
     ) {
 
+        /** Coordinates of the cell whose formula is currently being parsed (for ROW/COLUMN/OFFSET/ADDRESS). */
+        var curRow = 0
+        var curCol = 0
+
         /** Public entry: evaluates a cell, converting thrown errors into a Value.Err. */
         fun evaluateCellValue(row: Int, col: Int): Value = try {
             evaluateCellV(row, col)
@@ -197,11 +234,14 @@ object OdfFormulaEngine {
             val cell = sheet.rows.getOrNull(row)?.cells?.getOrNull(col) ?: return Value.Blank
             val formula = cell.formula ?: return rawCellValue(cell)
             visiting.add(key)
+            val saveR = curRow; val saveC = curCol
+            curRow = row; curCol = col
             try {
                 val expr = normalize(formula)
                 return Parser(expr).parseExpression()
             } finally {
                 visiting.remove(key)
+                curRow = saveR; curCol = saveC
             }
         }
 
@@ -278,6 +318,12 @@ object OdfFormulaEngine {
             is Arg.RangeRef -> rangeValues(arg.r1, arg.c1, arg.r2, arg.c2, arg.sheet)
         }
 
+        /** Resolves the raw cell at a (possibly cross-sheet) coordinate without evaluating it. */
+        private fun cellAt(sheetRef: String?, r: Int, c: Int): OdfCell? {
+            val target = if (sheetRef == null || sheetRef == sheetName) sheet else workbook[sheetRef] ?: sheet
+            return target.rows.getOrNull(r)?.cells?.getOrNull(c)
+        }
+
         // A lazily-evaluated function argument (for IF/IFERROR/CHOOSE short-circuiting).
         private inner class ArgThunk(val text: String) {
             fun arg(): Arg = Parser(text).parseArgTop()
@@ -286,6 +332,8 @@ object OdfFormulaEngine {
                 is Arg.RangeRef -> evalOn(a.sheet, a.r1, a.c1)
             }
             fun values(): List<Value> = argValues(arg())
+            /** Raw reference (single cell or range) if the whole arg is a reference token, else null. */
+            fun ref(): Ref? = Parser(text).parseRefTop()
         }
 
         // ---- comparison ----------------------------------------------------
@@ -369,6 +417,15 @@ object OdfFormulaEngine {
                     pos = save
                 }
                 return Arg.Scalar(parseExpression())
+            }
+
+            /** Parses a lone top-level reference token (single cell or range), else null. */
+            fun parseRefTop(): Ref? {
+                skipWs()
+                if (peek() != '[') return null
+                val ref = parseRefRaw()
+                skipWs()
+                return if (pos >= s.length) ref else null
             }
 
             private fun parseComparison(): Value {
@@ -455,7 +512,10 @@ object OdfFormulaEngine {
             private fun parseNumber(): Double {
                 val start = pos
                 while (pos < s.length && (s[pos].isDigit() || s[pos] == '.' || s[pos] == 'E' || s[pos] == 'e')) pos++
-                return s.substring(start, pos).toDoubleOrNull() ?: 0.0
+                var value = s.substring(start, pos).toDoubleOrNull() ?: 0.0
+                skipWs()
+                if (peek() == '%') { pos++; value /= 100.0 }
+                return value
             }
 
             private fun parseString(): String {
@@ -552,6 +612,20 @@ object OdfFormulaEngine {
                 fun n(i: Int) = num(a[i].value())
                 fun v(i: Int) = a[i].value()
                 fun sArg(i: Int) = str(a[i].value())
+                fun arr(i: Int) = a[i].values().mapNotNull { numOrNull(it) }
+                fun pair(i: Int, j: Int): Pair<List<Double>, List<Double>> {
+                    val x = arr(i); val y = arr(j); val m = minOf(x.size, y.size)
+                    return x.take(m) to y.take(m)
+                }
+                fun valsA(): List<Double> = allVals().mapNotNull {
+                    when (it) {
+                        is Value.Num -> it.v
+                        is Value.Bool -> if (it.b) 1.0 else 0.0
+                        is Value.Str -> 0.0
+                        Value.Blank -> null
+                        is Value.Err -> throw FormulaException(it.code)
+                    }
+                }
 
                 return when (name) {
                     // ---- math / statistics ----
@@ -750,6 +824,27 @@ object OdfFormulaEngine {
                             "D" -> Value.Num(floor(n(1)) - floor(n(0)))
                             "M" -> Value.Num(((c2.get(GregorianCalendar.YEAR) - c1.get(GregorianCalendar.YEAR)) * 12 + (c2.get(GregorianCalendar.MONTH) - c1.get(GregorianCalendar.MONTH))).toDouble())
                             "Y" -> Value.Num((c2.get(GregorianCalendar.YEAR) - c1.get(GregorianCalendar.YEAR)).toDouble())
+                            "MD" -> {
+                                val d1 = c1.get(GregorianCalendar.DAY_OF_MONTH); val d2 = c2.get(GregorianCalendar.DAY_OF_MONTH)
+                                var diff = d2 - d1
+                                if (diff < 0) {
+                                    val prev = serialToCal(n(1)); prev.set(GregorianCalendar.DAY_OF_MONTH, 1); prev.add(GregorianCalendar.DAY_OF_MONTH, -1)
+                                    diff = prev.get(GregorianCalendar.DAY_OF_MONTH) - d1 + d2
+                                }
+                                Value.Num(diff.toDouble())
+                            }
+                            "YM" -> {
+                                var m = (c2.get(GregorianCalendar.YEAR) - c1.get(GregorianCalendar.YEAR)) * 12 + (c2.get(GregorianCalendar.MONTH) - c1.get(GregorianCalendar.MONTH))
+                                if (c2.get(GregorianCalendar.DAY_OF_MONTH) < c1.get(GregorianCalendar.DAY_OF_MONTH)) m--
+                                Value.Num((((m % 12) + 12) % 12).toDouble())
+                            }
+                            "YD" -> {
+                                val tmp = serialToCal(n(0))
+                                tmp.set(GregorianCalendar.YEAR, c2.get(GregorianCalendar.YEAR))
+                                if (tmp.timeInMillis > c2.timeInMillis) tmp.add(GregorianCalendar.YEAR, -1)
+                                val startSerial = dateSerial(tmp.get(GregorianCalendar.YEAR), tmp.get(GregorianCalendar.MONTH) + 1, tmp.get(GregorianCalendar.DAY_OF_MONTH))
+                                Value.Num(floor(n(1)) - startSerial)
+                            }
                             else -> throw FormulaException("#NUM!")
                         }
                     }
@@ -771,6 +866,138 @@ object OdfFormulaEngine {
                     "PV" -> { val r = n(0); val nper = n(1); val pmt = n(2); val fv = if (a.size > 3) n(3) else 0.0; Value.Num(if (r == 0.0) -(fv + pmt * nper) else -(fv + pmt * ((1 + r).pow(nper) - 1) / r) / (1 + r).pow(nper)) }
                     "NPV" -> { val r = n(0); var total = 0.0; var t = 1; for (i in 1 until a.size) for (cf in a[i].values().mapNotNull { numOrNull(it) }) { total += cf / (1 + r).pow(t); t++ }; Value.Num(total) }
                     "NPER" -> { val r = n(0); val pmt = n(1); val pv = n(2); val fv = if (a.size > 3) n(3) else 0.0; Value.Num(if (r == 0.0) -(pv + fv) / pmt else ln((pmt - fv * r) / (pmt + pv * r)) / ln(1 + r)) }
+
+                    // ---- info / logical (Phase 1) ----
+                    "ISEVEN" -> Value.Bool(truncate(n(0)).toLong() % 2L == 0L)
+                    "ISODD" -> Value.Bool(truncate(n(0)).toLong() % 2L != 0L)
+                    "ISFORMULA" -> { val r = a[0].ref(); Value.Bool(r != null && cellAt(r.sheet, minOf(r.r1, r.r2), minOf(r.c1, r.c2))?.formula != null) }
+                    "ISREF" -> Value.Bool(a[0].ref() != null)
+                    "ISNONTEXT" -> Value.Bool(safeValue(a[0]) !is Value.Str)
+                    "N" -> when (val vv = v(0)) {
+                        is Value.Num -> vv
+                        is Value.Bool -> Value.Num(if (vv.b) 1.0 else 0.0)
+                        is Value.Err -> vv
+                        else -> Value.Num(0.0)
+                    }
+                    "TYPE" -> Value.Num(when (safeValue(a[0])) {
+                        is Value.Num -> 1.0; is Value.Str -> 2.0; is Value.Bool -> 4.0
+                        is Value.Err -> 16.0; Value.Blank -> 1.0
+                    })
+                    "ERROR.TYPE" -> {
+                        val code = isError(a[0])
+                        val t = when (code) { "#NULL!" -> 1; "#DIV/0!" -> 2; "#VALUE!" -> 3; "#REF!" -> 4; "#NAME?" -> 5; "#NUM!" -> 6; "#N/A" -> 7; else -> null }
+                        if (t == null) throw FormulaException("#N/A") else Value.Num(t.toDouble())
+                    }
+                    "SHEET" -> { val idx = workbook.keys.indexOf(sheetName); Value.Num((if (idx < 0) 1 else idx + 1).toDouble()) }
+                    "SHEETS" -> Value.Num((if (workbook.isEmpty()) 1 else workbook.size).toDouble())
+
+                    // ---- math (Phase 1) ----
+                    "QUOTIENT" -> { val d = n(1); if (d == 0.0) throw FormulaException("#DIV/0!") else Value.Num(truncate(n(0) / d)) }
+                    "SEC" -> Value.Num(1.0 / kotlin.math.cos(n(0)))
+                    "CSC" -> Value.Num(1.0 / kotlin.math.sin(n(0)))
+                    "COT" -> Value.Num(1.0 / kotlin.math.tan(n(0)))
+                    "SINH" -> Value.Num(kotlin.math.sinh(n(0)))
+                    "COSH" -> Value.Num(kotlin.math.cosh(n(0)))
+                    "TANH" -> Value.Num(kotlin.math.tanh(n(0)))
+                    "ASINH" -> Value.Num(kotlin.math.asinh(n(0)))
+                    "ACOSH" -> Value.Num(kotlin.math.acosh(n(0)))
+                    "ATANH" -> Value.Num(kotlin.math.atanh(n(0)))
+                    "MULTINOMIAL" -> { val ns = allNums().map { it.toInt() }; var r = factD(ns.sum()); for (x in ns) r /= factD(x); Value.Num(r) }
+                    "SUMX2PY2" -> { val (xs, ys) = pair(0, 1); var t = 0.0; for (i in xs.indices) t += xs[i] * xs[i] + ys[i] * ys[i]; Value.Num(t) }
+                    "SUMX2MY2" -> { val (xs, ys) = pair(0, 1); var t = 0.0; for (i in xs.indices) t += xs[i] * xs[i] - ys[i] * ys[i]; Value.Num(t) }
+                    "SUMXMY2" -> { val (xs, ys) = pair(0, 1); var t = 0.0; for (i in xs.indices) t += (xs[i] - ys[i]).pow(2); Value.Num(t) }
+                    "BASE" -> { val num = n(0).toLong(); val radix = n(1).toInt(); val minLen = if (a.size > 2) n(2).toInt() else 0; if (radix < 2 || radix > 36) throw FormulaException("#NUM!") else Value.Str(num.toString(radix).uppercase().padStart(minLen, '0')) }
+                    "DECIMAL" -> { val radix = n(1).toInt(); if (radix < 2 || radix > 36) throw FormulaException("#NUM!") else Value.Num((sArg(0).trim().toLongOrNull(radix) ?: throw FormulaException("#NUM!")).toDouble()) }
+                    "ARABIC" -> Value.Num(romanToArabic(sArg(0)).toDouble())
+                    "ROMAN" -> Value.Str(arabicToRoman(n(0).toInt()))
+
+                    // ---- bitwise (Phase 1) ----
+                    "BITAND" -> Value.Num((n(0).toLong() and n(1).toLong()).toDouble())
+                    "BITOR" -> Value.Num((n(0).toLong() or n(1).toLong()).toDouble())
+                    "BITXOR" -> Value.Num((n(0).toLong() xor n(1).toLong()).toDouble())
+                    "BITLSHIFT" -> { val sh = n(1).toInt(); Value.Num((if (sh >= 0) n(0).toLong() shl sh else n(0).toLong() shr -sh).toDouble()) }
+                    "BITRSHIFT" -> { val sh = n(1).toInt(); Value.Num((if (sh >= 0) n(0).toLong() shr sh else n(0).toLong() shl -sh).toDouble()) }
+
+                    // ---- statistics (Phase 1) ----
+                    "GEOMEAN" -> { val ns = allNums(); if (ns.isEmpty()) throw FormulaException("#NUM!") else Value.Num(exp(ns.sumOf { ln(it) } / ns.size)) }
+                    "HARMEAN" -> { val ns = allNums(); if (ns.isEmpty()) throw FormulaException("#NUM!") else Value.Num(ns.size / ns.sumOf { 1.0 / it }) }
+                    "AVEDEV" -> { val ns = allNums(); if (ns.isEmpty()) throw FormulaException("#NUM!") else { val m = ns.average(); Value.Num(ns.sumOf { abs(it - m) } / ns.size) } }
+                    "DEVSQ" -> { val ns = allNums(); if (ns.isEmpty()) Value.Num(0.0) else { val m = ns.average(); Value.Num(ns.sumOf { (it - m).pow(2) }) } }
+                    "CORREL", "PEARSON" -> { val (xs, ys) = pair(0, 1); Value.Num(correl(xs, ys)) }
+                    "COVAR" -> { val (xs, ys) = pair(0, 1); if (xs.isEmpty()) throw FormulaException("#DIV/0!") else { val mx = xs.average(); val my = ys.average(); var t = 0.0; for (i in xs.indices) t += (xs[i] - mx) * (ys[i] - my); Value.Num(t / xs.size) } }
+                    "SLOPE" -> { val (ys, xs) = pair(0, 1); Value.Num(slope(ys, xs)) }
+                    "INTERCEPT" -> { val (ys, xs) = pair(0, 1); Value.Num(ys.average() - slope(ys, xs) * xs.average()) }
+                    "FORECAST" -> { val x = n(0); val ys = arr(1); val xs = arr(2); val m = minOf(xs.size, ys.size); val yy = ys.take(m); val xx = xs.take(m); Value.Num(yy.average() + slope(yy, xx) * (x - xx.average())) }
+                    "QUARTILE" -> { val list = arr(0).sorted(); val q = n(1).toInt(); if (list.isEmpty() || q < 0 || q > 4) throw FormulaException("#NUM!") else Value.Num(percentileOf(list, q / 4.0)) }
+                    "PERCENTRANK" -> {
+                        val list = arr(0).sorted(); val x = n(1)
+                        if (list.isEmpty()) throw FormulaException("#NUM!")
+                        val res = when {
+                            x <= list.first() -> 0.0
+                            x >= list.last() -> 1.0
+                            else -> { var i = 0; while (i < list.size && list[i] <= x) i++; val lo = i - 1; val frac = if (list[i] == list[lo]) 0.0 else (x - list[lo]) / (list[i] - list[lo]); (lo + frac) / (list.size - 1) }
+                        }
+                        Value.Num(res)
+                    }
+                    "AVERAGEA" -> { val vs = valsA(); if (vs.isEmpty()) throw FormulaException("#DIV/0!") else Value.Num(vs.average()) }
+                    "MAXA" -> valsA().maxOrNull()?.let { Value.Num(it) } ?: Value.Num(0.0)
+                    "MINA" -> valsA().minOrNull()?.let { Value.Num(it) } ?: Value.Num(0.0)
+
+                    // ---- text (Phase 1) ----
+                    "FIXED" -> { val dec = (if (a.size > 1) n(1).toInt() else 2).coerceAtLeast(0); val noComma = a.size > 2 && truthy(v(2)); Value.Str(String.format((if (noComma) "%." else "%,.") + dec + "f", n(0))) }
+                    "DOLLAR" -> { val dec = (if (a.size > 1) n(1).toInt() else 2).coerceAtLeast(0); Value.Str("$" + String.format("%,.${dec}f", n(0))) }
+                    "UNICHAR" -> { val cp = n(0).toInt(); if (cp <= 0) throw FormulaException("#VALUE!") else Value.Str(String(Character.toChars(cp))) }
+                    "UNICODE" -> { val s = sArg(0); if (s.isEmpty()) throw FormulaException("#VALUE!") else Value.Num(s.codePointAt(0).toDouble()) }
+                    "TEXTBEFORE" -> textBeforeAfter(sArg(0), sArg(1), if (a.size > 2) n(2).toInt() else 1, before = true)
+                    "TEXTAFTER" -> textBeforeAfter(sArg(0), sArg(1), if (a.size > 2) n(2).toInt() else 1, before = false)
+
+                    // ---- date (Phase 1) ----
+                    "YEARFRAC" -> Value.Num(yearFrac(n(0), n(1), if (a.size > 2) n(2).toInt() else 0))
+                    "ISOWEEKNUM" -> Value.Num(isoWeekNum(n(0)).toDouble())
+                    "DAYS360" -> Value.Num(days360(n(0), n(1), a.size > 2 && truthy(v(2))).toDouble())
+
+                    // ---- financial (Phase 1) ----
+                    "RATE" -> {
+                        val nper = n(0); val pmt = n(1); val pv = n(2); val fv = if (a.size > 3) n(3) else 0.0
+                        val type = if (a.size > 4) n(4).toInt() else 0; var r = if (a.size > 5) n(5) else 0.1
+                        fun f(rate: Double) = if (rate == 0.0) pv + pmt * nper + fv else pv * (1 + rate).pow(nper) + pmt * (1 + rate * type) * ((1 + rate).pow(nper) - 1) / rate + fv
+                        for (iter in 0 until 100) { val dr = 1e-6; val d = (f(r + dr) - f(r)) / dr; if (d == 0.0) break; val nr = r - f(r) / d; if (abs(nr - r) < 1e-9) { r = nr; break }; r = nr }
+                        Value.Num(r)
+                    }
+                    "IPMT" -> { val r = n(0); val per = n(1).toInt(); val nper = n(2); val pv = n(3); val fv = if (a.size > 4) n(4) else 0.0; val type = if (a.size > 5) n(5).toInt() else 0; Value.Num(ipmtCalc(r, per, nper, pv, fv, type)) }
+                    "PPMT" -> { val r = n(0); val per = n(1).toInt(); val nper = n(2); val pv = n(3); val fv = if (a.size > 4) n(4) else 0.0; val type = if (a.size > 5) n(5).toInt() else 0; Value.Num(pmtCalc(r, nper, pv, fv, type) - ipmtCalc(r, per, nper, pv, fv, type)) }
+                    "SLN" -> Value.Num((n(0) - n(1)) / n(2))
+                    "SYD" -> { val cost = n(0); val salvage = n(1); val life = n(2); val per = n(3); Value.Num((cost - salvage) * (life - per + 1) * 2.0 / (life * (life + 1))) }
+                    "IRR" -> {
+                        val flows = arr(0); var r = if (a.size > 1) n(1) else 0.1
+                        for (iter in 0 until 100) {
+                            var npv = 0.0; var d = 0.0
+                            for (t in flows.indices) { npv += flows[t] / (1 + r).pow(t); if (t > 0) d += -t * flows[t] / (1 + r).pow(t + 1) }
+                            if (d == 0.0) break; val nr = r - npv / d; if (abs(nr - r) < 1e-9) { r = nr; break }; r = nr
+                        }
+                        Value.Num(r)
+                    }
+                    "CUMIPMT" -> { val r = n(0); val nper = n(1); val pv = n(2); val s = n(3).toInt(); val e = n(4).toInt(); val type = n(5).toInt(); var t = 0.0; for (p in s..e) t += ipmtCalc(r, p, nper, pv, 0.0, type); Value.Num(t) }
+                    "CUMPRINC" -> { val r = n(0); val nper = n(1); val pv = n(2); val s = n(3).toInt(); val e = n(4).toInt(); val type = n(5).toInt(); val pmt = pmtCalc(r, nper, pv, 0.0, type); var t = 0.0; for (p in s..e) t += pmt - ipmtCalc(r, p, nper, pv, 0.0, type); Value.Num(t) }
+
+                    // ---- lookup (Phase 1) ----
+                    "ROW" -> if (a.isEmpty()) Value.Num((curRow + 1).toDouble()) else { val r = a[0].ref() ?: throw FormulaException("#REF!"); Value.Num((minOf(r.r1, r.r2) + 1).toDouble()) }
+                    "COLUMN" -> if (a.isEmpty()) Value.Num((curCol + 1).toDouble()) else { val r = a[0].ref() ?: throw FormulaException("#REF!"); Value.Num((minOf(r.c1, r.c2) + 1).toDouble()) }
+                    "LOOKUP" -> {
+                        val key = v(0); val lv = a[1].values(); val rv = if (a.size > 2) a[2].values() else lv
+                        var best = -1; val k = cmpNum(key)
+                        for (i in lv.indices) { if (compareOp("=", lv[i], key)) { best = i; break }; val nv = cmpNum(lv[i]); if (k != null && nv != null && nv <= k) best = i }
+                        if (best < 0 || best >= rv.size) throw FormulaException("#N/A") else rv[best]
+                    }
+                    "OFFSET" -> { val r = a[0].ref() ?: throw FormulaException("#REF!"); evalOn(r.sheet, minOf(r.r1, r.r2) + n(1).toInt(), minOf(r.c1, r.c2) + n(2).toInt()) }
+                    "ADDRESS" -> {
+                        val row = n(0).toInt(); val col = n(1).toInt(); val absNum = if (a.size > 2) n(2).toInt() else 1
+                        val colStr = indexToCol(col - 1)
+                        val res = when (absNum) { 1 -> "\$$colStr\$$row"; 2 -> "$colStr\$$row"; 3 -> "\$$colStr$row"; else -> "$colStr$row" }
+                        if (a.size > 4 && sArg(4).isNotEmpty()) Value.Str("${sArg(4)}.$res") else Value.Str(res)
+                    }
+                    "INDIRECT" -> { val (rr, cc) = a1ToCoords(sArg(0)) ?: throw FormulaException("#REF!"); evaluateCellV(rr, cc) }
+                    "HYPERLINK" -> Value.Str(if (a.size > 1) sArg(1) else sArg(0))
 
                     else -> throw FormulaException("#NAME?")
                 }
@@ -903,6 +1130,83 @@ object OdfFormulaEngine {
             }
 
             private fun n2(a: List<ArgThunk>, i: Int): Double = num(a[i].value())
+
+            private fun correl(xs: List<Double>, ys: List<Double>): Double {
+                val n = xs.size; if (n == 0) throw FormulaException("#DIV/0!")
+                val mx = xs.average(); val my = ys.average()
+                var sxy = 0.0; var sxx = 0.0; var syy = 0.0
+                for (i in 0 until n) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx).pow(2); syy += (ys[i] - my).pow(2) }
+                val d = sqrt(sxx * syy); if (d == 0.0) throw FormulaException("#DIV/0!"); return sxy / d
+            }
+
+            private fun slope(ys: List<Double>, xs: List<Double>): Double {
+                val n = xs.size; if (n == 0) throw FormulaException("#DIV/0!")
+                val mx = xs.average(); val my = ys.average()
+                var num = 0.0; var den = 0.0
+                for (i in 0 until n) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx).pow(2) }
+                if (den == 0.0) throw FormulaException("#DIV/0!"); return num / den
+            }
+
+            private fun percentileOf(sorted: List<Double>, p: Double): Double {
+                if (sorted.isEmpty()) throw FormulaException("#NUM!")
+                val rank = p * (sorted.size - 1); val lo = floor(rank).toInt(); val hi = ceil(rank).toInt()
+                return if (lo == hi) sorted[lo] else sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo])
+            }
+
+            private fun textBeforeAfter(text: String, delim: String, instance: Int, before: Boolean): Value {
+                if (delim.isEmpty()) return Value.Str(if (before) "" else text)
+                var idx = -1; var count = 0; var from = 0
+                while (true) { val f = text.indexOf(delim, from); if (f < 0) break; count++; if (count == instance) { idx = f; break }; from = f + delim.length }
+                if (idx < 0) throw FormulaException("#N/A")
+                return Value.Str(if (before) text.substring(0, idx) else text.substring(idx + delim.length))
+            }
+
+            private fun days360(start: Double, end: Double, european: Boolean): Int {
+                val c1 = serialToCal(start); val c2 = serialToCal(end)
+                var d1 = c1.get(GregorianCalendar.DAY_OF_MONTH); var d2 = c2.get(GregorianCalendar.DAY_OF_MONTH)
+                val m1 = c1.get(GregorianCalendar.MONTH) + 1; val m2 = c2.get(GregorianCalendar.MONTH) + 1
+                val y1 = c1.get(GregorianCalendar.YEAR); val y2 = c2.get(GregorianCalendar.YEAR)
+                if (european) { if (d1 == 31) d1 = 30; if (d2 == 31) d2 = 30 } else { if (d1 == 31) d1 = 30; if (d2 == 31 && d1 == 30) d2 = 30 }
+                return (y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)
+            }
+
+            private fun yearFrac(start: Double, end: Double, basis: Int): Double {
+                val days = abs(floor(end) - floor(start))
+                return when (basis) {
+                    0 -> abs(days360(start, end, false)) / 360.0
+                    1 -> days / 365.25
+                    2 -> days / 360.0
+                    3 -> days / 365.0
+                    4 -> abs(days360(start, end, true)) / 360.0
+                    else -> days / 365.0
+                }
+            }
+
+            private fun isoWeekNum(serial: Double): Int {
+                val cal = serialToCal(serial)
+                cal.firstDayOfWeek = GregorianCalendar.MONDAY
+                cal.minimalDaysInFirstWeek = 4
+                return cal.get(GregorianCalendar.WEEK_OF_YEAR)
+            }
+
+            private fun fvOf(r: Double, nper: Double, pmt: Double, pv: Double, type: Int): Double =
+                if (r == 0.0) -(pv + pmt * nper) else { val p = (1 + r).pow(nper); -(pv * p + pmt * (1 + r * type) * (p - 1) / r) }
+
+            private fun pmtCalc(r: Double, nper: Double, pv: Double, fv: Double, type: Int): Double =
+                if (r == 0.0) -(pv + fv) / nper else { val p = (1 + r).pow(nper); -(pv * p + fv) * r / ((1 + r * type) * (p - 1)) }
+
+            private fun ipmtCalc(r: Double, per: Int, nper: Double, pv: Double, fv: Double, type: Int): Double {
+                val pmt = pmtCalc(r, nper, pv, fv, type)
+                var ip = fvOf(r, (per - 1).toDouble(), pmt, pv, type) * r
+                if (type == 1) ip /= (1 + r)
+                return ip
+            }
+
+            private fun a1ToCoords(t: String): Pair<Int, Int>? {
+                val cell = t.substringAfterLast('.').replace("$", "").trim()
+                val m = Regex("([A-Za-z]+)(\\d+)").find(cell) ?: return null
+                return (m.groupValues[2].toIntOrNull()?.minus(1) ?: return null) to colToIndex(m.groupValues[1])
+            }
 
             private fun textFormat(value: Double, fmt: String): String {
                 val f = fmt.trim()

@@ -1152,6 +1152,36 @@ private fun MathNodeView(node: MathNode, sizeSp: Float, color: Color) {
             MathNodeView(node.body, sizeSp, color)
             Text(node.close, fontSize = sizeSp.sp, color = color)
         }
+        is MathNode.Under -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            MathNodeView(node.base, sizeSp, color)
+            MathNodeView(node.under, sizeSp * 0.7f, color)
+        }
+        is MathNode.Over -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            MathNodeView(node.over, sizeSp * 0.7f, color)
+            MathNodeView(node.base, sizeSp, color)
+        }
+        is MathNode.UnderOver -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            MathNodeView(node.over, sizeSp * 0.7f, color)
+            MathNodeView(node.base, sizeSp, color)
+            MathNodeView(node.under, sizeSp * 0.7f, color)
+        }
+        is MathNode.Table -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            for (r in node.rows) MathNodeView(r, sizeSp, color)
+        }
+        is MathNode.TableRow -> Row(verticalAlignment = Alignment.CenterVertically) {
+            for (cell in node.cells) Box(Modifier.padding(horizontal = 4.dp)) { MathNodeView(cell, sizeSp, color) }
+        }
+        is MathNode.Multiscripts -> Row(verticalAlignment = Alignment.CenterVertically) {
+            if (node.preSub != null || node.preSup != null) Column {
+                node.preSup?.let { MathNodeView(it, sizeSp * 0.7f, color) }
+                node.preSub?.let { MathNodeView(it, sizeSp * 0.7f, color) }
+            }
+            MathNodeView(node.base, sizeSp, color)
+            if (node.postSub != null || node.postSup != null) Column {
+                node.postSup?.let { MathNodeView(it, sizeSp * 0.7f, color) }
+                node.postSub?.let { MathNodeView(it, sizeSp * 0.7f, color) }
+            }
+        }
     }
 }
 

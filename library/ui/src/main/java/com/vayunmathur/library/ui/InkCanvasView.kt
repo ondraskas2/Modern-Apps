@@ -25,6 +25,10 @@ data class CanvasTextElement(
     val rotation: Float,
     val color: Int,
     val fontSize: Float,
+    val fontFamily: String = "sans-serif",
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val align: Int = 0,
 )
 
 private class FinishedStrokesView(context: Context) : View(context) {
@@ -65,6 +69,18 @@ private class FinishedStrokesView(context: Context) : View(context) {
 
             textPaint.color = elem.color
             textPaint.textSize = elem.fontSize * resources.displayMetrics.density
+            val style = when {
+                elem.bold && elem.italic -> android.graphics.Typeface.BOLD_ITALIC
+                elem.bold -> android.graphics.Typeface.BOLD
+                elem.italic -> android.graphics.Typeface.ITALIC
+                else -> android.graphics.Typeface.NORMAL
+            }
+            textPaint.typeface = android.graphics.Typeface.create(elem.fontFamily, style)
+            textPaint.textAlign = when (elem.align) {
+                1 -> Paint.Align.CENTER
+                2 -> Paint.Align.RIGHT
+                else -> Paint.Align.LEFT
+            }
 
             canvas.drawText(elem.text, 0f, textPaint.textSize, textPaint)
 

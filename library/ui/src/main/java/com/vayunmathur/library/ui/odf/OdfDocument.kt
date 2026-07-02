@@ -85,9 +85,16 @@ sealed class OdfContentBlock {
     data object PageBreak : OdfContentBlock()
 }
 
-enum class ChartType { BAR, LINE, PIE, AREA, DONUT, SCATTER, STACKED_BAR }
+enum class ChartType { BAR, LINE, PIE, AREA, DONUT, SCATTER, STACKED_BAR, RADAR, BUBBLE }
 
-data class OdfChartSeries(val name: String, val values: List<Float>)
+data class OdfChartSeries(
+    val name: String,
+    val values: List<Float>,
+    // Per-series fill color (chart:style-name -> fo:fill-color), preserved for round-trip. (Phase 5)
+    val color: Long? = null,
+    // Whether data labels are shown for this series (chart:data-label-*). (Phase 5)
+    val dataLabels: Boolean = false
+)
 
 data class OdfChart(
     val type: ChartType,
@@ -97,7 +104,9 @@ data class OdfChart(
     val subtitle: String? = null,
     val legend: Boolean = true,
     val xAxisTitle: String? = null,
-    val yAxisTitle: String? = null
+    val yAxisTitle: String? = null,
+    // Stacked/percent-stacked plotting (chart:stacked / chart:percentage). (Phase 5)
+    val stacked: Boolean = false
 )
 
 data class OdfParagraph(
@@ -130,6 +139,14 @@ data class OdfParagraph(
     val listNumberSuffix: String = ".",
     // Tab stop positions in px (96dpi). (A4)
     val tabStops: List<Float> = emptyList(),
+    // Rich tab stops with type (left/right/center/char) and leader char, if any. (Phase 2)
+    // When non-empty, takes precedence over [tabStops] on serialize.
+    val tabStopDetails: List<OdfTabStop> = emptyList(),
+    // Drop cap (style:drop-cap): number of lines the initial spans; 0 = none. (Phase 2)
+    val dropCapLines: Int = 0,
+    val dropCapLength: Int = 1,
+    // Uniform paragraph padding in px@96 (fo:padding), preserved for round-trip. (Phase 6)
+    val padding: Float = 0f,
     // Emit fo:break-before="page" on this paragraph's style. (B4)
     val breakBeforePage: Boolean = false,
     // Extended paragraph properties (Round 2 R3).
@@ -143,6 +160,17 @@ data class OdfParagraph(
 )
 
 enum class ParagraphStyle { HEADING1, HEADING2, HEADING3, HEADING4, BODY, LIST_ITEM, TABLE_HEADER }
+
+/**
+ * A paragraph tab stop (style:tab-stop). [position] is px@96. [type] is one of
+ * "left"/"right"/"center"/"char" (default "left"); [leaderChar] is the fill char
+ * (e.g. "." for a dotted leader), preserved for round-trip. (Phase 2)
+ */
+data class OdfTabStop(
+    val position: Float,
+    val type: String? = null,
+    val leaderChar: String? = null
+)
 
 enum class ListType { BULLET, NUMBERED, CHECKBOX }
 
@@ -236,7 +264,10 @@ data class OdfImage(
     // Image effects (Round 2 R7): opacity 0..100 (% from draw:image-opacity), color mode
     // (draw:color-mode: "standard"/"greyscale"/"mono"/"watermark").
     val opacityPercent: Float = 100f,
-    val colorMode: String? = null
+    val colorMode: String? = null,
+    // Accessibility alt text from svg:title / svg:desc inside the frame. (Phase 2)
+    val altTitle: String? = null,
+    val altDesc: String? = null
 )
 
 data class OdfTable(
@@ -353,7 +384,23 @@ data class OdfNumberFormat(
     val isScientific: Boolean = false,
     val isFraction: Boolean = false,
     // Fraction denominator digit count (e.g. 2 -> ?/??). Defaults to 1.
-    val fractionDenominatorDigits: Int = 1
+    val fractionDenominatorDigits: Int = 1,
+    // Ordered source tokens for date/time styles, preserved to re-emit the exact pattern
+    // instead of a hard-coded YYYY-MM-DD / HH:MM:SS on write. (Phase 4)
+    val dateTimeTokens: List<OdfNumberToken> = emptyList()
+)
+
+/**
+ * One ordered child token of a number:date-style / number:time-style (Phase 4).
+ * [kind] is the number:* element local name (e.g. "year", "month", "text"); [style]
+ * is number:style ("long"/"short"); [text] is the literal for number:text; [textual]
+ * mirrors number:textual (month names).
+ */
+data class OdfNumberToken(
+    val kind: String,
+    val style: String? = null,
+    val text: String? = null,
+    val textual: Boolean = false
 )
 
 /**

@@ -17,5 +17,7 @@ data class OdfMetadata(
     val editingCycles: Int? = null,
     val charCount: Int? = null,
     val paragraphCount: Int? = null,
-    val userDefined: Map<String, String> = emptyMap()
+    val userDefined: Map<String, String> = emptyMap(),
+    // Value type per user-defined field name (meta:value-type: "float"/"date"/"boolean"/"time"/"string"). (Phase 2)
+    val userDefinedTypes: Map<String, String> = emptyMap()
 )

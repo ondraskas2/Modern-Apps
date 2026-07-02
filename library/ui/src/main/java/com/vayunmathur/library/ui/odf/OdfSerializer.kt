@@ -168,7 +168,10 @@ object OdfSerializer {
             sb.append("/>")
         }
         for ((name, value) in meta.userDefined) {
-            sb.append("""<meta:user-defined meta:name="${esc(name)}">${esc(value)}</meta:user-defined>""")
+            val vt = meta.userDefinedTypes[name]
+            sb.append("""<meta:user-defined meta:name="${esc(name)}"""")
+            if (vt != null) sb.append(""" meta:value-type="${esc(vt)}"""")
+            sb.append(">${esc(value)}</meta:user-defined>")
         }
         sb.append("</office:meta></office:document-meta>")
         return sb.toString()
@@ -218,7 +221,9 @@ object OdfSerializer {
                             }
                             else -> if (itemOpen) { body.append("</text:list-item>"); itemOpen = false }
                         }
-                        body.append("<text:list-item>"); itemOpen = true
+                        body.append("<text:list-item")
+                        if (para.listType == ListType.CHECKBOX) body.append(""" loext:checkbox-status="${if (para.listChecked) "checked" else "unchecked"}"""")
+                        body.append(">"); itemOpen = true
                         serializeParagraph(body, para, styles, paraStyles, "text:p", leadingBookmarks, footnotesByCitation, emittedFootnotes)
                     } else {
                         closeAllLists()
@@ -616,7 +621,9 @@ object OdfSerializer {
             if (image.width > 0) sb.append(""" svg:width="${cm(image.width)}"""")
             if (image.height > 0) sb.append(""" svg:height="${cm(image.height)}"""")
             appendRotation(sb, image)
-            sb.append("""><draw:image><office:binary-data>${android.util.Base64.encodeToString(image.imageData, android.util.Base64.NO_WRAP)}</office:binary-data></draw:image></draw:frame>""")
+            sb.append("""><draw:image><office:binary-data>${android.util.Base64.encodeToString(image.imageData, android.util.Base64.NO_WRAP)}</office:binary-data></draw:image>""")
+            sb.append(altTextXml(image))
+            sb.append("</draw:frame>")
             return
         }
         sb.append("""<draw:frame""")
@@ -627,6 +634,7 @@ object OdfSerializer {
         if (image.height > 0) sb.append(""" svg:height="${cm(image.height)}"""")
         appendRotation(sb, image)
         sb.append("""><draw:image xlink:href="${esc(href)}" xlink:type="simple" xlink:actuate="onLoad"/>""")
+        sb.append(altTextXml(image))
         sb.append("</draw:frame>")
     }
 
@@ -652,6 +660,14 @@ object OdfSerializer {
         val bottom = cm(image.cropBottomPct * hPx)
         val left = cm(image.cropLeftPct * wPx)
         return "rect($top $right $bottom $left)"
+    }
+
+    /** svg:title / svg:desc accessibility children for an image frame. (Phase 2) */
+    private fun altTextXml(image: OdfImage): String {
+        val sb = StringBuilder()
+        image.altTitle?.let { sb.append("<svg:title>${esc(it)}</svg:title>") }
+        image.altDesc?.let { sb.append("<svg:desc>${esc(it)}</svg:desc>") }
+        return sb.toString()
     }
 
     private fun appendRotation(sb: StringBuilder, image: OdfImage) {
@@ -724,6 +740,7 @@ object OdfSerializer {
             for (para in frame.paragraphs) serializeParagraph(sb, para, styles, paraStyles, "text:p")
             sb.append("</draw:text-box>")
         }
+        frame.image?.let { sb.append(altTextXml(it)) }
         sb.append("</draw:frame>")
     }
 
@@ -786,12 +803,15 @@ object OdfSerializer {
     // --- Embedded chart object generation (A8) ---
 
     private fun generateChartXml(chart: OdfChart, wPx: Float, hPx: Float): String {
+        val stacked = chart.stacked || chart.type == ChartType.STACKED_BAR
         val chartClass = when (chart.type) {
             ChartType.LINE -> "chart:line"
             ChartType.PIE -> "chart:circle"
             ChartType.DONUT -> "chart:ring"
             ChartType.AREA -> "chart:area"
             ChartType.SCATTER -> "chart:scatter"
+            ChartType.RADAR -> "chart:radar"
+            ChartType.BUBBLE -> "chart:bubble"
             else -> "chart:bar"
         }
         val rowCount = chart.categories.size
@@ -805,13 +825,29 @@ object OdfSerializer {
         sb.append(""" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"""")
         sb.append(""" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"""")
         sb.append(""" xmlns:xlink="http://www.w3.org/1999/xlink"""")
+        sb.append(""" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"""")
+        sb.append(""" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"""")
         sb.append(""" office:version="1.3">""")
+        // Chart automatic styles: plot-area stacking + per-series color / data labels. (Phase 5)
+        sb.append("<office:automatic-styles>")
+        sb.append("""<style:style style:name="plotstyle" style:family="chart"><style:chart-properties""")
+        if (stacked) sb.append(""" chart:stacked="true"""")
+        sb.append("/></style:style>")
+        chart.series.forEachIndexed { i, s ->
+            sb.append("""<style:style style:name="series$i" style:family="chart">""")
+            sb.append("<style:chart-properties")
+            if (s.dataLabels) sb.append(""" chart:data-label-number="value"""")
+            sb.append("/>")
+            if (s.color != null) sb.append("""<style:graphic-properties draw:fill="solid" draw:fill-color="${formatColor(s.color)}"/>""")
+            sb.append("</style:style>")
+        }
+        sb.append("</office:automatic-styles>")
         sb.append("<office:body><office:chart>")
         sb.append("""<chart:chart chart:class="$chartClass" svg:width="${cm(wPx)}" svg:height="${cm(hPx)}">""")
         chart.title?.let { sb.append("""<chart:title><text:p>${esc(it)}</text:p></chart:title>""") }
         chart.subtitle?.let { sb.append("""<chart:subtitle><text:p>${esc(it)}</text:p></chart:subtitle>""") }
         if (chart.legend) sb.append("""<chart:legend chart:legend-position="end"/>""")
-        sb.append("<chart:plot-area>")
+        sb.append("<chart:plot-area chart:style-name=\"plotstyle\">")
         sb.append("""<chart:axis chart:dimension="x" chart:name="primary-x">""")
         chart.xAxisTitle?.let { sb.append("""<chart:title><text:p>${esc(it)}</text:p></chart:title>""") }
         sb.append("</chart:axis>")
@@ -820,7 +856,7 @@ object OdfSerializer {
         sb.append("</chart:axis>")
         chart.series.forEachIndexed { i, s ->
             val col = columnLetter(i + 1) // series start at column B
-            sb.append("""<chart:series chart:values-cell-range-address="local-table.${'$'}$col${'$'}2:.${'$'}$col${'$'}$lastRow" chart:label-cell-address="local-table.${'$'}$col${'$'}1" chart:class="$chartClass">""")
+            sb.append("""<chart:series chart:style-name="series$i" chart:values-cell-range-address="local-table.${'$'}$col${'$'}2:.${'$'}$col${'$'}$lastRow" chart:label-cell-address="local-table.${'$'}$col${'$'}1" chart:class="$chartClass">""")
             if (i == 0) sb.append("""<chart:categories table:cell-range-address="local-table.${'$'}A${'$'}2:.${'$'}A${'$'}$lastRow"/>""")
             sb.append("</chart:series>")
         }
@@ -880,7 +916,11 @@ object OdfSerializer {
         val keepWithNext: Boolean = false,
         val keepTogether: Boolean = false,
         val widows: Int? = null,
-        val orphans: Int? = null
+        val orphans: Int? = null,
+        val tabStopDetails: List<OdfTabStop> = emptyList(),
+        val dropCapLines: Int = 0,
+        val dropCapLength: Int = 1,
+        val padding: Float = 0f
     )
 
     private data class CellStyleDef(
@@ -951,12 +991,15 @@ object OdfSerializer {
     private fun getOrCreateParaStyle(para: OdfParagraph, styles: MutableMap<String, ParaStyleDef>): String? {
         val hasProps = para.alignment != null || para.marginLeft != 0f || para.textIndent != 0f ||
             para.lineHeightPercent != null || para.borderColor != null || para.borders != null || para.backgroundColor != null ||
-            para.marginTop != 0f || para.marginBottom != 0f || para.tabStops.isNotEmpty() ||
+            para.marginTop != 0f || para.marginBottom != 0f || para.tabStops.isNotEmpty() || para.tabStopDetails.isNotEmpty() ||
+            para.dropCapLines > 0 ||
+            para.padding != 0f ||
             para.marginRight != 0f || para.keepWithNext || para.keepTogether || para.widows != null || para.orphans != null
         if (!hasProps && !para.breakBeforePage) return null
         val def = ParaStyleDef(para.alignment, para.marginLeft, para.marginTop, para.marginBottom, para.textIndent,
             para.lineHeightPercent, para.borderColor, para.backgroundColor, para.breakBeforePage, para.tabStops, para.borders,
-            para.marginRight, para.keepWithNext, para.keepTogether, para.widows, para.orphans)
+            para.marginRight, para.keepWithNext, para.keepTogether, para.widows, para.orphans,
+            para.tabStopDetails, para.dropCapLines, para.dropCapLength, para.padding)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "P${styles.size + 1}"
         styles[name] = def
@@ -991,6 +1034,7 @@ object OdfSerializer {
         sb.append(""" xmlns:dc="http://purl.org/dc/elements/1.1/"""")
         sb.append(""" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"""")
         sb.append(""" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"""")
+        sb.append(""" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"""")
         sb.append(""" office:version="1.3">""")
 
         // Declare fonts referenced by span styles (content.xml font-face-decls). (Round 3 / Tier 4)
@@ -1038,6 +1082,7 @@ object OdfSerializer {
             if (def.marginTop != 0f) sb.append(""" fo:margin-top="${cm(def.marginTop)}"""")
             if (def.marginBottom != 0f) sb.append(""" fo:margin-bottom="${cm(def.marginBottom)}"""")
             if (def.textIndent != 0f) sb.append(""" fo:text-indent="${cm(def.textIndent)}"""")
+            if (def.padding != 0f) sb.append(""" fo:padding="${cm(def.padding)}"""")
             if (def.lineHeightPercent != null) sb.append(""" fo:line-height="${(def.lineHeightPercent * 100).toInt()}%"""")
             if (def.keepWithNext) sb.append(""" fo:keep-with-next="always"""")
             if (def.keepTogether) sb.append(""" fo:keep-together="always"""")
@@ -1047,10 +1092,24 @@ object OdfSerializer {
             else if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
             if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
             if (def.breakBefore) sb.append(""" fo:break-before="page"""")
-            if (def.tabStops.isNotEmpty()) {
-                sb.append("><style:tab-stops>")
-                for (t in def.tabStops) sb.append("""<style:tab-stop style:position="${cm(t)}"/>""")
-                sb.append("</style:tab-stops>")
+            val hasTabs = def.tabStopDetails.isNotEmpty() || def.tabStops.isNotEmpty()
+            if (hasTabs || def.dropCapLines > 0) {
+                sb.append(">")
+                if (hasTabs) {
+                    sb.append("<style:tab-stops>")
+                    if (def.tabStopDetails.isNotEmpty()) {
+                        for (t in def.tabStopDetails) {
+                            sb.append("""<style:tab-stop style:position="${cm(t.position)}"""")
+                            t.type?.let { sb.append(""" style:type="${esc(it)}"""") }
+                            t.leaderChar?.let { sb.append(""" style:leader-char="${esc(it)}"""") }
+                            sb.append("/>")
+                        }
+                    } else {
+                        for (t in def.tabStops) sb.append("""<style:tab-stop style:position="${cm(t)}"/>""")
+                    }
+                    sb.append("</style:tab-stops>")
+                }
+                if (def.dropCapLines > 0) sb.append("""<style:drop-cap style:lines="${def.dropCapLines}" style:length="${def.dropCapLength}"/>""")
                 sb.append("</style:paragraph-properties></style:style>")
                 continue
             }
@@ -1169,22 +1228,44 @@ object OdfSerializer {
         return sb.toString()
     }
 
+    /** Re-emits preserved number:date-style / number:time-style component tokens in order. (Phase 4) */
+    private fun dateTimeTokensXml(tokens: List<OdfNumberToken>): String {
+        val sb = StringBuilder()
+        for (t in tokens) {
+            if (t.kind == "text") {
+                sb.append("<number:text>${esc(t.text ?: "")}</number:text>")
+            } else {
+                sb.append("<number:${t.kind}")
+                t.style?.let { sb.append(""" number:style="${esc(it)}"""") }
+                if (t.textual) sb.append(""" number:textual="true"""")
+                sb.append("/>")
+            }
+        }
+        return sb.toString()
+    }
+
     private fun numberStyleXml(name: String, fmt: OdfNumberFormat): String {
         val sb = StringBuilder()
         val dec = fmt.decimals ?: 2
         when {
             fmt.isDate -> {
                 sb.append("""<number:date-style style:name="$name">""")
-                sb.append("""<number:year number:style="long"/><number:text>-</number:text>""")
-                sb.append("""<number:month number:style="long"/><number:text>-</number:text>""")
-                sb.append("""<number:day number:style="long"/>""")
+                if (fmt.dateTimeTokens.isNotEmpty()) sb.append(dateTimeTokensXml(fmt.dateTimeTokens))
+                else {
+                    sb.append("""<number:year number:style="long"/><number:text>-</number:text>""")
+                    sb.append("""<number:month number:style="long"/><number:text>-</number:text>""")
+                    sb.append("""<number:day number:style="long"/>""")
+                }
                 sb.append("</number:date-style>")
             }
             fmt.isTime -> {
                 sb.append("""<number:time-style style:name="$name">""")
-                sb.append("""<number:hours number:style="long"/><number:text>:</number:text>""")
-                sb.append("""<number:minutes number:style="long"/><number:text>:</number:text>""")
-                sb.append("""<number:seconds number:style="long"/>""")
+                if (fmt.dateTimeTokens.isNotEmpty()) sb.append(dateTimeTokensXml(fmt.dateTimeTokens))
+                else {
+                    sb.append("""<number:hours number:style="long"/><number:text>:</number:text>""")
+                    sb.append("""<number:minutes number:style="long"/><number:text>:</number:text>""")
+                    sb.append("""<number:seconds number:style="long"/>""")
+                }
                 sb.append("</number:time-style>")
             }
             fmt.isScientific -> {

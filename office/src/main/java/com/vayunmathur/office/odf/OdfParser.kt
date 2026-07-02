@@ -205,7 +205,9 @@ object OdfParser {
             value.endsWith("cm") -> base * 37.8f
             value.endsWith("mm") -> base * 3.78f
             value.endsWith("in") -> base * 96f
+            value.endsWith("pc") -> base * 16f      // pica = 12pt
             value.endsWith("pt") -> base * 1.33f
+            value.endsWith("em") -> base * 16f      // relative to a 12pt default
             else -> base
         }
     }
@@ -328,7 +330,11 @@ object OdfParser {
         val columnCount: Int = 1,
         val strokeDashed: Boolean = false,
         val markerStart: Boolean = false,
-        val markerEnd: Boolean = false
+        val markerEnd: Boolean = false,
+        val tabStopDetails: List<OdfTabStop> = emptyList(),
+        val dropCapLines: Int = 0,
+        val dropCapLength: Int = 1,
+        val padding: Float = 0f
     )
 
     private fun parseStyles(xml: String): Map<String, StyleInfo> {
@@ -370,6 +376,9 @@ object OdfParser {
         var lineHeightPercent: Float? = null
         var paraBorderColor: Long? = null
         val tabStops = mutableListOf<Float>()
+        val tabStopDetails = mutableListOf<OdfTabStop>()
+        var dropCapLines = 0; var dropCapLength = 1
+        var padding = 0f
         var clipVal: String? = null
         var imageOpacity: Float? = null; var imageColorMode: String? = null
         var fillGradientName: String? = null
@@ -430,6 +439,11 @@ object OdfParser {
                         getAttr(parser, "widows")?.toIntOrNull()?.let { widows = it }
                         getAttr(parser, "orphans")?.toIntOrNull()?.let { orphans = it }
                         getAttr(parser, "text-indent")?.let { textIndent = parseDimension(it) }
+                        getAttr(parser, "padding")?.let { padding = parseDimension(it) }
+                        if (padding == 0f) {
+                            (getAttr(parser, "padding-left") ?: getAttr(parser, "padding-top")
+                                ?: getAttr(parser, "padding-right") ?: getAttr(parser, "padding-bottom"))?.let { padding = parseDimension(it) }
+                        }
                         getAttr(parser, "background-color")?.let { if (it != "transparent") paraBgColor = parseColor(it) }
                         breakBefore = getAttr(parser, "break-before")
                         breakAfter = getAttr(parser, "break-after")
@@ -447,7 +461,17 @@ object OdfParser {
                         getAttr(parser, "border-left")?.let { paraBorderL = it }
                     }
                     "tab-stop" -> {
-                        getAttr(parser, "position")?.let { tabStops.add(parseDimension(it)) }
+                        getAttr(parser, "position")?.let { pos ->
+                            val px = parseDimension(pos)
+                            tabStops.add(px)
+                            val type = getAttr(parser, "type")
+                            val leader = getAttr(parser, "leader-char") ?: getAttr(parser, "leader-text")
+                            tabStopDetails.add(OdfTabStop(px, type, leader))
+                        }
+                    }
+                    "drop-cap" -> {
+                        dropCapLines = getAttr(parser, "lines")?.toIntOrNull() ?: 0
+                        dropCapLength = getAttr(parser, "length")?.toIntOrNull() ?: 1
                     }
                     "drawing-page-properties" -> {
                         if (getAttr(parser, "fill") == "solid") {
@@ -513,7 +537,8 @@ object OdfParser {
             buildBorders(cellBorderAll, cellBorderT, cellBorderR, cellBorderB, cellBorderL),
             buildBorders(paraBorderAll, paraBorderT, paraBorderR, paraBorderB, paraBorderL),
             underlineStyle, underlineColor, letterSpacing, textTransform, language, country,
-            marginRight, keepWithNext, keepTogether, widows, orphans, rowHeight, imageOpacity, imageColorMode, transitionType, transitionSpeed, conditionalMaps, cellVerticalAlign, fillGradientName, columnCount, strokeDashed, markerStart, markerEnd
+            marginRight, keepWithNext, keepTogether, widows, orphans, rowHeight, imageOpacity, imageColorMode, transitionType, transitionSpeed, conditionalMaps, cellVerticalAlign, fillGradientName, columnCount, strokeDashed, markerStart, markerEnd,
+            tabStopDetails, dropCapLines, dropCapLength, padding
         )
     }
 
@@ -585,7 +610,11 @@ object OdfParser {
                 columnCount = if (info.columnCount != 1) info.columnCount else parent.columnCount,
                 strokeDashed = info.strokeDashed || parent.strokeDashed,
                 markerStart = info.markerStart || parent.markerStart,
-                markerEnd = info.markerEnd || parent.markerEnd
+                markerEnd = info.markerEnd || parent.markerEnd,
+                tabStopDetails = if (info.tabStopDetails.isNotEmpty()) info.tabStopDetails else parent.tabStopDetails,
+                dropCapLines = if (info.dropCapLines != 0) info.dropCapLines else parent.dropCapLines,
+                dropCapLength = if (info.dropCapLines != 0) info.dropCapLength else parent.dropCapLength,
+                padding = if (info.padding != 0f) info.padding else parent.padding
             )
         }
         return info
@@ -600,7 +629,11 @@ object OdfParser {
         val prefix: String = "",
         val suffix: String = ".",
         val startValue: Int = 1,
-        val displayLevels: Int = 1
+        val displayLevels: Int = 1,
+        // Checkbox list level (loext:checkbox on the bullet level style). (Phase 2)
+        val checkbox: Boolean = false,
+        // Bullet image href (list-level-style-image xlink:href), preserved for round-trip. (Phase 2)
+        val bulletImagePath: String? = null
     )
 
     data class ListStyleInfo(val levels: Map<Int, ListLevelStyle>) {
@@ -647,14 +680,17 @@ object OdfParser {
                     }
                     "list-level-style-bullet" -> {
                         val lvl = getAttr(parser, "level")?.toIntOrNull() ?: 1
+                        val bullet = getAttr(parser, "bullet-char")?.ifEmpty { "\u2022" } ?: "\u2022"
+                        val isCheckbox = getAttr(parser, "checkbox") == "true" || bullet == "\u2610" || bullet == "\u2611" || bullet == "\u2612"
                         levels[lvl] = ListLevelStyle(
                             numbered = false,
-                            bulletChar = getAttr(parser, "bullet-char")?.ifEmpty { "\u2022" } ?: "\u2022"
+                            bulletChar = bullet,
+                            checkbox = isCheckbox
                         )
                     }
                     "list-level-style-image" -> {
                         val lvl = getAttr(parser, "level")?.toIntOrNull() ?: 1
-                        levels[lvl] = ListLevelStyle(numbered = false, bulletChar = "\u25AA")
+                        levels[lvl] = ListLevelStyle(numbered = false, bulletChar = "\u25AA", bulletImagePath = getAttr(parser, "href"))
                     }
                 }
                 XmlPullParser.END_TAG -> if ((parser.name == "list-style" || parser.name == "outline-style") && currentName != null) {
@@ -682,6 +718,7 @@ object OdfParser {
         var isScientific = false
         var isFraction = false
         var fracDenomDigits = 1
+        val dateTokens = mutableListOf<OdfNumberToken>()
         fun flush() {
             val n = curName ?: return
             map[n] = OdfNumberFormat(
@@ -693,9 +730,15 @@ object OdfParser {
                 isTime = isTime || type == "time",
                 isScientific = isScientific,
                 isFraction = isFraction,
-                fractionDenominatorDigits = fracDenomDigits
+                fractionDenominatorDigits = fracDenomDigits,
+                dateTimeTokens = dateTokens.toList()
             )
         }
+        // Local names of date/time component tokens preserved in order. (Phase 4)
+        val dateTokenNames = setOf(
+            "year", "month", "day", "day-of-week", "hours", "minutes", "seconds",
+            "am-pm", "era", "quarter", "week-of-year"
+        )
         while (e != XmlPullParser.END_DOCUMENT) {
             when (e) {
                 XmlPullParser.START_TAG -> when (parser.name) {
@@ -703,6 +746,23 @@ object OdfParser {
                         curName = getAttr(parser, "name"); type = parser.name.removeSuffix("-style")
                         decimals = null; currency = null; grouping = false
                         isTime = false; isScientific = false; isFraction = false; fracDenomDigits = 1
+                        dateTokens.clear()
+                    }
+                    in dateTokenNames -> if (type == "date" || type == "time") {
+                        dateTokens.add(OdfNumberToken(
+                            kind = parser.name,
+                            style = getAttr(parser, "style"),
+                            textual = getAttr(parser, "textual") == "true"
+                        ))
+                    }
+                    "text" -> if (type == "date" || type == "time") {
+                        val d = parser.depth; var ev = parser.next(); val sb = StringBuilder()
+                        while (!(ev == XmlPullParser.END_TAG && parser.depth == d)) {
+                            if (ev == XmlPullParser.TEXT) sb.append(parser.text)
+                            if (ev == XmlPullParser.END_DOCUMENT) break
+                            ev = parser.next()
+                        }
+                        dateTokens.add(OdfNumberToken(kind = "text", text = sb.toString()))
                     }
                     "number" -> {
                         getAttr(parser, "decimal-places")?.toIntOrNull()?.let { decimals = it }
@@ -748,7 +808,9 @@ object OdfParser {
         var charCount: Int? = null; var paragraphCount: Int? = null
         var generator: String? = null; var editingCycles: Int? = null
         val userDefined = LinkedHashMap<String, String>()
+        val userDefinedTypes = LinkedHashMap<String, String>()
         var udName: String? = null
+        var udType: String? = null
         var currentTag = ""
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -761,7 +823,7 @@ object OdfParser {
                         charCount = getAttr(parser, "character-count")?.toIntOrNull()
                         paragraphCount = getAttr(parser, "paragraph-count")?.toIntOrNull()
                     }
-                    if (parser.name == "user-defined") udName = getAttr(parser, "name")
+                    if (parser.name == "user-defined") { udName = getAttr(parser, "name"); udType = getAttr(parser, "value-type") }
                 }
                 XmlPullParser.TEXT -> {
                     val text = parser.text.trim()
@@ -776,7 +838,7 @@ object OdfParser {
                         "keyword" -> keywords.add(text)
                         "generator" -> generator = text
                         "editing-cycles" -> editingCycles = text.toIntOrNull()
-                        "user-defined" -> udName?.let { userDefined[it] = text }
+                        "user-defined" -> udName?.let { userDefined[it] = text; if (udType != null) userDefinedTypes[it] = udType!! }
                     }
                 }
                 XmlPullParser.END_TAG -> currentTag = ""
@@ -784,7 +846,7 @@ object OdfParser {
             eventType = parser.next()
         }
         return OdfMetadata(title, creator ?: initialCreator, initialCreator, creationDate, modifiedDate, description, subject, keywords, pageCount, wordCount,
-            generator = generator, editingCycles = editingCycles, charCount = charCount, paragraphCount = paragraphCount, userDefined = userDefined)
+            generator = generator, editingCycles = editingCycles, charCount = charCount, paragraphCount = paragraphCount, userDefined = userDefined, userDefinedTypes = userDefinedTypes)
     }
 
     // --- Header/Footer parsing from styles.xml ---
@@ -1190,6 +1252,7 @@ object OdfParser {
         val listTypeStack = mutableListOf<ListType>()
         val listItemCounter = mutableListOf<Int>()
         val listStyleStack = mutableListOf<ListStyleInfo?>()
+        var pendingListItemChecked = false
         val outlineStyle = listStyles["%outline%"]
         val outlineCounters = IntArray(11)
         var eventType = parser.eventType
@@ -1247,6 +1310,10 @@ object OdfParser {
                             widows = resolved.widows,
                             orphans = resolved.orphans,
                             tabStops = resolved.tabStops,
+                            tabStopDetails = resolved.tabStopDetails,
+                            dropCapLines = resolved.dropCapLines,
+                            dropCapLength = resolved.dropCapLength,
+                            padding = resolved.padding,
                             listLevel = if (listDepth > 0) listDepth else 0,
                             listType = if (hLevelStyle?.numbered == true) ListType.NUMBERED else ListType.BULLET,
                             listItemIndex = if (listItemCounter.isNotEmpty()) listItemCounter.last() else 0,
@@ -1275,6 +1342,7 @@ object OdfParser {
                             val itemIdx = if (listItemCounter.isNotEmpty()) listItemCounter.last() else 0
                             val levelStyle = listStyleStack.lastOrNull()?.levelStyle(listDepth)
                             val listTypeResolved = when {
+                                levelStyle?.checkbox == true -> ListType.CHECKBOX
                                 levelStyle != null -> if (levelStyle.numbered) ListType.NUMBERED else ListType.BULLET
                                 listTypeStack.isNotEmpty() -> listTypeStack.last()
                                 else -> ListType.BULLET
@@ -1287,6 +1355,7 @@ object OdfParser {
                                 listLevel = listDepth,
                                 listType = listTypeResolved,
                                 listItemIndex = itemIdx,
+                                listChecked = pendingListItemChecked,
                                 direction = direction,
                                 lineHeightPercent = resolved.lineHeightPercent,
                                 borderColor = resolved.paragraphBorderColor,
@@ -1297,6 +1366,10 @@ object OdfParser {
                                 widows = resolved.widows,
                                 orphans = resolved.orphans,
                                 tabStops = resolved.tabStops,
+                                tabStopDetails = resolved.tabStopDetails,
+                                dropCapLines = resolved.dropCapLines,
+                                dropCapLength = resolved.dropCapLength,
+                                padding = resolved.padding,
                                 listNumberFormat = levelStyle?.numberFormat ?: "1",
                                 listBulletChar = levelStyle?.bulletChar ?: "\u2022",
                                 listNumberPrefix = levelStyle?.prefix ?: "",
@@ -1333,6 +1406,7 @@ object OdfParser {
                         if (listItemCounter.isNotEmpty()) {
                             listItemCounter[listItemCounter.size - 1]++
                         }
+                        pendingListItemChecked = getAttr(parser, "checkbox-status")?.let { it == "checked" || it == "true" } ?: false
                     }
                     inBody && parser.name == "table" && parser.namespace?.contains("table") == true -> {
                         content.add(OdfContentBlock.Table(parseTextTable(parser, styles)))
@@ -1534,9 +1608,12 @@ object OdfParser {
     // --- Embedded charts ---
 
     private fun parseChart(xml: String): OdfChart? {
+        val chartStyles = parseChartStyles(xml)
         val parser = newParser(xml)
         var eventType = parser.eventType
         var chartClass: String? = null
+        var stacked = false
+        val seriesStyleNames = mutableListOf<String?>()
         var inTable = false
         var inCell = false
         var curRow: MutableList<Pair<String, Float?>>? = null
@@ -1556,6 +1633,13 @@ object OdfParser {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "chart" -> if (chartClass == null) chartClass = getAttr(parser, "class")
                     "legend" -> legend = true
+                    "plot-area" -> {
+                        if (getAttr(parser, "stacked") == "true" || getAttr(parser, "percentage") == "true") stacked = true
+                    }
+                    "chart-properties" -> {
+                        if (getAttr(parser, "stacked") == "true" || getAttr(parser, "percentage") == "true") stacked = true
+                    }
+                    "series" -> seriesStyleNames.add(getAttr(parser, "style-name"))
                     "axis" -> axisDim = getAttr(parser, "dimension")
                     "title" -> { captureTarget = when (axisDim) { "x" -> "x"; "y" -> "y"; else -> "main" }; titleBuf.setLength(0) }
                     "subtitle" -> { captureTarget = "sub"; titleBuf.setLength(0) }
@@ -1595,11 +1679,49 @@ object OdfParser {
             chartClass?.contains("scatter") == true -> ChartType.SCATTER
             chartClass?.contains("ring") == true -> ChartType.DONUT
             chartClass?.contains("circle") == true -> ChartType.PIE
+            chartClass?.contains("radar") == true -> ChartType.RADAR
+            chartClass?.contains("bubble") == true -> ChartType.BUBBLE
             chartClass?.contains("area") == true -> ChartType.AREA
+            stacked && chartClass?.contains("bar") == true -> ChartType.STACKED_BAR
             else -> ChartType.BAR
         }
-        val series = seriesNames.mapIndexed { idx, n -> OdfChartSeries(n, seriesValues[idx]) }
-        return if (categories.isEmpty()) null else OdfChart(type, categories, series, title, subtitle, legend, xAxisTitle, yAxisTitle)
+        val series = seriesNames.mapIndexed { idx, n ->
+            val styleAttrs = seriesStyleNames.getOrNull(idx)?.let { chartStyles[it] }
+            OdfChartSeries(n, seriesValues[idx], color = styleAttrs?.first, dataLabels = styleAttrs?.second ?: false)
+        }
+        return if (categories.isEmpty()) null else OdfChart(type, categories, series, title, subtitle, legend, xAxisTitle, yAxisTitle, stacked = stacked)
+    }
+
+    /** Parses chart automatic styles: chart style-name -> (fill color, data-labels enabled). (Phase 5) */
+    private fun parseChartStyles(xml: String): Map<String, Pair<Long?, Boolean>> {
+        val map = mutableMapOf<String, Pair<Long?, Boolean>>()
+        val parser = newParser(xml)
+        var e = parser.eventType
+        var curName: String? = null
+        var fill: Long? = null
+        var dataLabels = false
+        val depthStack = ArrayDeque<Int>()
+        while (e != XmlPullParser.END_DOCUMENT) {
+            when (e) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "style" -> if (getAttr(parser, "family") == "chart" || getAttr(parser, "family") == null) {
+                        getAttr(parser, "name")?.let { curName = it; fill = null; dataLabels = false; depthStack.addLast(parser.depth) }
+                    }
+                    "graphic-properties" -> if (curName != null) getAttr(parser, "fill-color")?.let { fill = parseColor(it) }
+                    "chart-properties" -> if (curName != null) {
+                        val dln = getAttr(parser, "data-label-number")
+                        if ((dln != null && dln != "none") || getAttr(parser, "data-label-text") == "true") dataLabels = true
+                    }
+                }
+                XmlPullParser.END_TAG -> if (parser.name == "style" && curName != null && depthStack.isNotEmpty() && parser.depth == depthStack.last()) {
+                    depthStack.removeLast()
+                    map[curName!!] = fill to dataLabels
+                    curName = null
+                }
+            }
+            e = parser.next()
+        }
+        return map
     }
 
     private fun parseFormulaText(xml: String): String? {
@@ -1699,6 +1821,7 @@ object OdfParser {
                     "custom-shape" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "custom-shape")))
                     "polyline" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "polyline")))
                     "polygon" -> if (isDraw) floating.add(OdfSlideElement.Shape(parseShape(parser, styles, "polygon")))
+                    "path" -> if (isDraw) floating.add(OdfSlideElement.Shape(parsePathShape(parser, styles)))
                 }
             }
             eventType = parser.next()
@@ -1832,6 +1955,7 @@ object OdfParser {
                 "custom-shape" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "custom-shape")))
                 "polyline" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "polyline")))
                 "polygon" -> elements.add(OdfSlideElement.Shape(parseShape(parser, styles, "polygon")))
+                "path" -> elements.add(OdfSlideElement.Shape(parsePathShape(parser, styles)))
                 "notes" -> {
                     val noteDepth = parser.depth
                     var noteEvent = parser.next()
@@ -1865,11 +1989,23 @@ object OdfParser {
         val paragraphs = mutableListOf<OdfParagraph>()
         var image: OdfImage? = null
         var chart: OdfChart? = null
+        var altTitle: String? = null
+        var altDesc: String? = null
         val depth = parser.depth
         var eventType = parser.next()
 
         while (!(eventType == XmlPullParser.END_TAG && parser.depth == depth)) {
             if (eventType == XmlPullParser.START_TAG) when (parser.name) {
+                "title", "desc" -> if (parser.namespace?.contains("svg") == true) {
+                    val d = parser.depth; val sb = StringBuilder(); var ev = parser.next()
+                    while (!(ev == XmlPullParser.END_TAG && parser.depth == d)) {
+                        if (ev == XmlPullParser.TEXT) sb.append(parser.text)
+                        if (ev == XmlPullParser.END_DOCUMENT) break
+                        ev = parser.next()
+                    }
+                    val t = sb.toString().trim().ifEmpty { null }
+                    if (parser.name == "title") altTitle = t else altDesc = t
+                }
                 "text-box" -> {
                     val boxDepth = parser.depth
                     var boxEvent = parser.next()
@@ -1923,6 +2059,7 @@ object OdfParser {
             // Prefer the legacy inline percent clip; otherwise resolve absolute lengths from the graphic style. (A7)
             val frac = clip ?: parseClipLengths(resolved.clip, image.naturalWidthPx, image.naturalHeightPx)
             if (frac != null) image = image.copy(cropLeftPct = frac[0], cropTopPct = frac[1], cropRightPct = frac[2], cropBottomPct = frac[3])
+            if (altTitle != null || altDesc != null) image = image.copy(altTitle = altTitle, altDesc = altDesc)
         }
         return OdfFrame(x, y, w, h, paragraphs, image, chart = chart, fillColor = resolved.drawFillColor, strokeColor = resolved.drawStrokeColor, strokeWidth = resolved.drawStrokeWidth, fillGradient = resolved.fillGradientName?.let { gradientDefs[it] })
     }
@@ -1978,6 +2115,86 @@ object OdfParser {
             "polygon" -> OdfShape.Polyline(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, polyPoints, closed = true, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
             else -> OdfShape.CustomShape(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
         }
+    }
+
+    /** Parses a draw:path freeform shape, sampling svg:d into an OdfShape.Polyline. (Phase 2) */
+    private fun parsePathShape(parser: XmlPullParser, styles: Map<String, StyleInfo>): OdfShape {
+        val x = parseDimension(getAttr(parser, "x"))
+        val y = parseDimension(getAttr(parser, "y"))
+        val w = parseDimension(getAttr(parser, "width"))
+        val h = parseDimension(getAttr(parser, "height"))
+        val vb = getAttr(parser, "viewBox")?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toFloatOrNull() }
+        val d = getAttr(parser, "d")
+        val styleName = getAttr(parser, "style-name")
+        val resolved = resolveStyle(styleName, styles)
+        val rot = parseRotationDegrees(getAttr(parser, "transform"))
+        val grad = resolved.fillGradientName?.let { gradientDefs[it] }
+        val (points, closed) = sampleSvgPath(d, vb, x, y, w, h)
+
+        val text = mutableListOf<OdfParagraph>()
+        val depth = parser.depth
+        var eventType = parser.next()
+        while (!(eventType == XmlPullParser.END_TAG && parser.depth == depth)) {
+            if (eventType == XmlPullParser.START_TAG && parser.name == "p" && parser.namespace?.contains("text") == true) {
+                val spans = parseInlineContent(parser, "p", styles)
+                if (spans.isNotEmpty()) text.add(OdfParagraph(spans))
+            }
+            eventType = parser.next()
+        }
+        return OdfShape.Polyline(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, points, closed = closed, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
+    }
+
+    /** Flattens an SVG path 'd' (viewBox space) into absolute px@96 vertices; returns (points, closed). (Phase 2) */
+    private fun sampleSvgPath(d: String?, vb: List<Float>?, x: Float, y: Float, w: Float, h: Float): Pair<List<Pair<Float, Float>>, Boolean> {
+        if (d.isNullOrBlank()) return emptyList<Pair<Float, Float>>() to false
+        val vbMinX = vb?.getOrNull(0) ?: 0f; val vbMinY = vb?.getOrNull(1) ?: 0f
+        val vbW = vb?.getOrNull(2)?.takeIf { it != 0f } ?: 1f; val vbH = vb?.getOrNull(3)?.takeIf { it != 0f } ?: 1f
+        fun map(px: Float, py: Float) = (x + (px - vbMinX) / vbW * w) to (y + (py - vbMinY) / vbH * h)
+        // Tokenize commands + numbers.
+        val tokens = Regex("[MmLlHhVvCcSsQqTtAaZz]|-?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?").findAll(d).map { it.value }.toList()
+        val raw = ArrayList<Pair<Float, Float>>()
+        var closed = false
+        var i = 0
+        var cx = 0f; var cy = 0f; var startX = 0f; var startY = 0f
+        var cmd = ' '
+        fun num(): Float { return (tokens.getOrNull(i++)?.toFloatOrNull() ?: 0f) }
+        fun cubic(x0: Float, y0: Float, x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {
+            val steps = 8
+            for (s in 1..steps) {
+                val t = s / steps.toFloat(); val u = 1 - t
+                val px = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3
+                val py = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
+                raw.add(px to py)
+            }
+        }
+        fun quad(x0: Float, y0: Float, x1: Float, y1: Float, x2: Float, y2: Float) {
+            val steps = 8
+            for (s in 1..steps) {
+                val t = s / steps.toFloat(); val u = 1 - t
+                val px = u * u * x0 + 2 * u * t * x1 + t * t * x2
+                val py = u * u * y0 + 2 * u * t * y1 + t * t * y2
+                raw.add(px to py)
+            }
+        }
+        while (i < tokens.size) {
+            val tk = tokens[i]
+            if (tk.length == 1 && tk[0].isLetter()) { cmd = tk[0]; i++ }
+            val rel = cmd.isLowerCase()
+            when (cmd.uppercaseChar()) {
+                'M' -> { var nx = num(); var ny = num(); if (rel) { nx += cx; ny += cy }; cx = nx; cy = ny; startX = cx; startY = cy; raw.add(cx to cy); cmd = if (rel) 'l' else 'L' }
+                'L' -> { var nx = num(); var ny = num(); if (rel) { nx += cx; ny += cy }; cx = nx; cy = ny; raw.add(cx to cy) }
+                'H' -> { var nx = num(); if (rel) nx += cx; cx = nx; raw.add(cx to cy) }
+                'V' -> { var ny = num(); if (rel) ny += cy; cy = ny; raw.add(cx to cy) }
+                'C' -> { var x1 = num(); var y1 = num(); var x2 = num(); var y2 = num(); var nx = num(); var ny = num(); if (rel) { x1 += cx; y1 += cy; x2 += cx; y2 += cy; nx += cx; ny += cy }; cubic(cx, cy, x1, y1, x2, y2, nx, ny); cx = nx; cy = ny }
+                'S' -> { var x2 = num(); var y2 = num(); var nx = num(); var ny = num(); if (rel) { x2 += cx; y2 += cy; nx += cx; ny += cy }; cubic(cx, cy, cx, cy, x2, y2, nx, ny); cx = nx; cy = ny }
+                'Q' -> { var x1 = num(); var y1 = num(); var nx = num(); var ny = num(); if (rel) { x1 += cx; y1 += cy; nx += cx; ny += cy }; quad(cx, cy, x1, y1, nx, ny); cx = nx; cy = ny }
+                'T' -> { var nx = num(); var ny = num(); if (rel) { nx += cx; ny += cy }; raw.add(nx to ny); cx = nx; cy = ny }
+                'A' -> { num(); num(); num(); num(); num(); var nx = num(); var ny = num(); if (rel) { nx += cx; ny += cy }; raw.add(nx to ny); cx = nx; cy = ny }
+                'Z' -> { closed = true; cx = startX; cy = startY; raw.add(startX to startY) }
+                else -> i++
+            }
+        }
+        return raw.map { map(it.first, it.second) } to closed
     }
 
     /** Maps a draw:points string (viewBox space) into absolute px@96 vertices. (Priority 8) */
@@ -2061,6 +2278,9 @@ object OdfParser {
     private val FIELD_TAGS = setOf(
         "date", "time", "page-number", "page-count", "file-name", "author-name",
         "author-initials", "title", "subject", "description", "chapter", "sheet-name",
-        "creation-date", "modification-date", "editing-cycles"
+        "creation-date", "modification-date", "editing-cycles",
+        // Additional field elements (Phase 2).
+        "variable-set", "variable-get", "user-field-get", "sequence", "placeholder",
+        "conditional-text", "hidden-text", "page-continuation", "bibliography-mark"
     )
 }
