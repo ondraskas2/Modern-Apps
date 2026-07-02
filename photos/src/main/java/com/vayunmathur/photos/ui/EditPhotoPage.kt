@@ -700,6 +700,11 @@ fun EditPhotoPage(
 
                         // Tool overlays (only when not drawing)
                         if (!isDrawing && !isCropping) {
+                            // Keep the committed selection visible in every mode
+                            // (until cleared) so the user knows edits are scoped.
+                            if (committedSel != null && selDragStart == null) {
+                                SelectionPatternOverlay(committedSel!!)
+                            }
                             val blurAdj = document.activeAdjustment<BlurAdj>()
                             if (editorMode == EditorMode.LensBlur && blurAdj != null && !blurAdj.blur.isIdentity()) {
                                 BlurOverlay(blurParams = blurAdj.blur, onBlurChanged = { vm.updateActiveAdjustment(BlurAdj(it)) })
@@ -776,9 +781,6 @@ fun EditPhotoPage(
                                         },
                                     )
                                 })
-                            }
-                            if (editorMode == EditorMode.Selection && committedSel != null && selDragStart == null) {
-                                SelectionPatternOverlay(committedSel!!)
                             }
                             if (editorMode == EditorMode.Selection) {
                                 SelectionOverlay(
@@ -907,7 +909,20 @@ fun EditPhotoPage(
                 ) {
                     if (editorMode == EditorMode.Crop) {
                         CropRotatePanel(
-                            onRotate90 = { cropAngle = (cropAngle + 90f) % 360f },
+                            onRotate90 = {
+                                // Quarter-turn: keep the crop center, swap the box's
+                                // pixel dimensions, and rotate 90°. Swapping extents +
+                                // the 90° turn preserves the selected footprint (and
+                                // two turns return exactly to the original box).
+                                val w = document.canvasWidth.coerceAtLeast(1).toFloat()
+                                val h = document.canvasHeight.coerceAtLeast(1).toFloat()
+                                val newHx = cropHy * h / w
+                                val newHy = cropHx * w / h
+                                cropHx = newHx
+                                cropHy = newHy
+                                cropAngle = (cropAngle + 90f) % 360f
+                                cropAspect = null
+                            },
                             selectedAspect = cropAspect,
                             onAspect = { ar ->
                                 cropAspect = ar

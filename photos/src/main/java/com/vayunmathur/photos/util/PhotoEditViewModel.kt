@@ -43,8 +43,9 @@ import kotlin.math.roundToInt
 
 /**
  * Document-centric editor view model. The single source of truth is [document]; the
- * compositor renders a 512px [compositedPreview] for the screen and a full-res bitmap
- * on export. Undo/redo snapshots whole [EditDocument]s.
+ * compositor renders a high-res [compositedPreview] (up to 2048px, matching the decode
+ * size so the on-screen image stays sharp) and a full-res bitmap on export. Undo/redo
+ * snapshots whole [EditDocument]s.
  *
  * Drawing (ink) strokes and text overlays remain screen-local state and are baked onto
  * the composite at save time (see [savePhoto]).
@@ -211,7 +212,7 @@ class PhotoEditViewModel(
         updateDocument { it.updateLayer(index) { l -> l.copyBase(name = name) } }
 
     fun addAdjustmentLayer(adjustment: LayerAdjustment) =
-        updateDocument { it.addLayer(AdjustmentLayer(adjustment)) }
+        updateDocument { it.addLayer(withActiveSelectionMask(AdjustmentLayer(adjustment))) }
 
     fun addEmptyPixelLayer() {
         val doc = _document.value
@@ -241,8 +242,17 @@ class PhotoEditViewModel(
         updateDocument(pushUndo = false) { doc ->
             val idx = doc.layers.indexOfLast { it is AdjustmentLayer && match(it.adjustment) }
             if (idx >= 0) doc.setActiveLayer(idx)
-            else doc.addLayer(AdjustmentLayer(create()))
+            else doc.addLayer(withActiveSelectionMask(AdjustmentLayer(create())))
         }
+    }
+
+    /**
+     * If a selection is active, returns [layer] masked to it so the edit only
+     * affects the selected area (Photoshop-style). Otherwise returns [layer].
+     */
+    private fun withActiveSelectionMask(layer: Layer): Layer {
+        val sel = _selection.value?.takeIf { !it.isEmpty() } ?: return layer
+        return layer.copyBase(mask = sel.toLayerMask())
     }
 
     fun updateActiveAdjustment(adjustment: LayerAdjustment) {
@@ -457,7 +467,7 @@ class PhotoEditViewModel(
 
     companion object {
         private const val TAG = "PhotoEditViewModel"
-        private const val PREVIEW_MAX_DIM = 1024
+        private const val PREVIEW_MAX_DIM = 2048
 
         private sealed class WriteResult {
             data object Success : WriteResult()
