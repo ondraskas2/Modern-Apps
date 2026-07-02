@@ -37,11 +37,14 @@
     <string name="enable_ai_search_button">Enable</string>
     <string name="model_downloading_title">Downloading AI Model</string>
     <string name="model_downloading_description">The AI model is being downloaded. This may take a few minutes depending on your connection.</string>
-    <!-- Optional on-device face matching -->
-    <string name="match_faces_title">Match faces to contacts</string>
-    <string name="match_faces_description">Optionally find your contacts in your photos. Faces are detected and matched to your contact photos entirely on your device — nothing is uploaded. This needs permission to read your contacts.</string>
-    <string name="match_faces_enable">Turn on</string>
+    <!-- On-device face grouping (always on, unsupervised, unnamed) -->
     <string name="people_empty">No people found yet. Scanning happens in the background — check back after your photos have been indexed.</string>
+    <string name="people_scanning">Grouping faces… people will appear here as they are found.</string>
+    <string name="face_indexing_progress">Indexing %1$d / %2$d</string>
+    <string name="people_model_missing">Face grouping needs a MobileFaceNet model. Add a permissively-licensed mobilefacenet.tflite to photos/src/main/assets (see FaceRecognizer).</string>
     <string name="people_photo_count">%1$d photos</string>
-    <string name="people_label">People: %1$s</string>
+    <plurals name="people_in_photo">
+        <item quantity="one">%1$d person</item>
+        <item quantity="other">%1$d people</item>
+    </plurals>
 </resources>

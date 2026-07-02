@@ -52,6 +52,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -88,7 +89,7 @@ fun PhotoPage(galleryViewModel: GalleryViewModel, photoMapViewModel: PhotoMapVie
     val photos = overridePhotosList ?: photosAll.filter { !it.isTrashed }
     val context = LocalContext.current
     val photosSorted = remember(photos) { photos.sortedByDescending { it.date } }
-    val matchedNames by galleryViewModel.matchedNamesByPhoto.collectAsState()
+    val matchedCounts by galleryViewModel.faceCountByPhoto.collectAsState()
 
     val initialIndex =
             remember(photosSorted, id) {
@@ -138,7 +139,7 @@ fun PhotoPage(galleryViewModel: GalleryViewModel, photoMapViewModel: PhotoMapVie
                         isSettled = pagerState.settledPage == pageIndex,
                         isMetadataVisible = isMetadataVisible,
                         currentZoom = zoomState,
-                        matchedPeople = matchedNames[photo.id].orEmpty(),
+                        peopleCount = matchedCounts[photo.id] ?: 0,
                         onZoomUpdate = { newState -> zoomStates[photo.id] = newState },
                         onToggleMetadata = { isMetadataVisible = !isMetadataVisible },
                         refreshKey = refreshKey,
@@ -165,7 +166,7 @@ fun PhotoDetailView(
         isSettled: Boolean,
         isMetadataVisible: Boolean,
         currentZoom: ZoomState,
-        matchedPeople: List<String> = emptyList(),
+        peopleCount: Int = 0,
         onZoomUpdate: (ZoomState) -> Unit,
         onToggleMetadata: () -> Unit,
         refreshKey: Int = 0,
@@ -367,9 +368,9 @@ fun PhotoDetailView(
                         text = stringResource(R.string.resolution, photo.width, photo.height),
                         color = Color.LightGray
                 )
-                if (matchedPeople.isNotEmpty()) {
+                if (peopleCount > 0) {
                     Text(
-                            text = stringResource(R.string.people_label, matchedPeople.joinToString(", ")),
+                            text = pluralStringResource(R.plurals.people_in_photo, peopleCount, peopleCount),
                             color = Color.LightGray
                     )
                 }

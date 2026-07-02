@@ -61,6 +61,7 @@ ink = "1.0.0"
 protobuf = "4.35.0"
 keepassJava2 = "2.2.4"
 zxing = "3.5.4"
+litert = "1.4.2"
 
 [libraries]
 # AndroidX Core & Lifecycle
@@ -126,6 +127,11 @@ maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.r
 
 # On-device ML segmentation (MediaPipe Tasks — standalone, no Play Services)
 mediapipe-tasks-vision = { module = "com.google.mediapipe:tasks-vision", version = "0.10.35" }
+
+# On-device LiteRT (formerly TensorFlow Lite) interpreter for the MobileFaceNet
+# face embedder (Apache-2.0, no Play Services). v1.x keeps the drop-in
+# org.tensorflow.lite.Interpreter API and the libtensorflowlite_jni.so native lib.
+litert = { module = "com.google.ai.edge.litert:litert", version.ref = "litert" }
 
 # App Widgets (Glance)
 androidx-glance = { module = "androidx.glance:glance", version.ref = "glance" }

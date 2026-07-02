@@ -26,8 +26,10 @@ import androidx.work.WorkerParameters
 import androidx.work.ListenableWorker.Result as WorkResult
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.buildDatabase
+import com.vayunmathur.photos.data.Person
 import com.vayunmathur.photos.data.Photo
 import com.vayunmathur.photos.data.PhotoFace
+import com.vayunmathur.photos.data.FaceDao
 import com.vayunmathur.photos.data.PhotoOCR
 import com.vayunmathur.photos.data.PhotoDatabase
 import com.vayunmathur.photos.data.VideoData
@@ -67,9 +69,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             OCRWorker.enqueue(applicationContext)
         }
 
-        if (dataStore.getBoolean("face_match_enabled", false)) {
-            FaceWorker.enqueue(applicationContext)
-        }
+        // Face grouping is always on (no opt-in). The worker is inert if the
+        // model asset is missing.
+        FaceWorker.enqueue(applicationContext)
         
         dataStore.setLong("last_photos_generation", currentGeneration)
         
@@ -390,10 +392,6 @@ private const val OCR_INTER_ITEM_DELAY_MS = 30_000L
 class FaceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): WorkResult = withContext(Dispatchers.IO) {
-        val dataStore = DataStoreUtils.getInstance(applicationContext)
-        if (!dataStore.getBoolean("face_match_enabled", false)) {
-            return@withContext WorkResult.success()
-        }
         faceMutex.withLock {
             setForeground(createForegroundInfo())
             val database = applicationContext.buildDatabase<PhotoDatabase>()
@@ -407,11 +405,11 @@ class FaceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         channelId = "face_worker",
         channelName = "People Indexing",
         title = "Finding People",
-        text = "Matching faces to your contacts on-device...",
+        text = "Grouping photos of the same person on-device...",
     )
 
     companion object {
-        private const val WORK_NAME = "FaceWorker"
+        const val WORK_NAME = "FaceWorker"
         private val faceMutex = Mutex()
 
         fun enqueue(context: Context) {
@@ -426,43 +424,61 @@ class FaceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 }
 
 /**
- * Index contact faces (once, when empty) then scan any not-yet-scanned library
- * photos for faces and match them to contacts. All on-device.
+ * Scan any not-yet-scanned library photos for faces, then group each detected
+ * face into a [Person] cluster by cosine similarity of its embedding — all
+ * on-device, unsupervised, and unnamed.
+ *
+ * Clustering is greedy and incremental: each face joins the nearest existing
+ * cluster if similarity >= [FaceRecognizer.CLUSTER_THRESHOLD], otherwise it
+ * starts a new cluster. Each cluster keeps a running-mean [Person.centroid] that
+ * is updated as faces are added, so we never have to re-scan old photos.
  */
 suspend fun runFaceIndexing(database: PhotoDatabase, context: Context) {
     val photoDao = database.photoDao()
     val faceDao = database.faceDao()
     val dataStore = DataStoreUtils.getInstance(context)
 
-    // 1. Make sure contact face templates exist. Cheap no-op once populated.
-    val existingKeys = faceDao.getContactFaces().map { it.contactKey }.toSet()
-    val newContactFaces = ContactFaceIndexer(context).index(existingKeys)
-    if (newContactFaces.isNotEmpty()) faceDao.upsertContactFaces(newContactFaces)
+    // Feature is inert without the on-device models (see FaceRecognizer docs).
+    // Return WITHOUT marking photos scanned so they get processed once the
+    // model assets are present.
+    if (!FaceRecognizer.modelsAvailable(context)) {
+        Log.w("FaceWorker", "Face models missing; skipping face indexing")
+        return
+    }
 
-    val contacts = faceDao.getContactFaces()
-        .map { it.contactKey to FaceRecognizer.bytesToFloats(it.embedding) }
-    val nameByKey = faceDao.getContactFaces().associate { it.contactKey to it.name }
+    // If the embedder model/version changed, the old embeddings are
+    // incompatible: drop all clusters + faces and re-scan every photo so they
+    // get re-grouped with the new model. Photo rows themselves are untouched.
+    val storedVersion = dataStore.getLong("face_embedder_version") ?: 0L
+    if (storedVersion != FaceRecognizer.EMBEDDER_VERSION.toLong()) {
+        faceDao.clearPersons()
+        faceDao.clearPhotoFaces()
+        photoDao.resetFaceScanned()
+        dataStore.setLong("face_embedder_version", FaceRecognizer.EMBEDDER_VERSION.toLong())
+    }
 
-    // 2. Scan library photos that haven't been scanned yet.
+    // Load existing clusters into memory once; centroids are cached as floats and
+    // updated in place so we avoid re-reading them for every face.
+    val clusters = faceDao.getPersons()
+        .map { Cluster(it, FaceRecognizer.bytesToFloats(it.centroid)) }
+        .toMutableList()
+
     val photos = photoDao.getUnscannedForFaces().sortedByDescending { it.date }
     for (photo in photos) {
-        if (!dataStore.getBoolean("face_match_enabled", false)) return
-
         try {
             val bitmap = loadBitmapForFaces(context, photo.uri.toUri())
             if (bitmap != null) {
-                val templates = FaceRecognizer.detectFaces(bitmap)
+                val faces = FaceRecognizer.detectAndEmbed(context, bitmap)
                 bitmap.recycle()
-                val faces = templates.map { template ->
-                    val key = FaceRecognizer.bestMatch(template, contacts)
+                val rows = faces.map { face ->
+                    val clusterId = assignToCluster(face, photo, clusters, faceDao)
                     PhotoFace(
                         photoId = photo.id,
-                        embedding = FaceRecognizer.floatsToBytes(template),
-                        contactKey = key,
-                        contactName = key?.let { nameByKey[it] },
+                        clusterId = clusterId,
+                        embedding = FaceRecognizer.floatsToBytes(face.embedding),
                     )
                 }
-                if (faces.isNotEmpty()) faceDao.insertPhotoFaces(faces)
+                if (rows.isNotEmpty()) faceDao.insertPhotoFaces(rows)
             }
         } catch (e: Exception) {
             Log.e("FaceWorker", "Error scanning faces for photo ${photo.id}", e)
@@ -470,6 +486,104 @@ suspend fun runFaceIndexing(database: PhotoDatabase, context: Context) {
 
         // Mark scanned regardless of outcome so we don't retry forever.
         photoDao.upsertAll(listOf(photo.copy(faceScanned = true)))
+    }
+
+    // Second pass: fold together clusters whose centroids ended up very close,
+    // which trims duplicate person-groups created early in the scan.
+    mergeSimilarClusters(faceDao)
+}
+
+/** A cluster held in memory during a scan: its [Person] row plus cached centroid. */
+private class Cluster(var person: Person, var centroid: FloatArray)
+
+/**
+ * Put [face] in the nearest cluster above [FaceRecognizer.CLUSTER_THRESHOLD],
+ * updating that cluster's running-mean centroid, or start a new cluster. Returns
+ * the cluster (person) id the face was assigned to.
+ */
+private suspend fun assignToCluster(
+    face: FaceRecognizer.DetectedFace,
+    photo: Photo,
+    clusters: MutableList<Cluster>,
+    faceDao: FaceDao,
+): Long {
+    var best: Cluster? = null
+    var bestSim = FaceRecognizer.CLUSTER_THRESHOLD
+    for (cluster in clusters) {
+        val sim = FaceRecognizer.similarity(face.embedding, cluster.centroid)
+        if (sim >= bestSim) {
+            bestSim = sim
+            best = cluster
+        }
+    }
+
+    if (best != null) {
+        val n = best.person.faceCount
+        val mean = FloatArray(best.centroid.size) { i ->
+            (best.centroid[i] * n + face.embedding[i]) / (n + 1)
+        }
+        // Centroid is a running mean kept L2-normalised so cosine stays well-behaved.
+        best.centroid = FaceRecognizer.l2Normalize(mean)
+        best.person = best.person.copy(
+            centroid = FaceRecognizer.floatsToBytes(best.centroid),
+            faceCount = n + 1,
+        )
+        faceDao.updatePerson(best.person)
+        return best.person.id
+    }
+
+    val person = Person(
+        centroid = FaceRecognizer.floatsToBytes(face.embedding),
+        faceCount = 1,
+        repPhotoId = photo.id,
+        repLeft = face.left,
+        repTop = face.top,
+        repRight = face.right,
+        repBottom = face.bottom,
+    )
+    val id = faceDao.insertPerson(person)
+    clusters += Cluster(person.copy(id = id), face.embedding.copyOf())
+    return id
+}
+
+/**
+ * Greedily merge clusters whose centroids are within [FaceRecognizer.MERGE_THRESHOLD]
+ * cosine of each other. Faces from the merged cluster are moved over and the
+ * centroid becomes the face-count-weighted, L2-normalised mean. O(n^2) over the
+ * (small) number of person-clusters.
+ */
+private suspend fun mergeSimilarClusters(faceDao: FaceDao) {
+    val persons = faceDao.getPersons().toMutableList()
+    var i = 0
+    while (i < persons.size) {
+        var j = i + 1
+        while (j < persons.size) {
+            val a = persons[i]
+            val b = persons[j]
+            val sim = FaceRecognizer.similarity(
+                FaceRecognizer.bytesToFloats(a.centroid),
+                FaceRecognizer.bytesToFloats(b.centroid),
+            )
+            if (sim >= FaceRecognizer.MERGE_THRESHOLD) {
+                val na = a.faceCount
+                val nb = b.faceCount
+                val ca = FaceRecognizer.bytesToFloats(a.centroid)
+                val cb = FaceRecognizer.bytesToFloats(b.centroid)
+                val mean = FloatArray(ca.size) { (ca[it] * na + cb[it] * nb) / (na + nb) }
+                val merged = a.copy(
+                    centroid = FaceRecognizer.floatsToBytes(FaceRecognizer.l2Normalize(mean)),
+                    faceCount = na + nb,
+                )
+                faceDao.reassignCluster(b.id, a.id)
+                faceDao.updatePerson(merged)
+                faceDao.deletePerson(b.id)
+                persons[i] = merged
+                persons.removeAt(j)
+            } else {
+                j++
+            }
+        }
+        i++
     }
 }
 

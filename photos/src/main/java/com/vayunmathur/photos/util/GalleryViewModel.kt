@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -82,32 +83,53 @@ class GalleryViewModel(
             false,
         )
 
-    /** Whether the optional "match faces to contacts" feature is on (off by default). */
-    val faceMatchEnabled: StateFlow<Boolean> = dataStore.booleanFlow("face_match_enabled")
-        .onStart { emit(dataStore.getBoolean("face_match_enabled", false)) }
+    /** True while the face-grouping worker is actively indexing. */
+    val faceIndexing: StateFlow<Boolean> = WorkManager.getInstance(application)
+        .getWorkInfosForUniqueWorkFlow(FaceWorker.WORK_NAME)
+        .map { infos -> infos.any { it.state == WorkInfo.State.RUNNING } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
-    /** Photos grouped by matched contact, for the People view. */
-    val people: StateFlow<List<PersonGroup>> =
-        combine(photoDao.getAllFlow(), faceDao.matchedFacesFlow()) { allPhotos, faces ->
-            val byId = allPhotos.filter { !it.isTrashed }.associateBy { it.id }
-            faces.groupBy { it.contactName!! }
-                .mapNotNull { (name, facesForPerson) ->
-                    val personPhotos = facesForPerson
-                        .mapNotNull { byId[it.photoId] }
-                        .distinctBy { it.id }
-                        .sortedByDescending { it.date }
-                    if (personPhotos.isEmpty()) null
-                    else PersonGroup(name, personPhotos.first(), personPhotos)
-                }
-                .sortedByDescending { it.photos.size }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    /** Photos already scanned for faces (progress numerator). */
+    val faceScannedCount: StateFlow<Int> = photoDao.getFaceScannedCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
-    /** Matched contact names keyed by photo id, for the photo detail overlay. */
-    val matchedNamesByPhoto: StateFlow<Map<Long, List<String>>> =
-        faceDao.matchedFacesFlow().map { faces ->
-            faces.groupBy { it.photoId }
-                .mapValues { (_, list) -> list.mapNotNull { it.contactName }.distinct() }
+    /** Photos that need face scanning in total (progress denominator). */
+    val faceTargetCount: StateFlow<Int> = photoDao.getFaceTargetCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** Photos grouped by unnamed person-cluster, for the People view. */
+    val people: StateFlow<List<PersonCluster>> =
+        combine(photoDao.getAllFlow(), faceDao.personsFlow(), faceDao.allFacesFlow()) { allPhotos, persons, faces ->
+            val byId = allPhotos.filter { !it.isTrashed }.associateBy { it.id }
+            val facesByCluster = faces.groupBy { it.clusterId }
+            persons.mapNotNull { person ->
+                val personPhotos = facesByCluster[person.id].orEmpty()
+                    .mapNotNull { byId[it.photoId] }
+                    .distinctBy { it.id }
+                    .sortedByDescending { it.date }
+                if (personPhotos.isEmpty()) return@mapNotNull null
+                val cover = byId[person.repPhotoId] ?: personPhotos.first()
+                PersonCluster(
+                    id = person.id,
+                    coverPhoto = cover,
+                    faceLeft = person.repLeft,
+                    faceTop = person.repTop,
+                    faceRight = person.repRight,
+                    faceBottom = person.repBottom,
+                    photos = personPhotos,
+                )
+            }.sortedByDescending { it.photos.size }
+        }
+            // Per-photo writes during indexing re-emit the source flows constantly;
+            // drop emissions where the projected cluster list is unchanged (value
+            // equality of the PersonCluster data class) so the grid doesn't churn.
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Number of detected faces (i.e. people) per photo, for the photo detail overlay. */
+    val faceCountByPhoto: StateFlow<Map<Long, Int>> =
+        faceDao.allFacesFlow().map { faces ->
+            faces.groupBy { it.photoId }.mapValues { (_, list) -> list.size }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     init {
@@ -149,18 +171,6 @@ class GalleryViewModel(
     fun setFeatureEnabled(enabled: Boolean) {
         viewModelScope.launch {
             dataStore.setBoolean("image_understanding_enabled", enabled)
-        }
-    }
-
-    /**
-     * Turn the face/contact matching feature on or off. When turning on, kick a
-     * one-off background pass to index contacts and scan photos. Callers must
-     * ensure the READ_CONTACTS permission is granted before enabling.
-     */
-    fun setFaceMatchEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            dataStore.setBoolean("face_match_enabled", enabled)
-            if (enabled) FaceWorker.enqueue(getApplication())
         }
     }
 
@@ -211,9 +221,13 @@ fun GalleryViewModelFactory(
     initializer { GalleryViewModel(application, photoDao, faceDao) }
 }
 
-/** A contact and the library photos they were matched in. */
-data class PersonGroup(
-    val name: String,
+/** An unnamed person-cluster and the library photos they appear in. */
+data class PersonCluster(
+    val id: Long,
     val coverPhoto: Photo,
+    val faceLeft: Float,
+    val faceTop: Float,
+    val faceRight: Float,
+    val faceBottom: Float,
     val photos: List<Photo>,
 )

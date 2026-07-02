@@ -13,6 +13,7 @@ android {
     packaging {
         jniLibs {
             pickFirsts.add("**/libc++_shared.so")
+            pickFirsts.add("**/libtensorflowlite_jni.so")
         }
     }
 }
@@ -26,6 +27,7 @@ dependencies {
     implementation(libs.coil.video)
     implementation(libs.androidx.exifinterface)
     implementation(libs.mediapipe.tasks.vision)
+    implementation(libs.litert)
 
     implementRoom(libs)
 

@@ -6,50 +6,65 @@ import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
-import androidx.room.Upsert
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 /**
- * A face template computed from a contact's photo. One row per contact that has
- * a usable photo. [embedding] is a small grayscale face template (see
- * [com.vayunmathur.photos.util.FaceRecognizer]) packed as bytes.
+ * One unnamed person discovered by on-device face clustering. Faces whose
+ * embeddings are close enough (cosine similarity, see
+ * [com.vayunmathur.photos.util.FaceRecognizer]) share a [Person]. Nobody is
+ * named — a cluster is just "the same face seen across photos".
+ *
+ * [centroid] is the running mean of every face embedding in the cluster, packed
+ * as bytes; it is updated incrementally as new faces are added. The `rep*`
+ * fields point at one representative face (a photo id plus its normalised
+ * bounding box, 0..1) so the UI can show a cropped thumbnail without a name.
  */
 @Entity
-data class ContactFace(
-    @PrimaryKey val contactKey: String,
-    val name: String,
-    val embedding: ByteArray,
-    val photoUri: String,
+data class Person(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val centroid: ByteArray,
+    val faceCount: Int,
+    val repPhotoId: Long,
+    val repLeft: Float,
+    val repTop: Float,
+    val repRight: Float,
+    val repBottom: Float,
 )
 
 /**
- * A face detected in a library photo. [contactName] is filled in when the face
- * matched a [ContactFace]; null means "detected but not recognised". The
- * [embedding] is kept so faces can be re-matched if contacts change without
+ * A face detected in a library photo. [clusterId] is the [Person] it was
+ * grouped into. [embedding] is kept so faces can be re-clustered later without
  * re-scanning the original photo.
  */
-@Entity(indices = [Index(value = ["photoId"])])
+@Entity(indices = [Index(value = ["photoId"]), Index(value = ["clusterId"])])
 data class PhotoFace(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val photoId: Long,
+    val clusterId: Long,
     val embedding: ByteArray,
-    val contactKey: String?,
-    val contactName: String?,
 )
 
 @Dao
 interface FaceDao {
-    @Upsert
-    suspend fun upsertContactFaces(faces: List<ContactFace>)
+    @Insert
+    suspend fun insertPerson(person: Person): Long
 
-    @Query("SELECT * FROM ContactFace")
-    suspend fun getContactFaces(): List<ContactFace>
+    @Update
+    suspend fun updatePerson(person: Person)
 
-    @Query("SELECT count(*) FROM ContactFace")
-    suspend fun contactFaceCount(): Int
+    @Query("SELECT * FROM Person")
+    suspend fun getPersons(): List<Person>
 
-    @Query("DELETE FROM ContactFace")
-    suspend fun clearContactFaces()
+    /** All clusters, for the People view. */
+    @Query("SELECT * FROM Person")
+    fun personsFlow(): Flow<List<Person>>
+
+    @Query("DELETE FROM Person")
+    suspend fun clearPersons()
+
+    @Query("DELETE FROM Person WHERE id = :id")
+    suspend fun deletePerson(id: Long)
 
     @Insert
     suspend fun insertPhotoFaces(faces: List<PhotoFace>)
@@ -60,10 +75,14 @@ interface FaceDao {
     @Query("DELETE FROM PhotoFace")
     suspend fun clearPhotoFaces()
 
-    /** All faces that were matched to a contact (drives the People view + overlays). */
-    @Query("SELECT * FROM PhotoFace WHERE contactName IS NOT NULL")
-    fun matchedFacesFlow(): Flow<List<PhotoFace>>
+    /** Move every face from one cluster to another (used by the merge pass). */
+    @Query("UPDATE PhotoFace SET clusterId = :newId WHERE clusterId = :oldId")
+    suspend fun reassignCluster(oldId: Long, newId: Long)
 
-    @Query("SELECT count(*) FROM PhotoFace WHERE contactName IS NOT NULL")
-    fun matchedFaceCountFlow(): Flow<Int>
+    /** Every detected face, for grouping photos by cluster in the UI. */
+    @Query("SELECT * FROM PhotoFace")
+    fun allFacesFlow(): Flow<List<PhotoFace>>
+
+    @Query("SELECT DISTINCT photoId FROM PhotoFace WHERE clusterId = :clusterId")
+    suspend fun photoIdsForCluster(clusterId: Long): List<Long>
 }

@@ -50,17 +50,25 @@ interface PhotoDao {
     @Query("SELECT * FROM Photo WHERE faceScanned = 0 AND isTrashed = 0 AND duration IS NULL")
     suspend fun getUnscannedForFaces(): List<Photo>
 
+    /** Photos that count toward face indexing (denominator of the progress bar). */
+    @Query("SELECT count(*) FROM Photo WHERE isTrashed = 0 AND duration IS NULL")
+    fun getFaceTargetCountFlow(): Flow<Int>
+
+    /** Photos already scanned for faces (numerator of the progress bar). */
+    @Query("SELECT count(*) FROM Photo WHERE faceScanned = 1 AND isTrashed = 0 AND duration IS NULL")
+    fun getFaceScannedCountFlow(): Flow<Int>
+
     @Query("UPDATE Photo SET faceScanned = 0")
     suspend fun resetFaceScanned()
 }
 
-@Database(entities = [Photo::class, PhotoOCR::class, ContactFace::class, PhotoFace::class], version = 7, exportSchema = false)
+@Database(entities = [Photo::class, PhotoOCR::class, Person::class, PhotoFace::class], version = 8, exportSchema = false)
 abstract class PhotoDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
     abstract fun faceDao(): FaceDao
 
     companion object : com.vayunmathur.library.util.DatabaseMigrations {
-        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
     }
 }
 
@@ -96,4 +104,19 @@ val MIGRATION_6_7 = Migration(6, 7) {
     it.execSQL("CREATE TABLE IF NOT EXISTS `ContactFace` (`contactKey` TEXT NOT NULL, `name` TEXT NOT NULL, `embedding` BLOB NOT NULL, `photoUri` TEXT NOT NULL, PRIMARY KEY(`contactKey`))")
     it.execSQL("CREATE TABLE IF NOT EXISTS `PhotoFace` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `photoId` INTEGER NOT NULL, `embedding` BLOB NOT NULL, `contactKey` TEXT, `contactName` TEXT)")
     it.execSQL("CREATE INDEX IF NOT EXISTS `index_PhotoFace_photoId` ON `PhotoFace` (`photoId`)")
+}
+
+val MIGRATION_7_8 = Migration(7, 8) {
+    // Move from contact-matched faces to unsupervised, unnamed face clustering.
+    // Drop the contact table and the old face rows (which carried contact
+    // columns), recreate Person (clusters) + PhotoFace (with clusterId), and
+    // reset faceScanned so existing photos get re-detected and clustered.
+    // Photo data itself is untouched. SQL mirrors Room's generated schema.
+    it.execSQL("DROP TABLE IF EXISTS ContactFace")
+    it.execSQL("DROP TABLE IF EXISTS PhotoFace")
+    it.execSQL("CREATE TABLE IF NOT EXISTS `Person` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `centroid` BLOB NOT NULL, `faceCount` INTEGER NOT NULL, `repPhotoId` INTEGER NOT NULL, `repLeft` REAL NOT NULL, `repTop` REAL NOT NULL, `repRight` REAL NOT NULL, `repBottom` REAL NOT NULL)")
+    it.execSQL("CREATE TABLE IF NOT EXISTS `PhotoFace` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `photoId` INTEGER NOT NULL, `clusterId` INTEGER NOT NULL, `embedding` BLOB NOT NULL)")
+    it.execSQL("CREATE INDEX IF NOT EXISTS `index_PhotoFace_photoId` ON `PhotoFace` (`photoId`)")
+    it.execSQL("CREATE INDEX IF NOT EXISTS `index_PhotoFace_clusterId` ON `PhotoFace` (`clusterId`)")
+    it.execSQL("UPDATE Photo SET faceScanned = 0")
 }
