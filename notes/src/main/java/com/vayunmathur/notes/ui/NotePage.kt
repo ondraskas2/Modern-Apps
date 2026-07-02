@@ -77,6 +77,7 @@ import com.vayunmathur.notes.data.randomBlockId
 import com.vayunmathur.notes.data.withBody
 import com.vayunmathur.notes.util.NoteImageStore
 import com.vayunmathur.notes.util.NotesViewModel
+import com.vayunmathur.notes.util.exportNoteMarkdown
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -152,10 +153,17 @@ fun NotePage(
     }
 
     LaunchedEffect(notesViewModel) {
-        notesViewModel.shareUris.collect { uri ->
+        notesViewModel.shareRequests.collect { share ->
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/markdown"
-                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_STREAM, share.uri)
+                // Only inline the markdown as text when it is small. Notes with images
+                // embed base64 data URIs, which can be many MB and would overflow the
+                // Binder transaction limit (TransactionTooLargeException). In that case
+                // the .md file (EXTRA_STREAM) is the payload.
+                if (share.markdown.length < 100_000) {
+                    putExtra(Intent.EXTRA_TEXT, share.markdown)
+                }
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(intent, "Share Note"))
@@ -191,10 +199,11 @@ fun NotePage(
                 actions = {
                     IconButton({
                         scope.launch {
-                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("note", note.content)))
+                            val markdown = withContext(Dispatchers.IO) { exportNoteMarkdown(context, note) }
+                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("note", markdown)))
                         }
                     }) { IconCopy() }
-                    IconButton({ notesViewModel.requestShare(note.title, note.content) }) { IconShare() }
+                    IconButton({ notesViewModel.requestShare(note) }) { IconShare() }
                     IconButton(onClick = {
                         notesViewModel.delete(note)
                         backStack.pop()

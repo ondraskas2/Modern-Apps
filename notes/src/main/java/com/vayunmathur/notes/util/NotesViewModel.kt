@@ -158,9 +158,12 @@ class NotesViewModel(
         return Regex(Regex.escape(searchText), RegexOption.IGNORE_CASE).findAll(text).count()
     }
 
-    private val _shareUris = MutableSharedFlow<Uri>(extraBufferCapacity = 1)
-    /** Emits a URI for a share intent each time [requestShare] completes. */
-    val shareUris: SharedFlow<Uri> = _shareUris.asSharedFlow()
+    /** A ready-to-share note: the `.md` file [uri] plus its [markdown] (EXTRA_TEXT fallback). */
+    data class NoteShare(val uri: Uri, val markdown: String)
+
+    private val _shareRequests = MutableSharedFlow<NoteShare>(extraBufferCapacity = 1)
+    /** Emits a [NoteShare] each time [requestShare] completes. */
+    val shareRequests: SharedFlow<NoteShare> = _shareRequests.asSharedFlow()
 
     /**
      * Reads each [uris] entry off the main thread and upserts it as a new [Note]
@@ -186,25 +189,28 @@ class NotesViewModel(
     }
 
     /**
-     * Writes [content] to the share cache as a `.md` file off the main thread,
-     * then emits the resulting FileProvider URI on [shareUris]. Composables
-     * collect this flow and dispatch the actual ACTION_SEND intent.
+     * Exports [note] to a single self-contained Markdown document (images inlined,
+     * drawings as SVG), writes it to the share cache as a `.md` file off the main
+     * thread, then emits a [NoteShare] on [shareRequests]. Composables collect this
+     * flow and dispatch the actual ACTION_SEND intent.
      */
-    fun requestShare(title: String, content: String) {
+    fun requestShare(note: Note) {
         val ctx = getApplication<Application>()
         viewModelScope.launch {
-            val uri = withContext(Dispatchers.IO) {
+            val share = withContext(Dispatchers.IO) {
+                val markdown = exportNoteMarkdown(ctx, note)
                 val cachePath = File(ctx.cacheDir, "shared_notes")
                 cachePath.mkdirs()
-                val file = File(cachePath, "$title.md")
-                file.writeText(content)
-                FileProvider.getUriForFile(
+                val file = File(cachePath, "${note.title.ifBlank { "note" }}.md")
+                file.writeText(markdown)
+                val uri = FileProvider.getUriForFile(
                     ctx,
                     "${ctx.packageName}.fileprovider",
                     file,
                 )
+                NoteShare(uri, markdown)
             }
-            _shareUris.emit(uri)
+            _shareRequests.emit(share)
         }
     }
 

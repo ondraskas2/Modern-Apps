@@ -2212,18 +2212,18 @@ object OdfParser {
 
     // --- CSV parsing ---
 
-    fun parseCsv(text: String, fileName: String): OdfDocument.Spreadsheet {
+    fun parseCsv(text: String, fileName: String, delimiter: Char = ','): OdfDocument.Spreadsheet {
         val rows = mutableListOf<OdfRow>()
         val lines = text.lines()
         for (line in lines) {
             if (line.isBlank()) continue
-            val cells = parseCsvLine(line).map { OdfCell(text = it) }
+            val cells = parseCsvLine(line, delimiter).map { OdfCell(text = it) }
             rows.add(OdfRow(cells))
         }
         return OdfDocument.Spreadsheet(fileName, listOf(OdfSheet("Sheet 1", rows)))
     }
 
-    private fun parseCsvLine(line: String): List<String> {
+    private fun parseCsvLine(line: String, delimiter: Char = ','): List<String> {
         val fields = mutableListOf<String>()
         val sb = StringBuilder()
         var inQuotes = false
@@ -2236,7 +2236,7 @@ object OdfParser {
                     if (i + 1 < line.length && line[i + 1] == '"') { sb.append('"'); i++ }
                     else inQuotes = false
                 }
-                c == ',' && !inQuotes -> { fields.add(sb.toString()); sb.clear() }
+                c == delimiter && !inQuotes -> { fields.add(sb.toString()); sb.clear() }
                 else -> sb.append(c)
             }
             i++

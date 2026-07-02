@@ -2,6 +2,7 @@ package com.vayunmathur.library.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -98,11 +99,18 @@ fun OdfMarkdownEditorField(
     )
 }
 
-/** The formatting toolbar for [controller], restricted to Markdown-representable actions. */
+/**
+ * The formatting toolbar for [controller], restricted to Markdown-representable actions.
+ * [trailing] appends extra buttons (e.g. insert image / drawing) inside the same
+ * scrollable row, so callers can combine formatting and insert actions in one bar.
+ */
 @Composable
-fun OdfMarkdownEditorToolbar(controller: OdfMarkdownEditorController) {
+fun OdfMarkdownEditorToolbar(
+    controller: OdfMarkdownEditorController,
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
     val doc by controller.editor.document.collectAsState()
-    OdfMarkdownToolbar(controller.editor, doc, controller.selStart, controller.selEnd)
+    OdfMarkdownToolbar(controller.editor, doc, controller.selStart, controller.selEnd, trailing)
 }
 
 /**
@@ -143,6 +151,7 @@ private fun OdfMarkdownToolbar(
     doc: OdfDocument.TextDocument,
     selStart: Int,
     selEnd: Int,
+    trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val runStart = 0
     val runEnd = doc.content.lastIndex.coerceAtLeast(0)
@@ -196,6 +205,8 @@ private fun OdfMarkdownToolbar(
         FormatIconButton(Icons.Filled.FormatIndentDecrease, "Decrease nesting") {
             if (focusedPara >= 0) state.changeListLevel(focusedPara, -1)
         }
+
+        trailing()
     }
 }
 

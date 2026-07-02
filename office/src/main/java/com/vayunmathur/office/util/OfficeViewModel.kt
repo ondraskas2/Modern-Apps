@@ -184,26 +184,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         documentUri = uri
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val doc = OdfParser.parse(getApplication(), uri, fileName)
-                _state.value = ViewState.Loaded(doc)
-                addToRecent(getApplication(), uri, fileName)
-            } catch (e: Exception) {
-                _state.value = ViewState.Error(e.message ?: "Unknown error")
-            }
-        }
-    }
-
-    fun loadCsv(uri: Uri, fileName: String) {
-        _state.value = ViewState.Loading
-        _isEditMode.value = true
-        _hasUnsavedChanges.value = false
-        undoStack.clear(); redoStack.clear()
-        _canUndo.value = false; _canRedo.value = false
-        documentUri = uri
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val text = getApplication<Application>().contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: ""
-                val doc = OdfParser.parseCsv(text, fileName)
+                val doc = DocumentImporter.open(getApplication(), uri, fileName)
                 _state.value = ViewState.Loaded(doc)
                 addToRecent(getApplication(), uri, fileName)
             } catch (e: Exception) {
@@ -1665,19 +1646,36 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- CSV export ---
 
-    fun exportCsv(): String {
+    fun exportCsv(delimiter: Char = ','): String {
         val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return ""
         val sb = StringBuilder()
         val sheet = doc.sheets.firstOrNull() ?: return ""
         for (row in sheet.rows) {
-            sb.appendLine(row.cells.joinToString(",") { cell ->
+            sb.appendLine(row.cells.joinToString(delimiter.toString()) { cell ->
                 val text = cell.text
-                if (text.contains(",") || text.contains("\"") || text.contains("\n")) {
+                if (text.contains(delimiter) || text.contains("\"") || text.contains("\n")) {
                     "\"${text.replace("\"", "\"\"")}\""
                 } else text
             })
         }
         return sb.toString()
+    }
+
+    /** Markdown export for text documents (empty for other types). */
+    fun exportMarkdown(): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ""
+        return MarkdownOdfConverter.odfToMarkdown(doc)
+    }
+
+    /** Best-effort OOXML (docx/xlsx/pptx) export. */
+    fun exportOoxml(): ByteArray {
+        val doc = (_state.value as? ViewState.Loaded)?.document ?: return ByteArray(0)
+        return OoxmlExporter.export(doc)
+    }
+
+    fun ooxmlExtension(): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document ?: return "docx"
+        return OoxmlExporter.extensionFor(doc)
     }
 
     // --- Text export ---

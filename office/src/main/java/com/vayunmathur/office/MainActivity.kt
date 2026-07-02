@@ -120,14 +120,21 @@ class MainActivity : ComponentActivity() {
                 "application/vnd.oasis.opendocument.text",
                 "application/vnd.oasis.opendocument.spreadsheet",
                 "application/vnd.oasis.opendocument.presentation",
-                "application/vnd.oasis.opendocument.graphics"
+                "application/vnd.oasis.opendocument.graphics",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "text/csv",
+                "text/comma-separated-values",
+                "text/tab-separated-values",
+                "text/markdown",
+                "text/plain",
+                "text/xml",
+                "application/xml"
             )
 
             val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let { documentUri = it; viewModel.loadDocument(it, it.lastPathSegment ?: "document") }
-            }
-            val csvImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                uri?.let { documentUri = it; viewModel.loadCsv(it, it.lastPathSegment ?: "import.csv") }
             }
 
             OfficeLightTheme {
@@ -135,8 +142,7 @@ class MainActivity : ComponentActivity() {
                     when (val s = state) {
                         is OfficeViewModel.ViewState.Empty -> InitialScreen(
                             viewModel = viewModel,
-                            onOpenDocument = { filePickerLauncher.launch(odfMimeTypes) },
-                            onImportCsv = { csvImportLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*")) }
+                            onOpenDocument = { filePickerLauncher.launch(odfMimeTypes) }
                         )
                         is OfficeViewModel.ViewState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                         is OfficeViewModel.ViewState.Loaded -> DocumentScreen(
@@ -158,7 +164,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit, onImportCsv: () -> Unit = {}) {
+fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         Text("Office", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
@@ -167,6 +173,9 @@ fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit, onImpo
         Spacer(Modifier.height(32.dp))
 
         Button(onClick = onOpenDocument, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.open_document)) }
+        Spacer(Modifier.height(4.dp))
+        Text("Opens ODF, Word/Excel/PowerPoint, CSV, TSV, Markdown & text files",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -174,8 +183,6 @@ fun InitialScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit, onImpo
             OutlinedButton(onClick = { viewModel.createNewSpreadsheet() }, Modifier.weight(1f)) { Text("New Sheet") }
             OutlinedButton(onClick = { viewModel.createNewPresentation() }, Modifier.weight(1f)) { Text("New Slides") }
         }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onImportCsv, modifier = Modifier.fillMaxWidth()) { Text("Import CSV") }
     }
 }
 
@@ -302,6 +309,20 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
             if (xml.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(xml) }
         }
     }
+    val markdownExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        uri?.let { val t = viewModel.exportMarkdown(); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val txtExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        uri?.let { val t = viewModel.exportAsPlainText(); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val tsvExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/tab-separated-values")) { uri ->
+        uri?.let { val t = viewModel.exportCsv('\t'); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val ooxmlExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri?.let { val bytes = viewModel.exportOoxml(); if (bytes.isNotEmpty()) context.contentResolver.openOutputStream(it)?.use { o -> o.write(bytes) } }
+    }
+    // Pending non-ODF export, shown behind a data-loss confirmation. (Set to launch on confirm.)
+    var exportWarning by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Replace-image picker: invokes the pending replace action with the chosen bytes. (C4)
     var pendingReplace by remember { mutableStateOf<((String, ByteArray) -> Unit)?>(null) }
     val replaceImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -394,7 +415,20 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     }
                                     DropdownMenuItem(text = { Text("Export as Text") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_file_download_24), null) }, onClick = { fileMenu = false; val t = viewModel.exportAsPlainText(); if (t.isNotEmpty()) context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, t) }, null)) })
                                     DropdownMenuItem(text = { Text("Export flat ODF…") }, onClick = { fileMenu = false; val ext = when { isTextDoc -> ".fodt"; isSpreadsheet -> ".fods"; isPresentation -> ".fodp"; else -> ".fodg" }; flatExportLauncher.launch(document.title.substringBeforeLast('.') + ext) })
-                                    if (isSpreadsheet) DropdownMenuItem(text = { Text("Export as CSV") }, onClick = { fileMenu = false; csvExportLauncher.launch("export.csv") })
+                                    val baseName = document.title.substringBeforeLast('.').ifBlank { "document" }
+                                    if (isTextDoc) {
+                                        DropdownMenuItem(text = { Text("Export as Word (.docx)…") }, onClick = { fileMenu = false; exportWarning = { ooxmlExportLauncher.launch("$baseName.docx") } })
+                                        DropdownMenuItem(text = { Text("Export as Markdown (.md)…") }, onClick = { fileMenu = false; exportWarning = { markdownExportLauncher.launch("$baseName.md") } })
+                                        DropdownMenuItem(text = { Text("Export as Text (.txt)…") }, onClick = { fileMenu = false; exportWarning = { txtExportLauncher.launch("$baseName.txt") } })
+                                    }
+                                    if (isSpreadsheet) {
+                                        DropdownMenuItem(text = { Text("Export as Excel (.xlsx)…") }, onClick = { fileMenu = false; exportWarning = { ooxmlExportLauncher.launch("$baseName.xlsx") } })
+                                        DropdownMenuItem(text = { Text("Export as CSV…") }, onClick = { fileMenu = false; exportWarning = { csvExportLauncher.launch("$baseName.csv") } })
+                                        DropdownMenuItem(text = { Text("Export as TSV…") }, onClick = { fileMenu = false; exportWarning = { tsvExportLauncher.launch("$baseName.tsv") } })
+                                    }
+                                    if (isPresentation) {
+                                        DropdownMenuItem(text = { Text("Export as PowerPoint (.pptx)…") }, onClick = { fileMenu = false; exportWarning = { ooxmlExportLauncher.launch("$baseName.pptx") } })
+                                    }
                                     HorizontalDivider()
                                     DropdownMenuItem(text = { Text(stringResource(R.string.document_info)) }, onClick = { fileMenu = false; showMetadata = true })
                                     DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.settings_24px), null) }, onClick = { fileMenu = false; showSettings = true })
@@ -607,6 +641,12 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         confirmButton = { TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text(stringResource(R.string.discard), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { Row { TextButton(onClick = { showUnsavedDialog = false }) { Text(stringResource(R.string.cancel)) }
             TextButton(onClick = { showUnsavedDialog = false; if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() }) { Text(stringResource(R.string.save), fontWeight = FontWeight.Bold) } } })
+    exportWarning?.let { action ->
+        AlertDialog(onDismissRequest = { exportWarning = null }, title = { Text("Export to non-ODF format") },
+            text = { Text("Some formatting and features may be lost when exporting outside the Open Document Format. Continue?") },
+            confirmButton = { TextButton(onClick = { exportWarning = null; action() }) { Text("Export", fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { exportWarning = null }) { Text(stringResource(R.string.cancel)) } })
+    }
     if (showSettings) SettingsDialog(autoSave = viewModel.getAutoSaveEnabled(context), autoSaveInterval = viewModel.getAutoSaveInterval(context),
         defaultFontSize = viewModel.getDefaultFontSize(context),
         onSave = { a, i, f -> viewModel.saveSettings(context, a, i, f) }, onDismiss = { showSettings = false })
