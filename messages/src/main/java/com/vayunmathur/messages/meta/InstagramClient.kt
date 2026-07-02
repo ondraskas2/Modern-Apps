@@ -394,7 +394,7 @@ object InstagramClient {
                 // just the last message.
                 scope.launch {
                     try {
-                        client.backfillRecentMessages(snapshot, config.initialSnapshotSp)
+                        client.backfillRecentMessages(snapshot, config.initialSnapshotSp, config.mailboxCursor)
                     } catch (e: Exception) {
                         Log.e(TAG, "Recent-message backfill failed", e)
                     }

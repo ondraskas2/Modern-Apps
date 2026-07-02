@@ -696,11 +696,13 @@ object MetaProtocol {
         referenceTimestampMs: Long,
         referenceMessageId: String,
         versionId: Long,
+        cursor: String = "",
     ): String {
         val task = FetchMessagesTask(
             threadKey = threadKey,
             referenceTimestampMs = referenceTimestampMs,
             referenceMessageId = referenceMessageId,
+            cursor = cursor,
         )
         val taskJson = json.encodeToString(task)
         return buildTaskPayload(
@@ -1393,6 +1395,9 @@ object MetaProtocol {
         val name3 = args.argStr(3)
         if (!name3.isNullOrEmpty()) return name3
         if (args.argLong(9) == 1L) {
+            // 1:1: prefer the contact's real display name (e.g. "Madhulika Mathur")
+            // over idx36, which is the "<handle> · Instagram" snippet.
+            contactNames[threadId]?.let { return it }
             val name36 = args.argStr(36)
             if (!name36.isNullOrEmpty()) return name36
         }

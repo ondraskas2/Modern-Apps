@@ -536,7 +536,7 @@ class MetaMqttClient(
      * decode→IncomingMessage path. Best-effort + background: a failed/empty fetch just leaves that
      * thread with its snapshot message. Mirrors Go backfill.go requestMoreHistory (single page).
      */
-    suspend fun backfillRecentMessages(snapshotPayload: String, sp: List<String>, maxThreads: Int = 20) {
+    suspend fun backfillRecentMessages(snapshotPayload: String, sp: List<String>, cursor: String = "", maxThreads: Int = 20) {
         val events = LightspeedDecoder.decodePublishResponse(snapshotPayload, sp)
         val incoming = MetaProtocol.parseAllEvents(events)
         // The reference for FetchMessages (direction=older) must be a SINGLE real message's
@@ -557,7 +557,7 @@ class MetaMqttClient(
             // Skip threads with no anchor message — FetchMessages needs a real (ts,id) pair.
             val refMsg = lastMsgByThread[t.threadId] ?: continue
             val payload = MetaProtocol.buildFetchMessagesPayload(
-                threadKey, refMsg.timestamp, refMsg.messageId, versionId,
+                threadKey, refMsg.timestamp, refMsg.messageId, versionId, cursor,
             )
             makeLSRequest(payload, MetaProtocol.LS_REQUEST_TYPE_TASK)?.let { emitForProcessing(it) }
         }

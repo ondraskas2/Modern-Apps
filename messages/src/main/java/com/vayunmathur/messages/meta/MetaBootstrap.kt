@@ -49,6 +49,10 @@ data class MetaConfig(
     // JSON string; [initialSnapshotSp] is the dependency name list (used as the /ls_resp "sp").
     val initialSnapshotPayload: String? = null,
     val initialSnapshotSp: List<String> = emptyList(),
+    // Mailbox (sync-group 1 / database 1) cursor from the page's
+    // LSExecuteFirstBlockForSyncTransaction. Required for FetchMessages history:
+    // an empty cursor makes the server return zero older messages.
+    val mailboxCursor: String = "",
     val loaded: Boolean = false,
 ) {
     fun defaultAppId(platform: MetaAuthData.Platform): Long = when {
@@ -146,6 +150,7 @@ object MetaBootstrap {
 
             val sync = parseSyncParams(html)
             val snapshotPayload = parseInitialSnapshot(html)
+            val mailboxCursor = parseInitialCursor(html)
 
             val config = MetaConfig(
                 versionId = versionId,
@@ -163,6 +168,7 @@ object MetaBootstrap {
                 // Resolve the snapshot's procedures via the full SP_TABLE (the page block's own
                 // dependency list is unreliable / may belong to the wrong block).
                 initialSnapshotSp = if (snapshotPayload != null) LightspeedDecoder.allDependencyNames() else emptyList(),
+                mailboxCursor = mailboxCursor,
                 loaded = versionId != 0L,
             )
             Log.i(
@@ -170,7 +176,7 @@ object MetaBootstrap {
                 "Bootstrap for ${authData.platform}: versionId=$versionId appId=$appId " +
                     "broker=$broker ptks=$parentThreadKeys lsd=${lsd.isNotEmpty()} " +
                     "clientId=${clientId.isNotEmpty()} snapshot=${snapshotPayload != null}(len=${snapshotPayload?.length ?: 0}) " +
-                    "loaded=${config.loaded}",
+                    "cursor=${mailboxCursor.isNotEmpty()} loaded=${config.loaded}",
             )
             config
         } catch (e: Exception) {
@@ -265,6 +271,36 @@ object MetaBootstrap {
             }
         }
         return null
+    }
+
+    /**
+     * Extract the mailbox (database 1) cursor from the page's LSExecuteFirstBlockForSyncTransaction
+     * payload. FetchMessages history requires this cursor (sync_group=1) — the Go bridge passes
+     * GetCursor(1); an empty cursor makes the server return zero older messages. We pick the
+     * sync-transaction block for database 1 and use its nextCursor (falling back to currentCursor).
+     */
+    private fun parseInitialCursor(html: String): String {
+        for (m in snapshotPayloadPattern.findAll(html)) {
+            val escaped = m.groupValues[1]
+            if (!escaped.contains("executeFirstBlockForSyncTransaction")) continue
+            val inner = try {
+                Json.parseToJsonElement("\"" + escaped + "\"").jsonPrimitive.content
+            } catch (e: Exception) {
+                continue
+            }
+            if (!inner.contains("executeFirstBlockForSyncTransaction")) continue
+            val cursor = try {
+                val events = LightspeedDecoder.decodePublishResponse(inner, LightspeedDecoder.allDependencyNames())
+                val blocks = MetaProtocol.parseSyncTransactions(events)
+                val block = blocks.firstOrNull { it.databaseId == 1L } ?: blocks.firstOrNull()
+                (block?.nextCursor?.takeIf { it.isNotEmpty() && it != "dummy_cursor" }
+                    ?: block?.currentCursor.orEmpty())
+            } catch (e: Exception) {
+                ""
+            }
+            if (cursor.isNotEmpty()) return cursor
+        }
+        return ""
     }
 
     private fun parseSyncParams(html: String): Triple<String, String, String> {
