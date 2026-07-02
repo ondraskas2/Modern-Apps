@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
+    <permission
+        android:name="com.vayunmathur.clock.permissions.ACCESS_CLOCK"
+        android:protectionLevel="signature" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -68,6 +72,17 @@
             android:directBootAware="true"
             android:lockTaskMode="if_whitelisted"
             android:launchMode="singleInstance" />
+
+        <activity
+            android:name=".intents.SetAlarmIntent"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:permission="com.vayunmathur.clock.permissions.ACCESS_CLOCK" />
+        <activity
+            android:name=".intents.SetTimerIntent"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:permission="com.vayunmathur.clock.permissions.ACCESS_CLOCK" />
         <service
             android:name=".util.AlarmSoundService"
             android:foregroundServiceType="mediaPlayback"

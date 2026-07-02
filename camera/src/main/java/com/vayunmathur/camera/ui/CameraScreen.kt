@@ -183,7 +183,11 @@ private fun Modifier.selectedPill(
 ): Modifier = if (selected) background(color, shape) else this
 
 @Composable
-fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
+fun CameraScreen(
+    backStack: NavBackStack<Route>,
+    viewModel: CameraViewModel,
+    onCaptureResult: ((android.graphics.Bitmap?) -> Unit)? = null
+) {
     val context = LocalContext.current
     val view = LocalView.current
 
@@ -570,7 +574,16 @@ fun CameraScreen(backStack: NavBackStack<Route>, viewModel: CameraViewModel) {
                                 else viewModel.startPanorama()
                             }
                             isSloMo && highSpeedActive -> viewModel.toggleHighSpeedRecording()
-                            isPhotoType -> viewModel.takePhoto()
+                            isPhotoType -> {
+                                if (onCaptureResult != null) {
+                                    viewModel.capturePhotoForResult(
+                                        onSaved = { thumbnail -> onCaptureResult(thumbnail) },
+                                        onError = { /* stay in camera so the user can retry */ }
+                                    )
+                                } else {
+                                    viewModel.takePhoto()
+                                }
+                            }
                             else -> viewModel.toggleRecording()
                         }
                     },

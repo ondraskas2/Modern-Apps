@@ -10,6 +10,8 @@ import com.google.ai.edge.litertlm.Tool
 import com.google.ai.edge.litertlm.ToolParam
 import com.google.ai.edge.litertlm.ToolSet
 import com.vayunmathur.library.intents.calendar.EventData
+import com.vayunmathur.library.intents.clock.SetAlarmData
+import com.vayunmathur.library.intents.clock.SetTimerData
 import com.vayunmathur.library.intents.contacts.ContactData
 import com.vayunmathur.library.intents.findfamily.FamilyMemberData
 import com.vayunmathur.library.intents.music.MusicSearchResult
@@ -146,6 +148,7 @@ class AssistantToolSet(
             "com.vayunmathur.music" to "Music",
             "com.vayunmathur.email" to "Email",
             "com.vayunmathur.weather" to "Weather",
+            "com.vayunmathur.clock" to "Clock",
         )
 
         fun getMissingAppMessage(packageName: String): String {
@@ -188,13 +191,18 @@ class AssistantToolSet(
         "Success: Created contact '$name'"
     }
 
-    @Tool(description = "Get a list of calendar events")
+    @Tool(description = "Get a list of calendar events. Each event's start and end times are epoch milliseconds.")
     fun get_calendar_events(): String = runTool {
         launchIntent<Unit, List<EventData>>(context, "com.vayunmathur.calendar", "com.vayunmathur.calendar.intents.GetIntent", Unit).toString()
     }
 
-    @Tool(description = "Create a new calendar event")
-    fun create_calendar_event(title: String, start: Double, end: Double, location: String = ""): String = runTool {
+    @Tool(description = "Create a new calendar event. Start and end times must be epoch milliseconds; get the current time from get_local_current_date_time and add offsets to compute them.")
+    fun create_calendar_event(
+        title: String,
+        @ToolParam(description = "start time as epoch milliseconds") start: Double,
+        @ToolParam(description = "end time as epoch milliseconds") end: Double,
+        location: String = ""
+    ): String = runTool {
         launchIntentU(context, "com.vayunmathur.calendar", "com.vayunmathur.calendar.intents.InsertIntent", EventData(title, start.toLong(), end.toLong(), location))
         "Success: Created event '$title'"
     }
@@ -202,6 +210,14 @@ class AssistantToolSet(
     @Tool(description = "Get a list of family members and their current locations")
     fun get_family_locations(): String = runTool {
         launchIntent<Unit, List<FamilyMemberData>>(context, "com.vayunmathur.findfamily", "com.vayunmathur.findfamily.intents.GetIntent", Unit).toString()
+    }
+
+    @Tool(description = "Create a temporary FindFamily link that shares the user's live location with someone until it expires. Returns a shareable URL. Only use on explicit user request.")
+    fun create_location_share_link(
+        @ToolParam(description = "name or label for who the link is for") name: String,
+        @ToolParam(description = "how long the link stays active, in milliseconds from now") durationMillis: Double
+    ): String = runTool {
+        launchIntent<CreateLinkRequest, String>(context, "com.vayunmathur.findfamily", "com.vayunmathur.findfamily.intents.CreateLinkIntent", CreateLinkRequest(name, durationMillis.toLong()))
     }
 
     @Tool(description = "Search for music (songs, albums, artists, or playlists)")
@@ -225,10 +241,11 @@ class AssistantToolSet(
         launchIntent<Unit, List<EmailData>>(context, "com.vayunmathur.email", "com.vayunmathur.email.intents.GetRecentIntent", Unit).toString()
     }
 
-    @Tool(description = "Get the current date and time in the local timezone")
+    @Tool(description = "Get the current date and time in the local timezone, including the current epoch time in milliseconds. Use the epochMillis value when creating calendar events or computing alarm/timer times.")
     fun get_local_current_date_time(): String {
-        val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-        return "${TimeZone.currentSystemDefault().id}: $now"
+        val now = Clock.System.now()
+        val local = now.toLocalDateTime(TimeZone.currentSystemDefault())
+        return "${TimeZone.currentSystemDefault().id}: $local (epochMillis=${now.toEpochMilliseconds()})"
     }
 
     @SuppressLint("QueryPermissionsNeeded")
@@ -265,6 +282,25 @@ class AssistantToolSet(
         })
         "Opened dialer."
     } catch (e: Exception) { "Error: ${e.message}" }
+
+    @Tool(description = "Set an alarm in the Clock app at a specific hour and minute (24-hour time). Creates the alarm immediately, no confirmation needed.")
+    fun set_alarm(
+        @ToolParam(description = "hour in 24-hour format, 0-23") hour: Double,
+        @ToolParam(description = "minute, 0-59") minute: Double,
+        @ToolParam(description = "optional label for the alarm") label: String = ""
+    ): String = runTool {
+        launchIntentU(context, "com.vayunmathur.clock", "com.vayunmathur.clock.intents.SetAlarmIntent", SetAlarmData(hour.toInt(), minute.toInt(), label))
+        "Success: Alarm set for %02d:%02d".format(hour.toInt(), minute.toInt())
+    }
+
+    @Tool(description = "Start a countdown timer in the Clock app for a number of seconds. Starts immediately, no confirmation needed.")
+    fun set_timer(
+        @ToolParam(description = "timer length in seconds") seconds: Double,
+        @ToolParam(description = "optional label for the timer") label: String = ""
+    ): String = runTool {
+        launchIntentU(context, "com.vayunmathur.clock", "com.vayunmathur.clock.intents.SetTimerIntent", SetTimerData(seconds.toInt(), label))
+        "Success: Timer started for ${seconds.toInt()}s"
+    }
 
     @Tool("Set title of current conversation. Mandatory for first response")
     fun set_conversation_title(newTitle: String): String {
@@ -312,6 +348,9 @@ data class WeatherLatLonRequest(val latitude: Double, val longitude: Double)
 
 @kotlinx.serialization.Serializable
 data class WeatherNameRequest(val name: String)
+
+@kotlinx.serialization.Serializable
+data class CreateLinkRequest(val name: String, val expiryMillis: Long)
 
 suspend inline fun <reified Input : Any, reified Output : Any> launchIntent(
     context: Context, packageName: String, className: String, input: Input

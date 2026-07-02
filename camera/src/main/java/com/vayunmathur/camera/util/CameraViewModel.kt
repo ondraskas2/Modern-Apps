@@ -3,6 +3,7 @@ package com.vayunmathur.camera.util
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.location.Location
 import android.location.LocationManager
 import android.media.MediaFormat
@@ -16,6 +17,7 @@ import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceRequest
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -167,6 +169,18 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastLocation: Location? = null
     private var currentRecording: Recording? = null
     private var sloMoFps: Int = 30
+
+    // IMAGE_CAPTURE (system "take a photo") intent state. When capturing for a caller, we either
+    // write the full-res JPEG to their EXTRA_OUTPUT Uri, or hand back a downscaled thumbnail.
+    var captureForResult: Boolean = false
+        private set
+    private var resultOutputUri: Uri? = null
+
+    /** Enters capture-for-result mode; [outputUri] is the caller's EXTRA_OUTPUT (may be null). */
+    fun enableCaptureForResult(outputUri: Uri?) {
+        captureForResult = true
+        resultOutputUri = outputUri
+    }
 
     val panoramaEngine = PanoramaEngine(app)
 
@@ -740,6 +754,77 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         } else {
             doCapture()
         }
+    }
+
+    /**
+     * Capture path for the system IMAGE_CAPTURE intent. If the caller supplied an EXTRA_OUTPUT
+     * Uri, the full-resolution JPEG is written there and [onSaved] is invoked with a null
+     * thumbnail (the documented "no data extra needed" contract). Otherwise a downscaled
+     * thumbnail Bitmap is returned for the result "data" extra.
+     */
+    fun capturePhotoForResult(onSaved: (Bitmap?) -> Unit, onError: () -> Unit) {
+        val capture = imageCapture ?: return onError()
+        _isCapturing.value = true
+        val executor = ContextCompat.getMainExecutor(app)
+        val outputUri = resultOutputUri
+
+        if (outputUri != null) {
+            val outputStream = try {
+                app.contentResolver.openOutputStream(outputUri)
+            } catch (e: Exception) {
+                Log.e("CameraViewModel", "Could not open EXTRA_OUTPUT for writing", e)
+                null
+            }
+            if (outputStream == null) {
+                _isCapturing.value = false
+                return onError()
+            }
+            val outputOptions = ImageCapture.OutputFileOptions.Builder(outputStream).build()
+            capture.takePicture(outputOptions, executor, object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    _isCapturing.value = false
+                    onSaved(null)
+                }
+                override fun onError(exception: ImageCaptureException) {
+                    _isCapturing.value = false
+                    Log.e("CameraViewModel", "IMAGE_CAPTURE to EXTRA_OUTPUT failed", exception)
+                    onError()
+                }
+            })
+        } else {
+            capture.takePicture(executor, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    _isCapturing.value = false
+                    val thumbnail = try {
+                        downscaledThumbnail(image)
+                    } finally {
+                        image.close()
+                    }
+                    onSaved(thumbnail)
+                }
+                override fun onError(exception: ImageCaptureException) {
+                    _isCapturing.value = false
+                    Log.e("CameraViewModel", "IMAGE_CAPTURE thumbnail capture failed", exception)
+                    onError()
+                }
+            })
+        }
+    }
+
+    /** Rotates the captured frame upright and scales it down for the result "data" thumbnail. */
+    private fun downscaledThumbnail(image: ImageProxy): Bitmap {
+        val raw = image.toBitmap()
+        val matrix = Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
+        val upright = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        val maxSide = 512
+        val scale = maxSide.toFloat() / maxOf(upright.width, upright.height)
+        if (scale >= 1f) return upright
+        return Bitmap.createScaledBitmap(
+            upright,
+            (upright.width * scale).roundToInt(),
+            (upright.height * scale).roundToInt(),
+            true
+        )
     }
 
     private fun startLongExposureCountdown(nanos: Long) {

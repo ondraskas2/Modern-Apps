@@ -124,6 +124,9 @@ androidx-pdf-viewer-fragment = { module = "androidx.pdf:pdf-viewer-fragment", ve
 # Maps
 maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibre" }
 
+# On-device ML segmentation (MediaPipe Tasks — standalone, no Play Services)
+mediapipe-tasks-vision = { module = "com.google.mediapipe:tasks-vision", version = "0.10.35" }
+
 # App Widgets (Glance)
 androidx-glance = { module = "androidx.glance:glance", version.ref = "glance" }
 androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
