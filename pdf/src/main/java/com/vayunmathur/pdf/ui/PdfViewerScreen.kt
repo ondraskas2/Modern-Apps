@@ -65,13 +65,14 @@ import androidx.pdf.PdfRect
 import androidx.pdf.compose.FastScrollConfiguration
 import androidx.pdf.compose.PdfViewer
 import androidx.pdf.compose.PdfViewerState
-import androidx.pdf.view.Highlight
+import androidx.pdf.Highlight
 import com.vayunmathur.library.ui.IconMenu
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.ui.IconShare
 import com.vayunmathur.pdf.R
+import com.vayunmathur.pdf.ui.components.AnnotationOverlay
 import com.vayunmathur.pdf.util.PdfStateStore
 import com.vayunmathur.pdf.util.PdfViewModel
 import kotlinx.coroutines.delay
@@ -382,6 +383,11 @@ fun PdfViewerScreen(
                     }
                     true
                 }
+                AnnotationOverlay(
+                    pdfDocument = pdfDocument,
+                    pdfState = pdfState,
+                    modifier = Modifier.matchParentSize(),
+                )
             }
         }
     }
