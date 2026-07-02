@@ -229,6 +229,7 @@ class EmailManager {
         val serverId = msg.getHeader("Message-ID")?.firstOrNull()
         val refs = msg.getHeader("References")?.firstOrNull()
         val listUnsub = msg.getHeader("List-Unsubscribe")?.firstOrNull()
+        val listUnsubPost = msg.getHeader("List-Unsubscribe-Post")?.firstOrNull()
         val isRead = msg.isSet(javax.mail.Flags.Flag.SEEN)
         val whenMillis = msg.sentDate?.time ?: msg.receivedDate?.time ?: 0L
         return EmailMessage(
@@ -249,6 +250,7 @@ class EmailManager {
             references = refs,
             hasAttachments = hasAttachments || (fetchBodies && hasAttachmentsInfo(msg)),
             listUnsubscribe = listUnsub,
+            listUnsubscribePost = listUnsubPost,
         )
     }
 

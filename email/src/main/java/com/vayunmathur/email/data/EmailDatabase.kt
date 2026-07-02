@@ -25,7 +25,7 @@ import com.vayunmathur.email.Attachment
         BlockedSender::class,
         DeletedUid::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false,
 )
 abstract class EmailDatabase : RoomDatabase() {
@@ -87,6 +87,10 @@ abstract class EmailDatabase : RoomDatabase() {
             )
         }
 
+        private val MIGRATION_16_17 = Migration(16, 17) {
+            it.execSQL("ALTER TABLE EmailMessage ADD COLUMN listUnsubscribePost TEXT")
+        }
+
         private val MIGRATION_5_6 = Migration(5, 6) {
             it.execSQL("ALTER TABLE EmailMessage ADD COLUMN dateMillis INTEGER NOT NULL DEFAULT 0")
         }
@@ -141,7 +145,7 @@ abstract class EmailDatabase : RoomDatabase() {
                     EmailDatabase::class.java,
                     "email-db"
                 )
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
                     .build().also { instance = it }
             }
         }

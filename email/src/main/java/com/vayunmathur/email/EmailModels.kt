@@ -43,6 +43,7 @@ data class EmailMessage(
     val hasAttachments: Boolean = false,
     val snoozedUntil: Long = 0, // 0 = not snoozed; else epoch millis to resurface
     val listUnsubscribe: String? = null, // raw List-Unsubscribe header, if present
+    val listUnsubscribePost: String? = null, // raw List-Unsubscribe-Post header (RFC 8058), if present
 )
 
 @Entity
@@ -177,6 +178,86 @@ fun EmailMessage.plainTextBody(): String? =
 fun senderDisplayName(from: String): String =
     runCatching { InternetAddress.parse(from).firstOrNull()?.let { it.personal ?: it.address } }
         .getOrNull() ?: from.substringBefore("<").trim()
+
+/**
+ * A detected way to unsubscribe from a message. Produced by [detectUnsubscribe]
+ * and acted on by the message-view UI.
+ */
+sealed interface UnsubscribeMethod {
+    /** RFC 8058 one-click: HTTPS POST to [url] with body `List-Unsubscribe=One-Click`. */
+    data class OneClickPost(val url: String) : UnsubscribeMethod
+    /** Open an unsubscribe web page ([url]) in the browser. */
+    data class OpenWeb(val url: String) : UnsubscribeMethod
+    /** Compose an unsubscribe email to [address] using the in-app composer. */
+    data class SendMail(val address: String) : UnsubscribeMethod
+}
+
+/** Words that signal an unsubscribe affordance; kept small to avoid false positives. */
+private val UNSUBSCRIBE_KEYWORDS = listOf("unsubscribe", "opt out", "opt-out", "optout")
+
+/**
+ * Work out how (if at all) the user can unsubscribe from this message.
+ *
+ * Order of preference, per the email standards:
+ *  1. RFC 8058 one-click POST — when `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+ *     is present together with an https URL in `List-Unsubscribe`.
+ *  2. An https/http URL from the `List-Unsubscribe` header (opened in the browser).
+ *  3. A `mailto:` target from the `List-Unsubscribe` header (composed in-app).
+ *  4. Fallback: a conservative scan of the body for an "unsubscribe" link.
+ */
+fun EmailMessage.detectUnsubscribe(): UnsubscribeMethod? {
+    listUnsubscribe?.let { header ->
+        val targets = parseListUnsubscribe(header)
+        val webUrl = targets.firstOrNull { it.startsWith("http", ignoreCase = true) }
+        val httpsUrl = targets.firstOrNull { it.startsWith("https://", ignoreCase = true) }
+        val mailto = targets.firstOrNull { it.startsWith("mailto:", ignoreCase = true) }
+
+        val isOneClick = listUnsubscribePost?.contains("one-click", ignoreCase = true) == true
+        if (isOneClick && httpsUrl != null) return UnsubscribeMethod.OneClickPost(httpsUrl)
+        if (webUrl != null) return UnsubscribeMethod.OpenWeb(webUrl)
+        if (mailto != null) {
+            val address = mailto.removePrefix("mailto:").removePrefix("MAILTO:").substringBefore("?").trim()
+            if (address.contains("@")) return UnsubscribeMethod.SendMail(address)
+        }
+    }
+    return findUnsubscribeLinkInBody()?.let { UnsubscribeMethod.OpenWeb(it) }
+}
+
+/** Extract the angle-bracketed targets from a List-Unsubscribe header (RFC 2369). */
+private fun parseListUnsubscribe(header: String): List<String> =
+    Regex("<([^>]+)>").findAll(header).map { it.groupValues[1].trim() }.toList()
+        .ifEmpty { header.split(",").map { it.trim() }.filter { it.isNotEmpty() } }
+
+/**
+ * Conservatively look for an unsubscribe link in the body. Only returns a link
+ * when the word "unsubscribe" (or an "opt out" variant) appears in the link's
+ * href or visible text, to avoid mistaking ordinary links for unsubscribe ones.
+ */
+private fun EmailMessage.findUnsubscribeLinkInBody(): String? {
+    val content = body ?: return null
+    if (isHtml) {
+        val anchor = Regex(
+            "<a\\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+        for (match in anchor.findAll(content)) {
+            val href = match.groupValues[1].trim()
+            if (!href.startsWith("http", ignoreCase = true)) continue
+            val haystack = (href + " " + match.groupValues[2]).lowercase()
+            if (UNSUBSCRIBE_KEYWORDS.any { haystack.contains(it) }) return href
+        }
+        return null
+    }
+    // Plain text: return an http(s) URL sitting on a line that mentions unsubscribe.
+    for (line in content.lineSequence()) {
+        val lower = line.lowercase()
+        if (UNSUBSCRIBE_KEYWORDS.none { lower.contains(it) }) continue
+        Regex("https?://\\S+", RegexOption.IGNORE_CASE).find(line)?.value
+            ?.trimEnd('.', ',', ')', '>', ']')
+            ?.let { return it }
+    }
+    return null
+}
 
 /// Pending outgoing message stored locally until it is successfully sent by the
 /// background sender. Attachments are copied to app-private storage at queue time

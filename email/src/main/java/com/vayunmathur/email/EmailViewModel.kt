@@ -16,8 +16,10 @@ import com.vayunmathur.email.data.OutboxManager
 import com.vayunmathur.email.data.OutboxSendWorker
 import com.vayunmathur.library.util.SecureResultReceiver
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -427,6 +429,37 @@ class EmailViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 android.util.Log.w("EmailViewModel", "fetchBodyIfNeeded for ${message.id} failed: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Perform an RFC 8058 one-click unsubscribe: an HTTPS POST to [url] with the
+     * body `List-Unsubscribe=One-Click`. Runs off the main thread and reports
+     * success (a 2xx response) via [onResult] on the main thread.
+     */
+    fun oneClickUnsubscribe(url: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val connection = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        doOutput = true
+                        connectTimeout = 15_000
+                        readTimeout = 15_000
+                        setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                    }
+                    try {
+                        connection.outputStream.use { it.write("List-Unsubscribe=One-Click".toByteArray()) }
+                        connection.responseCode in 200..299
+                    } finally {
+                        connection.disconnect()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("EmailViewModel", "one-click unsubscribe failed: ${e.message}")
+                    false
+                }
+            }
+            onResult(ok)
         }
     }
 

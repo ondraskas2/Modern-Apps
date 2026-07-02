@@ -19,6 +19,7 @@
     <string name="settings">Settings</string>
     <string name="drafts">Drafts</string>
     <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
     <string name="outbox_with_count">Outbox (%1$d)</string>
     <string name="send_now">Send now</string>
     

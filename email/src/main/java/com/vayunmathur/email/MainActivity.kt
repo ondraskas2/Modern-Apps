@@ -320,6 +320,9 @@ fun EmailApp(viewModel: EmailViewModel) {
                     },
                     onForward = { sub, body ->
                         backStack.add(Route.Composer(subject = "Fwd: $sub", body = "\n\n---------- Forwarded message ----------\n$body"))
+                    },
+                    onCompose = { to, sub ->
+                        backStack.add(Route.Composer(to = to, subject = sub))
                     }
                 )
             }
@@ -736,7 +739,8 @@ fun MessageThreadScreen(
     threadId: String,
     onBack: () -> Unit,
     onReply: (String, String, String?) -> Unit,
-    onForward: (String, String?) -> Unit
+    onForward: (String, String?) -> Unit,
+    onCompose: (String, String) -> Unit
 ) {
     val messages by viewModel.getThread(accountEmail, threadId).collectAsStateWithLifecycle(emptyList())
     var hasMarkedAsRead by remember(threadId) { mutableStateOf(false) }
@@ -766,7 +770,7 @@ fun MessageThreadScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(messages, key = { "${it.accountEmail}|${it.folderName}|${it.id}" }) { msg ->
-                MessageItem(msg, viewModel, onBack, onReply, onForward)
+                MessageItem(msg, viewModel, onBack, onReply, onForward, onCompose)
             }
         }
     }
@@ -779,7 +783,8 @@ fun MessageItem(
     viewModel: EmailViewModel,
     onBack: () -> Unit,
     onReply: (String, String, String?) -> Unit,
-    onForward: (String, String?) -> Unit
+    onForward: (String, String?) -> Unit,
+    onCompose: (String, String) -> Unit
 ) {
     var attachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var showDetails by remember { mutableStateOf(false) }
@@ -964,12 +969,21 @@ fun MessageItem(
             modifier = Modifier.padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            msg.listUnsubscribe?.let { header ->
-                val uri = remember(header) { parseUnsubscribeUri(header) }
-                if (uri != null) {
-                    TextButton(onClick = {
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-                    }) { Text("Unsubscribe") }
+            val unsubscribe = remember(msg.listUnsubscribe, msg.listUnsubscribePost, msg.body, msg.isHtml) {
+                msg.detectUnsubscribe()
+            }
+            if (unsubscribe != null) {
+                var showConfirm by remember(msg.id) { mutableStateOf(false) }
+                TextButton(onClick = { showConfirm = true }) { Text("Unsubscribe") }
+                if (showConfirm) {
+                    UnsubscribeDialog(
+                        method = unsubscribe,
+                        onDismiss = { showConfirm = false },
+                        onConfirm = {
+                            showConfirm = false
+                            performUnsubscribe(unsubscribe, context, viewModel, onCompose)
+                        },
+                    )
                 }
             }
             TextButton(onClick = {
@@ -1682,11 +1696,53 @@ private fun splitQuotedText(body: String): Pair<String, String> {
     return body to ""
 }
 
-/** Pick a usable URI from a List-Unsubscribe header (prefers https, else mailto). */
-private fun parseUnsubscribeUri(header: String): android.net.Uri? {
-    val urls = Regex("<([^>]+)>").findAll(header).map { it.groupValues[1].trim() }.toList()
-        .ifEmpty { header.split(",").map { it.trim() } }
-    val pick = urls.firstOrNull { it.startsWith("http", ignoreCase = true) }
-        ?: urls.firstOrNull { it.startsWith("mailto:", ignoreCase = true) }
-    return pick?.let { runCatching { it.toUri() }.getOrNull() }
+/** Confirmation dialog shown before acting on a detected unsubscribe option. */
+@Composable
+private fun UnsubscribeDialog(
+    method: UnsubscribeMethod,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val (message, confirmLabel) = when (method) {
+        is UnsubscribeMethod.OneClickPost ->
+            "Send an unsubscribe request to the sender?" to "Unsubscribe"
+        is UnsubscribeMethod.OpenWeb ->
+            "Open the unsubscribe page in your browser?" to "Open"
+        is UnsubscribeMethod.SendMail ->
+            "Compose an unsubscribe email to ${method.address}?" to "Compose"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Unsubscribe") },
+        text = { Text(message) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+/** Act on a confirmed unsubscribe option. */
+private fun performUnsubscribe(
+    method: UnsubscribeMethod,
+    context: android.content.Context,
+    viewModel: EmailViewModel,
+    onCompose: (String, String) -> Unit,
+) {
+    when (method) {
+        is UnsubscribeMethod.OneClickPost -> {
+            android.widget.Toast.makeText(context, "Unsubscribing…", android.widget.Toast.LENGTH_SHORT).show()
+            viewModel.oneClickUnsubscribe(method.url) { ok ->
+                val text = if (ok) "Unsubscribed" else "Unsubscribe failed"
+                android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        is UnsubscribeMethod.OpenWeb -> {
+            val opened = runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, method.url.toUri()))
+            }.isSuccess
+            if (!opened) {
+                android.widget.Toast.makeText(context, "Couldn't open unsubscribe page", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        is UnsubscribeMethod.SendMail -> onCompose(method.address, "Unsubscribe")
+    }
 }
