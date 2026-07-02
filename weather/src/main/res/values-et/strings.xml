@@ -6,4 +6,10 @@
     <string name="city_name_hint">Linna või koha nimi</string>
     <string name="weather_title">Ilmaennustus</string>
     <string name="add_location">Lisa asukoht</string>
+    <string name="open_map">Ava kaart</string>
+    <string name="weather_map_title">Ilmaennustus kaardil</string>
+    <string name="map_measure">Mõõt</string>
+    <string name="map_time">Aeg</string>
+    <string name="map_back">Tagasi</string>
+    <string name="map_attribution">© OpenStreetMap · © CARTO</string>
 </resources>
