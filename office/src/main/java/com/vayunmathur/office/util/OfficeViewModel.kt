@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Local metadata for a document in the online folder (title/key stay client-side; never sent in the clear). */
@@ -185,13 +187,16 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Load / Clear ---
 
-    fun loadDocument(uri: Uri, fileName: String) {
+    fun loadDocument(uri: Uri, fileName: String, onlineDocId: String? = null, onlineDocKey: ByteArray? = null) {
         _state.value = ViewState.Loading
         _isEditMode.value = true
         _hasUnsavedChanges.value = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         documentUri = uri
+        // Track (or clear) the online identity of the document now open.
+        currentDocId = onlineDocId
+        currentDocKey = onlineDocKey
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val doc = DocumentImporter.open(getApplication(), uri, fileName)
@@ -210,6 +215,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         documentUri = null
+        currentDocId = null
+        currentDocKey = null
         autoSaveJob?.cancel()
     }
 
@@ -218,6 +225,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     // --- Create new documents ---
 
     fun createNewTextDocument() {
+        currentDocId = null; currentDocKey = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.TextDocument(
@@ -231,6 +239,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewSpreadsheet() {
+        currentDocId = null; currentDocKey = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val rows = (0 until 10).map { OdfRow(List(5) { OdfCell(text = "") }) }
@@ -245,6 +254,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewPresentation() {
+        currentDocId = null; currentDocKey = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.Presentation(
@@ -1836,6 +1846,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private var currentDocId: String? = null
     private var currentDocKey: ByteArray? = null
     private val syncJson = Json { ignoreUnknownKeys = true }
+    private val indexMutex = Mutex()
 
     /** This device's sync id. Empty until [initSync] has run. */
     val syncDeviceId: String get() = OfficeSync.deviceId
@@ -1870,13 +1881,15 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 val cursor = ds.getLong("officeInboxCursor")?.toInt() ?: 0
                 val res = OfficeSync.pullInvites(cursor)
                 if (res.invites.isNotEmpty()) {
-                    val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
-                    for (inv in res.invites) {
-                        if (!index.containsKey(inv.docId)) {
-                            index[inv.docId] = OfficeDocMeta(inv.docId, inv.title, inv.key, owner = false)
+                    indexMutex.withLock {
+                        val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
+                        for (inv in res.invites) {
+                            if (!index.containsKey(inv.docId)) {
+                                index[inv.docId] = OfficeDocMeta(inv.docId, inv.title, inv.key, owner = false)
+                            }
                         }
+                        saveIndex(ds, index.values.toList())
                     }
-                    saveIndex(ds, index.values.toList())
                 }
                 ds.setLong("officeInboxCursor", res.seq.toLong())
             }
@@ -1898,10 +1911,12 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 currentDocId = docId
                 currentDocKey = key
                 OfficeSync.pushSnapshot(docId, key, exportFlat())
-                val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
-                if (!index.containsKey(docId)) {
-                    index[docId] = OfficeDocMeta(docId, title, Base64.encode(key), owner = true)
-                    saveIndex(ds, index.values.toList())
+                indexMutex.withLock {
+                    val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
+                    if (!index.containsKey(docId)) {
+                        index[docId] = OfficeDocMeta(docId, title, Base64.encode(key), owner = true)
+                        saveIndex(ds, index.values.toList())
+                    }
                 }
                 OfficeSync.sendInvite(recipientId, docId, key, title)
             }.getOrDefault(false)
@@ -1929,12 +1944,11 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 val key = Base64.decode(meta.keyB64)
                 val flat = OfficeSync.latestSnapshot(meta.docId, key) ?: return@runCatching
                 val ctx: Context = getApplication()
+                val safeTitle = meta.title.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "document" }
                 val file = java.io.File(ctx.cacheDir, "online_${meta.docId}.fodt")
                 file.writeText(flat)
-                currentDocId = meta.docId
-                currentDocKey = key
                 withContext(Dispatchers.Main) {
-                    loadDocument(Uri.fromFile(file), "${meta.title}.fodt")
+                    loadDocument(Uri.fromFile(file), "$safeTitle.fodt", meta.docId, key)
                 }
             }
         }
@@ -2020,6 +2034,13 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 OdfWriter.save(getApplication(), source, doc, target)
                 _hasUnsavedChanges.value = false
                 documentUri = target
+                // If this document lives online, push the new snapshot so collaborators get it.
+                if (currentDocId != null && currentDocKey != null) {
+                    runCatching {
+                        OfficeSync.init(getApplication())
+                        OfficeSync.pushSnapshot(currentDocId!!, currentDocKey!!, exportFlat())
+                    }
+                }
                 launch(Dispatchers.Main) { Toast.makeText(getApplication(), "Saved", Toast.LENGTH_SHORT).show() }
             } catch (e: Exception) {
                 launch(Dispatchers.Main) { Toast.makeText(getApplication(), "Save failed: ${e.message}", Toast.LENGTH_SHORT).show() }

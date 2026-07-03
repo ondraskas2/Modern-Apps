@@ -7,6 +7,8 @@ import com.vayunmathur.e2ee.E2eeKeyStore
 import com.vayunmathur.library.network.NetworkClient
 import com.vayunmathur.library.util.DataStoreUtils
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -33,6 +35,7 @@ object OfficeSync {
     var deviceId: String = ""
         private set
     private var initialized = false
+    private val initMutex = Mutex()
 
     private class DataStoreKeyStore(private val ds: DataStoreUtils) : E2eeKeyStore {
         override fun getBytes(name: String): ByteArray? = ds.getByteArray(name)
@@ -43,16 +46,19 @@ object OfficeSync {
     /** Loads/creates this device's identity + id and registers the public key in the directory. */
     suspend fun init(context: Context) {
         if (initialized) return
-        val ds = DataStoreUtils.getInstance(context)
-        identity = E2eeIdentity.loadOrCreate(DataStoreKeyStore(ds), "officePublicKey", "officePrivateKey")
-        var id = ds.getString("officeDeviceId")
-        if (id == null) {
-            id = UUID.randomUUID().toString()
-            ds.setString("officeDeviceId", id, true)
+        initMutex.withLock {
+            if (initialized) return
+            val ds = DataStoreUtils.getInstance(context)
+            identity = E2eeIdentity.loadOrCreate(DataStoreKeyStore(ds), "officePublicKey", "officePrivateKey")
+            var id = ds.getString("officeDeviceId")
+            if (id == null) {
+                id = UUID.randomUUID().toString()
+                ds.setString("officeDeviceId", id, true)
+            }
+            deviceId = ds.getString("officeDeviceId") ?: id
+            register()
+            initialized = true
         }
-        deviceId = ds.getString("officeDeviceId") ?: id
-        initialized = true
-        register()
     }
 
     private suspend fun register(): Boolean =
@@ -96,7 +102,7 @@ object OfficeSync {
     suspend fun sendInvite(recipientId: String, docId: String, key: ByteArray, title: String): Boolean {
         val peerPem = getKey(recipientId) ?: return false
         val invite = json.encodeToString(Invite(docId, Base64.encode(key), title))
-        val blob = Base64.encode(E2ee.encryptTo(peerPem, invite.encodeToByteArray()))
+        val blob = Base64.encode(E2ee.sealTo(peerPem, invite.encodeToByteArray()))
         return append("inbox:$recipientId", listOf(blob)) != null
     }
 
@@ -104,7 +110,7 @@ object OfficeSync {
     suspend fun pullInvites(since: Int): InvitesResult {
         val p = pull("inbox:$deviceId", since) ?: return InvitesResult(emptyList(), since)
         val invites = p.actions.mapNotNull { b ->
-            val plain = runCatching { identity.decrypt(Base64.decode(b)) }.getOrNull() ?: return@mapNotNull null
+            val plain = runCatching { identity.unseal(Base64.decode(b)) }.getOrNull() ?: return@mapNotNull null
             runCatching { json.decodeFromString<Invite>(plain.decodeToString()) }.getOrNull()
         }
         return InvitesResult(invites, p.seq)

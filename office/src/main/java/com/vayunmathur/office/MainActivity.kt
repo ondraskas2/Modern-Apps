@@ -62,6 +62,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -225,8 +226,15 @@ fun HomeScreen(viewModel: OfficeViewModel, onOpenDocument: () -> Unit) {
 
 /** Dialog to copy the current document into the online folder and share it with a device id. */
 @Composable
-fun ShareOnlineDialog(deviceId: String, onShare: (String) -> Unit, onDismiss: () -> Unit) {
+fun ShareOnlineDialog(
+    deviceId: String,
+    onShare: (String) -> Unit,
+    onComputeCode: (String, (String?) -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
     var recipient by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf<String?>(null) }
+    var computing by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -236,7 +244,7 @@ fun ShareOnlineDialog(deviceId: String, onShare: (String) -> Unit, onDismiss: ()
                 Text("Copies this document into your online folder (end-to-end encrypted) and shares it with the person whose device id you enter.")
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
-                    value = recipient, onValueChange = { recipient = it },
+                    value = recipient, onValueChange = { recipient = it; code = null },
                     label = { Text("Recipient device id") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -245,6 +253,19 @@ fun ShareOnlineDialog(deviceId: String, onShare: (String) -> Unit, onDismiss: ()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(deviceId.ifEmpty { "…" }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                     TextButton(onClick = { if (deviceId.isNotEmpty()) clipboard.setText(AnnotatedString(deviceId)) }) { Text("Copy") }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    enabled = recipient.isNotBlank() && !computing,
+                    onClick = {
+                        computing = true; code = null
+                        onComputeCode(recipient.trim()) { c -> code = c; computing = false }
+                    }
+                ) { Text(if (computing) "Computing…" else "Show security code") }
+                code?.let {
+                    Text("Compare with the recipient out-of-band — it must match on both devices:",
+                        style = MaterialTheme.typography.bodySmall)
+                    Text(it, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
                 }
             }
         },
@@ -779,6 +800,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         ShareOnlineDialog(
             deviceId = viewModel.syncDeviceId,
             onShare = { recipientId -> viewModel.shareCurrentDocument(recipientId); showShareDialog = false },
+            onComputeCode = { id, cb -> viewModel.securityCodeWith(id, cb) },
             onDismiss = { showShareDialog = false }
         )
     }
