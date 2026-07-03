@@ -197,6 +197,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         // Track (or clear) the online identity of the document now open.
         currentDocId = onlineDocId
         currentDocKey = onlineDocKey
+        currentCrdt = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val doc = DocumentImporter.open(getApplication(), uri, fileName)
@@ -217,6 +218,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         documentUri = null
         currentDocId = null
         currentDocKey = null
+        currentCrdt = null
         autoSaveJob?.cancel()
     }
 
@@ -225,7 +227,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     // --- Create new documents ---
 
     fun createNewTextDocument() {
-        currentDocId = null; currentDocKey = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.TextDocument(
@@ -239,7 +241,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewSpreadsheet() {
-        currentDocId = null; currentDocKey = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val rows = (0 until 10).map { OdfRow(List(5) { OdfCell(text = "") }) }
@@ -254,7 +256,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewPresentation() {
-        currentDocId = null; currentDocKey = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.Presentation(
@@ -1845,8 +1847,10 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     /** The online doc id/key of the currently open document, if it lives online. */
     private var currentDocId: String? = null
     private var currentDocKey: ByteArray? = null
+    private var currentCrdt: DocumentCrdt? = null
     private val syncJson = Json { ignoreUnknownKeys = true }
     private val indexMutex = Mutex()
+    private val syncMutex = Mutex()
 
     /** This device's sync id. Empty until [initSync] has run. */
     val syncDeviceId: String get() = OfficeSync.deviceId
@@ -1896,9 +1900,55 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // --- CRDT persistence & two-way sync ---
+
+    private suspend fun loadCrdt(ds: DataStoreUtils, docId: String): DocumentCrdt? =
+        ds.getString("crdt:$docId")
+            ?.let { runCatching { DocumentCrdt.fromState(syncJson.decodeFromString<DocumentCrdt.State>(it)) }.getOrNull() }
+
+    private suspend fun saveCrdt(ds: DataStoreUtils, docId: String, crdt: DocumentCrdt) {
+        ds.setString("crdt:$docId", syncJson.encodeToString(crdt.toState()))
+    }
+
+    /** Parses flat-ODF text back into a document via a temp file (tolerant; null on failure). */
+    private fun parseFlat(flat: String): OdfDocument? {
+        val ctx: Context = getApplication()
+        val f = java.io.File(ctx.cacheDir, "crdt_merge.fodt")
+        f.writeText(flat)
+        return runCatching { DocumentImporter.open(ctx, Uri.fromFile(f), "merge.fodt") }.getOrNull()
+    }
+
+    /**
+     * Two-way CRDT sync for the open online document: diff local edits into ops and push them, then
+     * pull + merge remote ops. If the merge changed the document, re-render it into the editor.
+     */
+    private suspend fun syncDoc(docId: String, key: ByteArray) = syncMutex.withLock {
+        val ds = DataStoreUtils.getInstance(getApplication())
+        val crdt = currentCrdt ?: (loadCrdt(ds, docId) ?: DocumentCrdt(OfficeSync.deviceId)).also { currentCrdt = it }
+        val cursor = ds.getLong("crdtCursor:$docId")?.toInt() ?: 0
+        val localLines = OfficeCrdtCodec.toLines(exportFlat())
+        val localOps = crdt.update(localLines)
+        if (localOps.isNotEmpty()) {
+            OfficeSync.appendDocActions(docId, key, listOf(syncJson.encodeToString(localOps)))
+        }
+        // Pull from the OLD cursor so remote ops (and our just-pushed, idempotent ops) are merged.
+        val pulled = OfficeSync.pullDocActions(docId, key, cursor)
+        for (item in pulled.items) {
+            val ops = runCatching { syncJson.decodeFromString<List<DocumentCrdt.CrdtElement>>(item) }.getOrNull() ?: continue
+            crdt.apply(ops)
+        }
+        ds.setLong("crdtCursor:$docId", pulled.seq.toLong())
+        saveCrdt(ds, docId, crdt)
+        val mergedLines = crdt.render()
+        if (mergedLines != localLines) {
+            val doc = parseFlat(OfficeCrdtCodec.fromLines(mergedLines))
+            if (doc != null) withContext(Dispatchers.Main) { updateDocument(doc) }
+        }
+    }
+
     /**
      * Shares the current document with [recipientId]. If it isn't online yet, it is first copied
-     * into the online folder (new doc id + content key + uploaded snapshot), then the invite is sent.
+     * into the online folder (new doc id + content key + CRDT upload), then the invite is sent.
      */
     fun shareCurrentDocument(recipientId: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -1910,7 +1960,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 val key = currentDocKey ?: OfficeSync.newDocumentKey()
                 currentDocId = docId
                 currentDocKey = key
-                OfficeSync.pushSnapshot(docId, key, exportFlat())
+                syncDoc(docId, key)
                 indexMutex.withLock {
                     val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
                     if (!index.containsKey(docId)) {
@@ -1924,25 +1974,32 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Uploads the current document's latest state to its online channel (no-op if offline-only). */
+    /** Pushes local edits and merges remote ones for the open online document (no-op if offline). */
     fun syncCurrentDocument() {
         val docId = currentDocId ?: return
         val key = currentDocKey ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                OfficeSync.init(getApplication())
-                OfficeSync.pushSnapshot(docId, key, exportFlat())
-            }
+            runCatching { OfficeSync.init(getApplication()); syncDoc(docId, key) }
         }
     }
 
-    /** Opens an online document by pulling + decrypting its latest snapshot into the editor. */
+    /** Opens an online document by building its CRDT from pulled ops and rendering it into the editor. */
     fun openOnlineDocument(meta: OfficeDocMeta) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 OfficeSync.init(getApplication())
+                val ds = DataStoreUtils.getInstance(getApplication())
                 val key = Base64.decode(meta.keyB64)
-                val flat = OfficeSync.latestSnapshot(meta.docId, key) ?: return@runCatching
+                val crdt = loadCrdt(ds, meta.docId) ?: DocumentCrdt(OfficeSync.deviceId)
+                val cursor = ds.getLong("crdtCursor:${meta.docId}")?.toInt() ?: 0
+                val pulled = OfficeSync.pullDocActions(meta.docId, key, cursor)
+                for (item in pulled.items) {
+                    val ops = runCatching { syncJson.decodeFromString<List<DocumentCrdt.CrdtElement>>(item) }.getOrNull() ?: continue
+                    crdt.apply(ops)
+                }
+                ds.setLong("crdtCursor:${meta.docId}", pulled.seq.toLong())
+                saveCrdt(ds, meta.docId, crdt)
+                val flat = OfficeCrdtCodec.fromLines(crdt.render())
                 val ctx: Context = getApplication()
                 val safeTitle = meta.title.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "document" }
                 val file = java.io.File(ctx.cacheDir, "online_${meta.docId}.fodt")
@@ -1950,6 +2007,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 withContext(Dispatchers.Main) {
                     loadDocument(Uri.fromFile(file), "$safeTitle.fodt", meta.docId, key)
                 }
+                currentCrdt = crdt
             }
         }
     }
@@ -2034,11 +2092,11 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 OdfWriter.save(getApplication(), source, doc, target)
                 _hasUnsavedChanges.value = false
                 documentUri = target
-                // If this document lives online, push the new snapshot so collaborators get it.
+                // If this document lives online, push local edits + merge remote ones.
                 if (currentDocId != null && currentDocKey != null) {
                     runCatching {
                         OfficeSync.init(getApplication())
-                        OfficeSync.pushSnapshot(currentDocId!!, currentDocKey!!, exportFlat())
+                        syncDoc(currentDocId!!, currentDocKey!!)
                     }
                 }
                 launch(Dispatchers.Main) { Toast.makeText(getApplication(), "Saved", Toast.LENGTH_SHORT).show() }

@@ -76,24 +76,21 @@ object OfficeSync {
     /** A fresh opaque document id. */
     fun newDocumentId(): String = UUID.randomUUID().toString()
 
-    // --- Document channel (snapshots encrypted with the content key) ---
+    // --- Document channel (a log of AES-encrypted CRDT action batches) ---
 
-    /** Appends an encrypted full-document snapshot action; returns the new cursor, or null. */
-    suspend fun pushSnapshot(docId: String, key: ByteArray, flatOdf: String): Int? {
-        val action = json.encodeToString(DocAction(type = "snapshot", flat = flatOdf))
-        val blob = Base64.encode(E2ee.aesEncrypt(key, action.encodeToByteArray()))
-        return append(docId, listOf(blob))
+    /** Encrypts and appends CRDT action batches to a document's log; returns the new cursor. */
+    suspend fun appendDocActions(docId: String, key: ByteArray, items: List<String>): Int? {
+        val blobs = items.map { Base64.encode(E2ee.aesEncrypt(key, it.encodeToByteArray())) }
+        return append(docId, blobs)
     }
 
-    /** Pulls the latest decrypted snapshot for a document (null if none / undecryptable). */
-    suspend fun latestSnapshot(docId: String, key: ByteArray): String? {
-        val p = pull(docId, 0) ?: return null
-        for (b in p.actions.asReversed()) {
-            val plain = runCatching { E2ee.aesDecrypt(key, Base64.decode(b)) }.getOrNull() ?: continue
-            val a = runCatching { json.decodeFromString<DocAction>(plain.decodeToString()) }.getOrNull() ?: continue
-            if (a.type == "snapshot") return a.flat
+    /** Pulls + decrypts document action batches at/after [since]; returns items + new cursor. */
+    suspend fun pullDocActions(docId: String, key: ByteArray, since: Int): DocActionsResult {
+        val p = pull(docId, since) ?: return DocActionsResult(emptyList(), since)
+        val items = p.actions.mapNotNull { b ->
+            runCatching { E2ee.aesDecrypt(key, Base64.decode(b)).decodeToString() }.getOrNull()
         }
-        return null
+        return DocActionsResult(items, p.seq)
     }
 
     // --- Inbox channel (invites encrypted to the recipient's public key) ---
@@ -167,4 +164,5 @@ object OfficeSync {
     @Serializable data class Invite(val docId: String, val key: String, val title: String)
 
     class InvitesResult(val invites: List<Invite>, val seq: Int)
+    class DocActionsResult(val items: List<String>, val seq: Int)
 }
