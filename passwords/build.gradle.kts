@@ -21,6 +21,9 @@ dependencies {
     implementation(libs.androidx.autofill)
     implementation(libs.keepassjava2.dom)
     implementation(libs.bouncycastle)
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.websockets)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation(libs.bouncycastle)
