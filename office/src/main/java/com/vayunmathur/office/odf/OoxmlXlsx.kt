@@ -36,13 +36,13 @@ internal object OoxmlXlsx {
         for (wsheet in wb.sheets) {
             val target = wbRels[wsheet.rId]?.target ?: continue
             val xml = pkg.entries[target] ?: continue
-            sheets.add(parseWorksheet(pkg, target, xml, wsheet, shared, styles, theme, validations, printRangesBySheet[wsheet.name]))
+            sheets.add(parseWorksheet(pkg, target, xml, wsheet, shared, styles, theme, validations, printRangesBySheet[wsheet.name], namedRanges))
         }
         if (sheets.isEmpty()) {
             pkg.entries.keys.filter { it.matches(Regex("xl/worksheets/sheet\\d+\\.xml")) }
                 .sortedBy { it.substringAfterLast("sheet").substringBefore(".xml").toIntOrNull() ?: 0 }
                 .forEachIndexed { i, path ->
-                    sheets.add(parseWorksheet(pkg, path, pkg.entries[path]!!, WbSheet("Sheet ${i + 1}", "", false), shared, styles, theme, validations, null))
+                    sheets.add(parseWorksheet(pkg, path, pkg.entries[path]!!, WbSheet("Sheet ${i + 1}", "", false), shared, styles, theme, validations, null, namedRanges))
                 }
         }
         if (sheets.isEmpty()) sheets.add(OdfSheet("Sheet 1", emptyList()))
@@ -308,7 +308,7 @@ internal object OoxmlXlsx {
     private fun parseWorksheet(
         pkg: OoxmlPackage, part: String, xml: String, wsheet: WbSheet,
         shared: List<String>, styles: StyleTable, theme: OoxmlTheme,
-        validations: MutableList<OdfDataValidation>, printRange: String?
+        validations: MutableList<OdfDataValidation>, printRange: String?, namedRanges: MutableList<OdfNamedRange>
     ): OdfSheet {
         val rels = pkg.relsFor(part)
         val parser = OoxmlXml.newParser(xml)
@@ -323,6 +323,7 @@ internal object OoxmlXlsx {
         val hyperlinkRefs = mutableListOf<Triple<String, String?, String?>>() // ref, rId, location
         val condFormats = mutableListOf<Pair<String, List<CfRule>>>() // sqref -> rules
         val valRefs = mutableListOf<Pair<String, List<String>>>()
+        val sharedFormulas = HashMap<Int, String>()
         var curCells: MutableList<Pair<Int, OdfCell>>? = null
         var curRowHidden = false
         var rowIndex = 0
@@ -362,7 +363,7 @@ internal object OoxmlXlsx {
                     "c" -> if (curCells != null) {
                         val ref = OoxmlXml.attr(parser, "r") ?: ""
                         val ci = if (ref.isNotEmpty()) OoxmlXml.colIndex(ref) else curCells!!.size
-                        curCells!!.add(ci to parseCell(parser, shared, styles))
+                        curCells!!.add(ci to parseCell(parser, shared, styles, sharedFormulas))
                     }
                     "mergeCell" -> OoxmlXml.attr(parser, "ref")?.let { merges.add(it) }
                     "dataValidation" -> parseDataValidation(parser)?.let { (v, refs) ->
@@ -414,7 +415,26 @@ internal object OoxmlXlsx {
         val floating = parseDrawings(pkg, part, rels, drawingRid, theme, colWidths, rowHeights)
         if (floating.isNotEmpty()) sheet = sheet.copy(floating = floating)
         if (valRefs.isNotEmpty()) sheet = applyValidationNames(sheet, valRefs)
+        // Structured tables (xl/tables/tableN.xml) -> named ranges.
+        for (rel in rels.values) if (rel.type?.endsWith("table") == true) {
+            pkg.entries[rel.target]?.let { tx -> parseTablePart(tx, wsheet.name)?.let { namedRanges.add(it) } }
+        }
         return sheet
+    }
+
+    private fun parseTablePart(xml: String, sheetName: String): OdfNamedRange? {
+        val parser = OoxmlXml.newParser(xml)
+        var e = parser.eventType
+        while (e != XmlPullParser.END_DOCUMENT) {
+            if (e == XmlPullParser.START_TAG && parser.name == "table") {
+                val name = OoxmlXml.attr(parser, "displayName") ?: OoxmlXml.attr(parser, "name") ?: return null
+                val ref = OoxmlXml.attr(parser, "ref") ?: return null
+                val addr = ref.split(":").joinToString(":") { "$sheetName.$it" }
+                return OdfNamedRange(name, addr)
+            }
+            e = parser.next()
+        }
+        return null
     }
 
     private fun buildColWidths(map: Map<Int, Float>, rows: List<OdfRow>): List<Float?> {
@@ -423,7 +443,7 @@ internal object OoxmlXlsx {
         return (0..maxCol).map { map[it] }
     }
 
-    private fun parseCell(parser: XmlPullParser, shared: List<String>, styles: StyleTable): OdfCell {
+    private fun parseCell(parser: XmlPullParser, shared: List<String>, styles: StyleTable, sharedFormulas: MutableMap<Int, String>): OdfCell {
         val type = OoxmlXml.attr(parser, "t")
         val styleIdx = OoxmlXml.attr(parser, "s")?.toIntOrNull()
         val depth = parser.depth
@@ -436,8 +456,15 @@ internal object OoxmlXlsx {
                 "v" -> value = OoxmlXml.readElementText(parser, "v")
                 "t" -> inlineText = (inlineText ?: "") + OoxmlXml.readElementText(parser, "t")
                 "f" -> {
+                    val ft = OoxmlXml.attr(parser, "t")
+                    val si = OoxmlXml.attr(parser, "si")?.toIntOrNull()
                     val f = OoxmlXml.readElementText(parser, "f")
-                    if (f.isNotBlank()) formula = ExcelFormula.toOdf(f)
+                    formula = when {
+                        ft == "shared" && f.isNotBlank() -> ExcelFormula.toOdf(f).also { if (si != null) sharedFormulas[si] = it }
+                        ft == "shared" && f.isBlank() -> si?.let { sharedFormulas[it] }
+                        f.isNotBlank() -> ExcelFormula.toOdf(f)
+                        else -> null
+                    }
                 }
             }
             if (e == XmlPullParser.END_DOCUMENT) break

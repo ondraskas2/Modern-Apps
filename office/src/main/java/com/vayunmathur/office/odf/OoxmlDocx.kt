@@ -573,7 +573,14 @@ internal object OoxmlDocx {
     private fun resolveWColor(parser: XmlPullParser, theme: OoxmlTheme): Long? {
         OoxmlUnits.hexColor(OoxmlXml.attr(parser, "val"))?.let { return it }
         val themeColor = OoxmlXml.attr(parser, "themeColor") ?: return null
-        return theme.schemeColor(mapWordTheme(themeColor))
+        val base = theme.schemeColor(mapWordTheme(themeColor)) ?: return null
+        val tint = OoxmlXml.attr(parser, "themeTint")?.toIntOrNull(16)
+        val shade = OoxmlXml.attr(parser, "themeShade")?.toIntOrNull(16)
+        return when {
+            tint != null -> OoxmlUnits.applyTransforms(base, tint = (tint / 255f * 100000).toInt())
+            shade != null -> OoxmlUnits.applyTransforms(base, shade = (shade / 255f * 100000).toInt())
+            else -> base
+        }
     }
 
     private fun parsePPr(parser: XmlPullParser, theme: OoxmlTheme): PPr {
@@ -1034,6 +1041,8 @@ internal object OoxmlDocx {
         var cx = 0L; var cy = 0L; var embed: String? = null
         var title: String? = null; var desc: String? = null; var rot = 0
         var chartRid: String? = null
+        var dmRid: String? = null
+        var cropL = 0f; var cropT = 0f; var cropR = 0f; var cropB = 0f
         val textboxParas = mutableListOf<OdfParagraph>()
         var e = parser.next()
         while (!(e == XmlPullParser.END_TAG && parser.depth == depth && parser.name == endTag)) {
@@ -1043,7 +1052,14 @@ internal object OoxmlDocx {
                 "docPr" -> { title = OoxmlXml.attr(parser, "title") ?: OoxmlXml.attr(parser, "name"); desc = OoxmlXml.attr(parser, "descr") }
                 "xfrm" -> OoxmlXml.attr(parser, "rot")?.toIntOrNull()?.let { rot = it }
                 "blip" -> if (embed == null) embed = OoxmlXml.attrNs(parser, relsNs, "embed") ?: OoxmlXml.attr(parser, "embed")
+                "srcRect" -> {
+                    cropL = (OoxmlXml.attr(parser, "l")?.toIntOrNull() ?: 0) / 100000f
+                    cropT = (OoxmlXml.attr(parser, "t")?.toIntOrNull() ?: 0) / 100000f
+                    cropR = (OoxmlXml.attr(parser, "r")?.toIntOrNull() ?: 0) / 100000f
+                    cropB = (OoxmlXml.attr(parser, "b")?.toIntOrNull() ?: 0) / 100000f
+                }
                 "chart" -> chartRid = OoxmlXml.attrNs(parser, relsNs, "id") ?: OoxmlXml.attr(parser, "id")
+                "relIds" -> dmRid = OoxmlXml.attrNs(parser, relsNs, "dm")
                 "txbxContent" -> parseTextboxContent(parser, ctx, textboxParas)
             }
             e = parser.next()
@@ -1064,12 +1080,20 @@ internal object OoxmlDocx {
                     path = path, imageData = bytes,
                     width = OoxmlUnits.emuToPx(cx), height = OoxmlUnits.emuToPx(cy),
                     rotationDegrees = OoxmlUnits.angle60000ToDeg(rot),
+                    cropLeftPct = cropL, cropTopPct = cropT, cropRightPct = cropR, cropBottomPct = cropB,
                     altTitle = title, altDesc = desc
                 )))
                 return
             }
         }
         for (p in textboxParas) ctx.pendingBlocks.add(OdfContentBlock.Paragraph(p))
+        // SmartArt: extract diagram text (best-effort) if no image/chart/textbox.
+        if (chartRid == null && embed == null && textboxParas.isEmpty() && dmRid != null) {
+            val dataPart = ctx.rels[dmRid]?.target
+            for (line in OoxmlDiagram.extractText(ctx.pkg, dataPart)) {
+                ctx.pendingBlocks.add(OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(line)))))
+            }
+        }
     }
 
     private fun parseTextboxContent(parser: XmlPullParser, ctx: DocxCtx, out: MutableList<OdfParagraph>) {

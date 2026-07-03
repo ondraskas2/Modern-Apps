@@ -2095,6 +2095,7 @@ object OdfParser {
         val resolved = resolveStyle(styleName, styles)
         val rot = parseRotationDegrees(getAttr(parser, "transform"))
         val grad = resolved.fillGradientName?.let { gradientDefs[it] }
+        val cornerRadius = if (shapeName == "rect") parseDimension(getAttr(parser, "corner-radius")) else 0f
 
         val text = mutableListOf<OdfParagraph>()
         val depth = parser.depth
@@ -2108,7 +2109,7 @@ object OdfParser {
         }
 
         return when (shapeName) {
-            "rect" -> OdfShape.Rect(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
+            "rect" -> OdfShape.Rect(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, cornerRadius = cornerRadius, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
             "ellipse" -> OdfShape.Ellipse(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)
             "line" -> OdfShape.Line(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, x2, y2, rotationDegrees = rot, strokeDashed = resolved.strokeDashed, markerStart = resolved.markerStart, markerEnd = resolved.markerEnd)
             "polyline" -> OdfShape.Polyline(x, y, w, h, resolved.drawFillColor, resolved.drawStrokeColor, resolved.drawStrokeWidth, text, polyPoints, closed = false, rotationDegrees = rot, fillGradient = grad, strokeDashed = resolved.strokeDashed)

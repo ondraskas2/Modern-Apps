@@ -2,11 +2,13 @@ package com.vayunmathur.office.odf
 
 import android.content.Context
 import android.net.Uri
+import com.vayunmathur.library.ui.odf.HtmlOdfConverter
 import com.vayunmathur.library.ui.odf.MarkdownOdfConverter
 import com.vayunmathur.library.ui.odf.OdfContentBlock
 import com.vayunmathur.library.ui.odf.OdfDocument
 import com.vayunmathur.library.ui.odf.OdfParagraph
 import com.vayunmathur.library.ui.odf.OdfSpan
+import com.vayunmathur.library.ui.odf.RtfOdfConverter
 
 /**
  * Routes an opened file to the right importer by extension, with a content sniff fallback:
@@ -19,12 +21,16 @@ object DocumentImporter {
         return when (fileName.substringAfterLast('.', "").lowercase()) {
             "odt", "ods", "odp", "odg", "fodt", "fods", "fodp", "fodg", "xml" ->
                 OdfParser.parse(context, uri, fileName)
-            "docx", "xlsx", "pptx" ->
+            "docx", "docm", "dotx", "dotm",
+            "xlsx", "xlsm", "xltx", "xltm",
+            "pptx", "pptm", "potx", "potm", "ppsx", "ppsm" ->
                 OoxmlImporter.import(readBytes(context, uri), fileName)
                     ?: throw IllegalArgumentException("Unsupported or corrupt Office file")
             "csv" -> OdfParser.parseCsv(readText(context, uri), fileName, ',')
             "tsv", "tab" -> OdfParser.parseCsv(readText(context, uri), fileName, '\t')
             "md", "markdown" -> MarkdownOdfConverter.markdownToOdf(readText(context, uri), fileName.substringBeforeLast('.'))
+            "html", "htm", "xhtml" -> HtmlOdfConverter.htmlToOdf(readText(context, uri), fileName.substringBeforeLast('.'))
+            "rtf" -> RtfOdfConverter.rtfToOdf(readText(context, uri), fileName.substringBeforeLast('.'))
             "txt", "text", "log" -> plainTextToDoc(readText(context, uri), fileName)
             else -> sniff(context, uri, fileName)
         }

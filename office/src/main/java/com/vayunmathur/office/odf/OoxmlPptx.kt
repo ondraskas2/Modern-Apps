@@ -262,6 +262,7 @@ internal object OoxmlPptx {
         val sp = SpProps()
         var embed: String? = null
         var desc: String? = null
+        var cropL = 0f; var cropT = 0f; var cropR = 0f; var cropB = 0f
         var e = parser.next()
         while (!(e == XmlPullParser.END_TAG && parser.depth == depth && parser.name == "pic")) {
             if (e == XmlPullParser.END_DOCUMENT) break
@@ -269,6 +270,12 @@ internal object OoxmlPptx {
                 "spPr" -> parseSpPr(parser, ctx, sp)
                 "cNvPr" -> desc = OoxmlXml.attr(parser, "descr") ?: OoxmlXml.attr(parser, "name")
                 "blip" -> embed = OoxmlXml.attrNs(parser, RELS_NS, "embed") ?: OoxmlXml.attr(parser, "embed")
+                "srcRect" -> {
+                    cropL = (OoxmlXml.attr(parser, "l")?.toIntOrNull() ?: 0) / 100000f
+                    cropT = (OoxmlXml.attr(parser, "t")?.toIntOrNull() ?: 0) / 100000f
+                    cropR = (OoxmlXml.attr(parser, "r")?.toIntOrNull() ?: 0) / 100000f
+                    cropB = (OoxmlXml.attr(parser, "b")?.toIntOrNull() ?: 0) / 100000f
+                }
             }
             e = parser.next()
         }
@@ -279,7 +286,8 @@ internal object OoxmlPptx {
         return OdfSlideElement.Frame(OdfFrame(
             x = sp.x, y = sp.y, width = sp.w.coerceAtLeast(1f), height = sp.h.coerceAtLeast(1f),
             paragraphs = emptyList(),
-            image = OdfImage(path, bytes, sp.w, sp.h, rotationDegrees = sp.rot, altDesc = desc)
+            image = OdfImage(path, bytes, sp.w, sp.h, rotationDegrees = sp.rot,
+                cropLeftPct = cropL, cropTopPct = cropT, cropRightPct = cropR, cropBottomPct = cropB, altDesc = desc)
         ))
     }
 
@@ -330,6 +338,7 @@ internal object OoxmlPptx {
         val depth = parser.depth
         var x = 36f; var y = ctx.autoY; var w = 640f; var h = 200f; var hasXfrm = false
         var chartRid: String? = null
+        var dmRid: String? = null
         val tableParas = mutableListOf<OdfParagraph>()
         var e = parser.next()
         while (!(e == XmlPullParser.END_TAG && parser.depth == depth && parser.name == "graphicFrame")) {
@@ -338,6 +347,7 @@ internal object OoxmlPptx {
                 "off" -> { OoxmlXml.attr(parser, "x")?.toLongOrNull()?.let { x = OoxmlUnits.emuToPx(it); hasXfrm = true }; OoxmlXml.attr(parser, "y")?.toLongOrNull()?.let { y = OoxmlUnits.emuToPx(it) } }
                 "ext" -> { OoxmlXml.attr(parser, "cx")?.toLongOrNull()?.let { w = OoxmlUnits.emuToPx(it) }; OoxmlXml.attr(parser, "cy")?.toLongOrNull()?.let { h = OoxmlUnits.emuToPx(it) } }
                 "chart" -> chartRid = OoxmlXml.attrNs(parser, RELS_NS, "id") ?: OoxmlXml.attr(parser, "id")
+                "relIds" -> dmRid = OoxmlXml.attrNs(parser, RELS_NS, "dm")
                 "tbl" -> parseSlideTable(parser, ctx, tableParas)
             }
             e = parser.next()
@@ -347,6 +357,10 @@ internal object OoxmlPptx {
             val target = ctx.rels[chartRid]?.target
             val chart = target?.let { ctx.pkg.entries[it] }?.let { OoxmlChart.parse(it, ctx.theme) }
             if (chart != null) return OdfSlideElement.Frame(OdfFrame(x, y, w, h, emptyList(), chart = chart))
+        }
+        if (dmRid != null) {
+            val lines = OoxmlDiagram.extractText(ctx.pkg, ctx.rels[dmRid]?.target)
+            if (lines.isNotEmpty()) return OdfSlideElement.Frame(OdfFrame(x, y, w, h.coerceAtLeast(20f), lines.map { OdfParagraph(listOf(OdfSpan(it))) }))
         }
         if (tableParas.isNotEmpty()) return OdfSlideElement.Frame(OdfFrame(x, y, w, h.coerceAtLeast(20f), tableParas))
         return null
