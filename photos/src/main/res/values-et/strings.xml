@@ -37,4 +37,14 @@
     <string name="enable_ai_search_button">Võta kasutusele</string>
     <string name="model_downloading_title">Tehisaru mudel on allalaadimisel</string>
     <string name="model_downloading_description">Tehisaru mudel on allalaadimisel. Sõltuvalt sinu nutiseadme ühendusest võib selleks kuluda õige mitu minutit.</string>
+    <string name="label_people">Inimesed</string>
+    <string name="people_empty">Inimesi veel ei leidu. Skaneerimine toimub taustal - vaata uuesti peale fotode skaneerimise lõppu.</string>
+    <string name="face_indexing_progress">Indekseerimisel: %1$d / %2$d</string>
+    <string name="people_scanning">Grupeerin näotuvastuse tulemusi… inimesed on siin näha peale nende leidmist.</string>
+    <string name="people_model_missing">Näotuvastuse tulemuste grupeerimine eeldab MobileFaceNet mudeli kasutamist. Lisa lubatava litsentsi alusel avaldatud „mobilefacenet.tflite“ mudel asukohta „photos/src/main/assets“ (vt ka „FaceRecognizer“).</string>
+    <string name="people_photo_count">%1$d fotot</string>
+    <plurals name="people_in_photo">
+        <item quantity="one">%1$d inimene</item>
+        <item quantity="other">%1$d inimest</item>
+    </plurals>
 </resources>
