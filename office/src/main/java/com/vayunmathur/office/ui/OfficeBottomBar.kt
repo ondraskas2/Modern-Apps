@@ -74,7 +74,12 @@ data class BottomBarActions(
     val onInsertChart: () -> Unit = {},
     val onInsertTable: () -> Unit = {},
     val onDeleteElement: () -> Unit = {},
-    val onCellBorder: () -> Unit = {}
+    val onCellBorder: () -> Unit = {},
+    val onCellComment: () -> Unit = {},
+    val onCellResize: () -> Unit = {},
+    val onSlideNotes: () -> Unit = {},
+    val onSlideBackground: () -> Unit = {},
+    val onSlideTransition: () -> Unit = {}
 )
 
 @Composable
@@ -284,6 +289,8 @@ private fun CellFormatControls(target: FormatTarget.Cell?, viewModel: OfficeView
         DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
             DropdownMenuItem(text = { Text("Fill down") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.fillDownToEnd(s, r, c) })
             DropdownMenuItem(text = { Text("Border color…") }, enabled = enabled, onClick = { moreMenu = false; actions.onCellBorder() })
+            DropdownMenuItem(text = { Text("Comment…") }, enabled = enabled, onClick = { moreMenu = false; actions.onCellComment() })
+            DropdownMenuItem(text = { Text("Row/column size…") }, enabled = enabled, onClick = { moreMenu = false; actions.onCellResize() })
             DropdownMenuItem(text = { Text("Number format") }, trailingIcon = { Icon(painterResource(R.drawable.arrow_drop_down_24px), null) }, enabled = enabled, onClick = { numMenu = true })
         }
         DropdownMenu(expanded = numMenu, onDismissRequest = { numMenu = false }) {
@@ -423,7 +430,11 @@ private fun ElementFormatControls(target: FormatTarget.Element?, viewModel: Offi
             DropdownMenuItem(text = { Text("Duplicate") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.duplicateSlideElement(s, e) })
             DropdownMenuItem(text = { Text("Bring to front") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.reorderSlideElement(s, e, true) })
             DropdownMenuItem(text = { Text("Send to back") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.reorderSlideElement(s, e, false) })
-            DropdownMenuItem(text = { Text("Rotate 90°") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.rotateSlideImage(s, e, 90f) })
+            DropdownMenuItem(text = { Text("Rotate 90°") }, enabled = enabled, onClick = { moreMenu = false; if (enabled) viewModel.setSlideElementRotation(s, e, 90f) })
+            HorizontalDivider()
+            DropdownMenuItem(text = { Text("Speaker notes…") }, onClick = { moreMenu = false; actions.onSlideNotes() })
+            DropdownMenuItem(text = { Text("Slide background…") }, onClick = { moreMenu = false; actions.onSlideBackground() })
+            DropdownMenuItem(text = { Text("Slide transition…") }, onClick = { moreMenu = false; actions.onSlideTransition() })
         }
     }
 }

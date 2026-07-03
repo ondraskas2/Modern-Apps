@@ -1319,6 +1319,106 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         updateDocument(doc.copy(slides = slides))
     }
 
+    // --- Slide chrome (background / transition / speaker notes) ---
+
+    private fun mutateSlide(slideIndex: Int, transform: (OdfSlide) -> OdfSlide) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
+        val slides = doc.slides.toMutableList()
+        val slide = slides.getOrNull(slideIndex) ?: return
+        slides[slideIndex] = transform(slide)
+        updateDocument(doc.copy(slides = slides))
+    }
+
+    /** Sets speaker notes for a slide (one paragraph per line; blank clears them). */
+    fun setSlideNotes(slideIndex: Int, text: String) = mutateSlide(slideIndex) { slide ->
+        slide.copy(notes = if (text.isBlank()) emptyList() else text.split("\n").map { OdfParagraph(listOf(OdfSpan(it))) })
+    }
+
+    /** Current speaker-notes text for a slide, joined by newlines. */
+    fun slideNotesText(slideIndex: Int): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return ""
+        return doc.slides.getOrNull(slideIndex)?.notes?.joinToString("\n") { p -> p.spans.joinToString("") { it.text } } ?: ""
+    }
+
+    /** Sets (or clears with null) the solid background color of a slide. */
+    fun setSlideBackgroundColor(slideIndex: Int, color: Long?) = mutateSlide(slideIndex) { it.copy(backgroundColor = color) }
+
+    /** Sets the slide transition type (e.g. "fade","wipe","dissolve"; null clears) and speed. */
+    fun setSlideTransition(slideIndex: Int, type: String?, speed: String?) =
+        mutateSlide(slideIndex) { it.copy(transitionType = type, transitionSpeed = speed) }
+
+    /** Rotates ANY slide element by delta degrees: shapes rotate via their angle, image frames via the image. */
+    fun setSlideElementRotation(slideIndex: Int, elementIndex: Int, deltaDegrees: Float) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Presentation ?: return
+        val slides = doc.slides.toMutableList()
+        val slide = slides.getOrNull(slideIndex) ?: return
+        val elements = slide.elements.toMutableList()
+        val el = elements.getOrNull(elementIndex) ?: return
+        elements[elementIndex] = rotateElement(el, deltaDegrees)
+        slides[slideIndex] = slide.copy(elements = elements)
+        updateDocument(doc.copy(slides = slides))
+    }
+
+    private fun rotateElement(el: OdfSlideElement, delta: Float): OdfSlideElement = when (el) {
+        is OdfSlideElement.Frame -> el.frame.image?.let {
+            OdfSlideElement.Frame(el.frame.copy(image = it.copy(rotationDegrees = (it.rotationDegrees + delta) % 360f)))
+        } ?: el
+        is OdfSlideElement.Shape -> {
+            val s = el.shape; val nd = (s.rotationDegrees + delta) % 360f
+            OdfSlideElement.Shape(when (s) {
+                is OdfShape.Rect -> s.copy(rotationDegrees = nd)
+                is OdfShape.Ellipse -> s.copy(rotationDegrees = nd)
+                is OdfShape.Line -> s.copy(rotationDegrees = nd)
+                is OdfShape.CustomShape -> s.copy(rotationDegrees = nd)
+                is OdfShape.Polyline -> s.copy(rotationDegrees = nd)
+            })
+        }
+    }
+
+    // --- Spreadsheet cell comments & sizing ---
+
+    /** Sets (or clears with blank text) a comment/note on a cell. */
+    fun setCellComment(sheetIndex: Int, rowIndex: Int, cellIndex: Int, author: String, text: String) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
+        modifyCell(doc, sheetIndex, rowIndex, cellIndex) {
+            it.copy(annotation = if (text.isBlank()) null else OdfAnnotation(
+                author = author.ifBlank { null },
+                paragraphs = listOf(OdfParagraph(listOf(OdfSpan(text))))
+            ))
+        }
+    }
+
+    /** Current comment text on a cell, or "". */
+    fun cellCommentText(sheetIndex: Int, rowIndex: Int, cellIndex: Int): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return ""
+        val cell = doc.sheets.getOrNull(sheetIndex)?.rows?.getOrNull(rowIndex)?.cells?.getOrNull(cellIndex) ?: return ""
+        return cell.annotation?.paragraphs?.joinToString("\n") { p -> p.spans.joinToString("") { it.text } } ?: ""
+    }
+
+    /** Sets a column width in px@96 (null resets to default). */
+    fun setColumnWidth(sheetIndex: Int, col: Int, widthPx: Float?) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
+        val sheets = doc.sheets.toMutableList()
+        val sheet = sheets.getOrNull(sheetIndex) ?: return
+        val widths = sheet.columnWidths.toMutableList()
+        while (widths.size <= col) widths.add(null)
+        widths[col] = widthPx
+        sheets[sheetIndex] = sheet.copy(columnWidths = widths)
+        updateDocument(doc.copy(sheets = sheets))
+    }
+
+    /** Sets a row height in px@96 (null resets to default). */
+    fun setRowHeight(sheetIndex: Int, row: Int, heightPx: Float?) {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.Spreadsheet ?: return
+        val sheets = doc.sheets.toMutableList()
+        val sheet = sheets.getOrNull(sheetIndex) ?: return
+        val heights = sheet.rowHeights.toMutableList()
+        while (heights.size <= row) heights.add(null)
+        heights[row] = heightPx
+        sheets[sheetIndex] = sheet.copy(rowHeights = heights)
+        updateDocument(doc.copy(sheets = sheets))
+    }
+
     // --- Spreadsheet floating objects (Phase 4) ---
 
     private fun mutateSheetFloating(sheetIndex: Int, transform: (List<OdfSlideElement>) -> List<OdfSlideElement>) {
@@ -1676,6 +1776,36 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     fun ooxmlExtension(): String {
         val doc = (_state.value as? ViewState.Loaded)?.document ?: return "docx"
         return OoxmlExporter.extensionFor(doc)
+    }
+
+    /** HTML export for text documents (empty for other types). */
+    fun exportHtml(): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ""
+        return HtmlOdfConverter.odfToHtml(doc)
+    }
+
+    /** RTF export for text documents (empty for other types). */
+    fun exportRtf(): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ""
+        return RtfOdfConverter.odfToRtf(doc)
+    }
+
+    /** LaTeX export for text documents (empty for other types). */
+    fun exportLatex(): String {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ""
+        return LatexExporter.export(doc)
+    }
+
+    /** EPUB export for text documents (empty for other types). */
+    fun exportEpub(): ByteArray {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ByteArray(0)
+        return EpubExporter.export(doc)
+    }
+
+    /** PDF export for text documents (empty for other types). */
+    fun exportPdf(): ByteArray {
+        val doc = (_state.value as? ViewState.Loaded)?.document as? OdfDocument.TextDocument ?: return ByteArray(0)
+        return PdfExporter.export(doc)
     }
 
     // --- Text export ---

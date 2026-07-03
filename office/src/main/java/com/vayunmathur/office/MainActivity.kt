@@ -233,6 +233,11 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     var showSlideTextColor by remember { mutableStateOf(false) }
     var showSlideFillColor by remember { mutableStateOf(false) }
     var showSlideStrokeColor by remember { mutableStateOf(false) }
+    var showCellComment by remember { mutableStateOf(false) }
+    var showCellResize by remember { mutableStateOf(false) }
+    var showSlideNotes by remember { mutableStateOf(false) }
+    var showSlideBackground by remember { mutableStateOf(false) }
+    var showSlideTransition by remember { mutableStateOf(false) }
     var chartForSlide by remember { mutableStateOf(false) }
     var chartForSheet by remember { mutableStateOf(false) }
     var cropImageBlock by remember { mutableIntStateOf(-1) }
@@ -320,6 +325,21 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     }
     val ooxmlExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         uri?.let { val bytes = viewModel.exportOoxml(); if (bytes.isNotEmpty()) context.contentResolver.openOutputStream(it)?.use { o -> o.write(bytes) } }
+    }
+    val htmlExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/html")) { uri ->
+        uri?.let { val t = viewModel.exportHtml(); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val rtfExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/rtf")) { uri ->
+        uri?.let { val t = viewModel.exportRtf(); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val latexExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-tex")) { uri ->
+        uri?.let { val t = viewModel.exportLatex(); if (t.isNotEmpty()) context.contentResolver.openOutputStream(it)?.writer()?.use { w -> w.write(t) } }
+    }
+    val epubExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/epub+zip")) { uri ->
+        uri?.let { val bytes = viewModel.exportEpub(); if (bytes.isNotEmpty()) context.contentResolver.openOutputStream(it)?.use { o -> o.write(bytes) } }
+    }
+    val pdfExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        uri?.let { val bytes = viewModel.exportPdf(); if (bytes.isNotEmpty()) context.contentResolver.openOutputStream(it)?.use { o -> o.write(bytes) } }
     }
     // Pending non-ODF export, shown behind a data-loss confirmation. (Set to launch on confirm.)
     var exportWarning by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -418,6 +438,11 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                                     val baseName = document.title.substringBeforeLast('.').ifBlank { "document" }
                                     if (isTextDoc) {
                                         DropdownMenuItem(text = { Text("Export as Word (.docx)…") }, onClick = { fileMenu = false; exportWarning = { ooxmlExportLauncher.launch("$baseName.docx") } })
+                                        DropdownMenuItem(text = { Text("Export as PDF (.pdf)…") }, onClick = { fileMenu = false; exportWarning = { pdfExportLauncher.launch("$baseName.pdf") } })
+                                        DropdownMenuItem(text = { Text("Export as HTML (.html)…") }, onClick = { fileMenu = false; exportWarning = { htmlExportLauncher.launch("$baseName.html") } })
+                                        DropdownMenuItem(text = { Text("Export as Rich Text (.rtf)…") }, onClick = { fileMenu = false; exportWarning = { rtfExportLauncher.launch("$baseName.rtf") } })
+                                        DropdownMenuItem(text = { Text("Export as EPUB (.epub)…") }, onClick = { fileMenu = false; exportWarning = { epubExportLauncher.launch("$baseName.epub") } })
+                                        DropdownMenuItem(text = { Text("Export as LaTeX (.tex)…") }, onClick = { fileMenu = false; exportWarning = { latexExportLauncher.launch("$baseName.tex") } })
                                         DropdownMenuItem(text = { Text("Export as Markdown (.md)…") }, onClick = { fileMenu = false; exportWarning = { markdownExportLauncher.launch("$baseName.md") } })
                                         DropdownMenuItem(text = { Text("Export as Text (.txt)…") }, onClick = { fileMenu = false; exportWarning = { txtExportLauncher.launch("$baseName.txt") } })
                                     }
@@ -581,7 +606,12 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         onInsertChart = { editingChartBlock = -1; chartForSlide = isPresentation; chartForSheet = isSpreadsheet; showChartEditor = true },
                         onInsertTable = { showInsertTable = true },
                         onDeleteElement = { if (activeSlideEl >= 0) { viewModel.deleteSlideElement(activeSlide, activeSlideEl); activeSlideEl = -1 } },
-                        onCellBorder = { showCellBorderColor = true }
+                        onCellBorder = { showCellBorderColor = true },
+                        onCellComment = { showCellComment = true },
+                        onCellResize = { showCellResize = true },
+                        onSlideNotes = { showSlideNotes = true },
+                        onSlideBackground = { showSlideBackground = true },
+                        onSlideTransition = { showSlideTransition = true }
                     )
                     OfficeBottomBar(document, formatTarget, caps, viewModel, actions, activeTableBlock, activeTableRow, activeTableCol)
                 }
@@ -787,6 +817,71 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
     }
     if (showSlideStrokeColor && activeSlideEl >= 0) {
         ColorPickerDialog("Border Color", onColorSelected = { viewModel.setSlideElementStroke(activeSlide, activeSlideEl, it) }, onDismiss = { showSlideStrokeColor = false })
+    }
+    if (showCellComment && (activeCell?.second ?: -1) >= 0) {
+        val (s, r, c) = activeCell!!
+        var text by remember(showCellComment) { mutableStateOf(viewModel.cellCommentText(s, r, c)) }
+        AlertDialog(
+            onDismissRequest = { showCellComment = false },
+            title = { Text("Cell comment") },
+            text = { TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Comment") }, modifier = Modifier.height(120.dp)) },
+            confirmButton = { TextButton(onClick = { viewModel.setCellComment(s, r, c, "", text); showCellComment = false }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { showCellComment = false }) { Text("Cancel") } }
+        )
+    }
+    if (showCellResize && (activeCell?.second ?: -1) >= 0) {
+        val (s, r, c) = activeCell!!
+        var w by remember(showCellResize) { mutableStateOf("") }
+        var h by remember(showCellResize) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCellResize = false },
+            title = { Text("Row / column size") },
+            text = {
+                Column {
+                    TextField(value = w, onValueChange = { w = it }, label = { Text("Column width (px)") })
+                    Spacer(Modifier.height(8.dp))
+                    TextField(value = h, onValueChange = { h = it }, label = { Text("Row height (px)") })
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                w.toFloatOrNull()?.let { viewModel.setColumnWidth(s, c, it) }
+                h.toFloatOrNull()?.let { viewModel.setRowHeight(s, r, it) }
+                showCellResize = false
+            }) { Text("Apply") } },
+            dismissButton = { TextButton(onClick = { showCellResize = false }) { Text("Cancel") } }
+        )
+    }
+    if (showSlideNotes && isPresentation) {
+        var text by remember(showSlideNotes) { mutableStateOf(viewModel.slideNotesText(activeSlide)) }
+        AlertDialog(
+            onDismissRequest = { showSlideNotes = false },
+            title = { Text("Speaker notes") },
+            text = { TextField(value = text, onValueChange = { text = it }, placeholder = { Text("Notes for this slide") }, modifier = Modifier.height(160.dp)) },
+            confirmButton = { TextButton(onClick = { viewModel.setSlideNotes(activeSlide, text); showSlideNotes = false }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { showSlideNotes = false }) { Text("Cancel") } }
+        )
+    }
+    if (showSlideBackground && isPresentation) {
+        ColorPickerDialog("Slide background", onColorSelected = { viewModel.setSlideBackgroundColor(activeSlide, it) }, onDismiss = { showSlideBackground = false })
+    }
+    if (showSlideTransition && isPresentation) {
+        val types = listOf("none", "fade", "wipe", "dissolve", "push", "cover", "split", "blinds", "checkerboard", "circle", "wheel")
+        var type by remember(showSlideTransition) { mutableStateOf((document as? OdfDocument.Presentation)?.slides?.getOrNull(activeSlide)?.transitionType ?: "none") }
+        var expanded by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { showSlideTransition = false },
+            title = { Text("Slide transition") },
+            text = {
+                Box {
+                    TextButton(onClick = { expanded = true }) { Text(type.replaceFirstChar { it.uppercase() }) }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        types.forEach { t -> DropdownMenuItem(text = { Text(t.replaceFirstChar { ch -> ch.uppercase() }) }, onClick = { type = t; expanded = false }) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { viewModel.setSlideTransition(activeSlide, type.takeIf { it != "none" }, "medium"); showSlideTransition = false }) { Text("Apply") } },
+            dismissButton = { TextButton(onClick = { showSlideTransition = false }) { Text("Cancel") } }
+        )
     }
     if (cropImageBlock >= 0) {
         val img = ((document as? OdfDocument.TextDocument)?.content?.getOrNull(cropImageBlock) as? OdfContentBlock.Image)?.image
