@@ -184,6 +184,7 @@ object OdfSerializer {
         val tableColStyles = LinkedHashMap<String, Float>()
         val tableCellStyles = LinkedHashMap<String, CellStyleDef>()
         val sectionStyles = LinkedHashMap<String, Int>()
+        val listStyles = LinkedHashMap<String, ListStyleDef>()
         fun sectionStyleName(cols: Int, m: MutableMap<String, Int>): String { for ((n, v) in m) if (v == cols) return n; val n = "Sect${m.size + 1}"; m[n] = cols; return n }
         val body = StringBuilder()
 
@@ -211,7 +212,9 @@ object OdfSerializer {
                         when {
                             target > listDepth -> {
                                 while (listDepth < target) {
-                                    body.append("<text:list>"); listDepth++
+                                    if (listDepth == 0) body.append("""<text:list text:style-name="${getOrCreateListStyle(para, listStyles)}">""")
+                                    else body.append("<text:list>")
+                                    listDepth++
                                     if (listDepth < target) body.append("<text:list-item>")
                                 }
                             }
@@ -277,7 +280,7 @@ object OdfSerializer {
         closeAllLists()
 
         val tracked = serializeTrackedChanges(doc)
-        return buildDocument("office:text", styles, paraStyles, tableCellStyles, tableColStyles, graphicStyles, tracked + body.toString(), sectionStyles = sectionStyles)
+        return buildDocument("office:text", styles, paraStyles, tableCellStyles, tableColStyles, graphicStyles, tracked + body.toString(), sectionStyles = sectionStyles, listStyles = listStyles)
     }
 
     private fun serializeSpreadsheet(doc: OdfDocument.Spreadsheet, ctx: SerCtx): String {
@@ -722,7 +725,8 @@ object OdfSerializer {
         }
         sb.append("<draw:frame")
         val clip = frame.image?.let { clipString(it) }
-        getOrCreateGraphicStyle(frame.fillColor, frame.strokeColor, frame.strokeWidth, clip, graphicStyles, gradient = frame.fillGradient)?.let { sb.append(""" draw:style-name="$it"""") }
+        val imgOp = frame.image?.let { if (it.opacityPercent in 0f..99.9f) it.opacityPercent else null }
+        getOrCreateGraphicStyle(frame.fillColor, frame.strokeColor, frame.strokeWidth, clip, graphicStyles, opacity = imgOp, colorMode = frame.image?.colorMode, gradient = frame.fillGradient)?.let { sb.append(""" draw:style-name="$it"""") }
         sb.append(""" svg:x="${cm(frame.x)}" svg:y="${cm(frame.y)}"""")
         sb.append(""" svg:width="${cm(frame.width)}" svg:height="${cm(frame.height)}"""")
         frame.image?.let { appendRotation(sb, it) }
@@ -794,6 +798,7 @@ object OdfSerializer {
             sb.append(""" svg:x="${cm(shape.x)}" svg:y="${cm(shape.y)}"""")
             sb.append(""" svg:width="${cm(shape.width)}" svg:height="${cm(shape.height)}"""")
             appendShapeRotation(sb, shape.rotationDegrees)
+            if (shape is OdfShape.Rect && shape.cornerRadius > 0f) sb.append(""" draw:corner-radius="${cm(shape.cornerRadius)}"""")
         }
         sb.append(">")
         for (para in shape.text) serializeParagraph(sb, para, styles, paraStyles, "text:p")
@@ -920,7 +925,8 @@ object OdfSerializer {
         val tabStopDetails: List<OdfTabStop> = emptyList(),
         val dropCapLines: Int = 0,
         val dropCapLength: Int = 1,
-        val padding: Float = 0f
+        val padding: Float = 0f,
+        val direction: androidx.compose.ui.unit.LayoutDirection? = null
     )
 
     private data class CellStyleDef(
@@ -988,18 +994,30 @@ object OdfSerializer {
         return name
     }
 
+    private data class ListStyleDef(
+        val type: ListType, val format: String, val bullet: String, val prefix: String, val suffix: String
+    )
+
+    private fun getOrCreateListStyle(para: OdfParagraph, styles: MutableMap<String, ListStyleDef>): String {
+        val def = ListStyleDef(para.listType, para.listNumberFormat, para.listBulletChar, para.listNumberPrefix, para.listNumberSuffix)
+        for ((name, existing) in styles) if (existing == def) return name
+        val name = "L${styles.size + 1}"
+        styles[name] = def
+        return name
+    }
+
     private fun getOrCreateParaStyle(para: OdfParagraph, styles: MutableMap<String, ParaStyleDef>): String? {
         val hasProps = para.alignment != null || para.marginLeft != 0f || para.textIndent != 0f ||
             para.lineHeightPercent != null || para.borderColor != null || para.borders != null || para.backgroundColor != null ||
             para.marginTop != 0f || para.marginBottom != 0f || para.tabStops.isNotEmpty() || para.tabStopDetails.isNotEmpty() ||
             para.dropCapLines > 0 ||
-            para.padding != 0f ||
+            para.padding != 0f || para.direction != null ||
             para.marginRight != 0f || para.keepWithNext || para.keepTogether || para.widows != null || para.orphans != null
         if (!hasProps && !para.breakBeforePage) return null
         val def = ParaStyleDef(para.alignment, para.marginLeft, para.marginTop, para.marginBottom, para.textIndent,
             para.lineHeightPercent, para.borderColor, para.backgroundColor, para.breakBeforePage, para.tabStops, para.borders,
             para.marginRight, para.keepWithNext, para.keepTogether, para.widows, para.orphans,
-            para.tabStopDetails, para.dropCapLines, para.dropCapLength, para.padding)
+            para.tabStopDetails, para.dropCapLines, para.dropCapLength, para.padding, para.direction)
         for ((name, existing) in styles) if (existing == def) return name
         val name = "P${styles.size + 1}"
         styles[name] = def
@@ -1018,7 +1036,8 @@ object OdfSerializer {
         bodyContent: String,
         drawPageStyles: Map<String, DrawPageStyleDef> = emptyMap(),
         rowStyles: Map<String, Float> = emptyMap(),
-        sectionStyles: Map<String, Int> = emptyMap()
+        sectionStyles: Map<String, Int> = emptyMap(),
+        listStyles: Map<String, ListStyleDef> = emptyMap()
     ): String {
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""")
@@ -1092,6 +1111,11 @@ object OdfSerializer {
             else if (def.borderColor != null) sb.append(""" fo:border="0.5pt solid ${formatColor(def.borderColor)}"""")
             if (def.backgroundColor != null) sb.append(""" fo:background-color="${formatColor(def.backgroundColor)}"""")
             if (def.breakBefore) sb.append(""" fo:break-before="page"""")
+            when (def.direction) {
+                androidx.compose.ui.unit.LayoutDirection.Rtl -> sb.append(""" style:writing-mode="rl-tb"""")
+                androidx.compose.ui.unit.LayoutDirection.Ltr -> sb.append(""" style:writing-mode="lr-tb"""")
+                else -> {}
+            }
             val hasTabs = def.tabStopDetails.isNotEmpty() || def.tabStops.isNotEmpty()
             if (hasTabs || def.dropCapLines > 0) {
                 sb.append(">")
@@ -1123,6 +1147,22 @@ object OdfSerializer {
         }
         for ((name, cols) in sectionStyles) {
             sb.append("""<style:style style:name="$name" style:family="section"><style:section-properties><style:columns fo:column-count="$cols" fo:column-gap="0.5cm"/></style:section-properties></style:style>""")
+        }
+        // List styles (text:list-style) so numbered formats / custom bullets survive round-trip.
+        for ((name, def) in listStyles) {
+            sb.append("""<text:list-style style:name="$name">""")
+            for (lvl in 1..10) {
+                val spacing = """<style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:margin-left="${cm(18f * lvl)}" fo:text-indent="-0.635cm"/></style:list-level-properties>"""
+                if (def.type == ListType.BULLET || def.type == ListType.CHECKBOX) {
+                    sb.append("""<text:list-level-style-bullet text:level="$lvl" text:bullet-char="${esc(def.bullet.ifEmpty { "\u2022" })}">$spacing</text:list-level-style-bullet>""")
+                } else {
+                    sb.append("""<text:list-level-style-number text:level="$lvl" style:num-format="${esc(def.format)}"""")
+                    if (def.prefix.isNotEmpty()) sb.append(""" style:num-prefix="${esc(def.prefix)}"""")
+                    if (def.suffix.isNotEmpty()) sb.append(""" style:num-suffix="${esc(def.suffix)}"""")
+                    sb.append(">$spacing</text:list-level-style-number>")
+                }
+            }
+            sb.append("</text:list-style>")
         }
         // Number/date/currency data styles for cells, emitted before the cell styles that reference them. (B6)
         val dataStyleNames = HashMap<String, String>()
