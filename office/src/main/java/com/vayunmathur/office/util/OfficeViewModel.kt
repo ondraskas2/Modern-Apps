@@ -27,6 +27,10 @@ import kotlinx.coroutines.withContext
 @Serializable
 data class OfficeDocMeta(val docId: String, val title: String, val keyB64: String, val owner: Boolean, val charMode: Boolean = false)
 
+/** Ephemeral presence for a collaborator in a document (relayed encrypted; never stored). */
+@Serializable
+data class OfficePresence(val id: String, val name: String, val typing: Boolean, val ts: Long)
+
 class OfficeViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<ViewState>(ViewState.Empty)
     val state: StateFlow<ViewState> = _state
@@ -150,6 +154,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         val stored = if (newDoc is OdfDocument.TextDocument) renumberLists(newDoc) else newDoc
         _state.value = ViewState.Loaded(stored)
         _hasUnsavedChanges.value = true
+        onLocalEdit()
     }
 
     // --- Recent files ---
@@ -221,6 +226,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentDocKey = null
         currentCrdt = null
         currentCharMode = false
+        OfficeSync.stopLive()
+        _remotePresence.value = emptyList()
         autoSaveJob?.cancel()
     }
 
@@ -1855,6 +1862,77 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private val indexMutex = Mutex()
     private val syncMutex = Mutex()
 
+    private val _remotePresence = MutableStateFlow<List<OfficePresence>>(emptyList())
+    /** Other people currently in the open document (name + typing), for the presence indicator. */
+    val remotePresence: StateFlow<List<OfficePresence>> = _remotePresence.asStateFlow()
+    private var applyingRemote = false
+    private var livePushJob: Job? = null
+
+    /** Display name broadcast to collaborators (device-derived; not sensitive). */
+    private fun myName(): String = "User " + OfficeSync.deviceId.takeLast(4)
+
+    /** Called after a local edit: debounced live push + a "typing" presence ping (online docs only). */
+    private fun onLocalEdit() {
+        val docId = currentDocId ?: return
+        val key = currentDocKey ?: return
+        if (applyingRemote) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                OfficeSync.sendPresence(docId, key, syncJson.encodeToString(
+                    OfficePresence(OfficeSync.deviceId, myName(), typing = true, ts = System.currentTimeMillis())
+                ))
+            }
+        }
+        livePushJob?.cancel()
+        livePushJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(400)
+            runCatching { OfficeSync.init(getApplication()); syncDoc(docId, key) }
+        }
+    }
+
+    /** Subscribes to the live channel for [docId], applying incoming ops/presence in real time. */
+    private fun startLive(docId: String, key: ByteArray) {
+        OfficeSync.startLive(viewModelScope, docId) { raw -> handleLive(raw, docId, key) }
+    }
+
+    private fun handleLive(raw: String, docId: String, key: ByteArray) {
+        val msg = OfficeSync.parseLive(raw) ?: return
+        when (msg.t) {
+            "actions" -> viewModelScope.launch(Dispatchers.IO) {
+                syncMutex.withLock {
+                    val crdt = currentCrdt ?: return@withLock
+                    var changed = false
+                    for (blob in msg.actions) {
+                        val plain = OfficeSync.decrypt(key, blob) ?: continue
+                        val ops = runCatching { syncJson.decodeFromString<List<DocumentCrdt.CrdtElement>>(plain) }.getOrNull() ?: continue
+                        crdt.apply(ops); changed = true
+                    }
+                    if (changed) {
+                        val ds = DataStoreUtils.getInstance(getApplication())
+                        ds.setLong("crdtCursor:$docId", msg.seq.toLong())
+                        saveCrdt(ds, docId, crdt)
+                        val merged = crdt.render()
+                        if (merged != currentDocCells()) {
+                            val doc = rebuildDoc(merged)
+                            if (doc != null) withContext(Dispatchers.Main) {
+                                applyingRemote = true
+                                updateDocument(doc)
+                                applyingRemote = false
+                            }
+                        }
+                    }
+                }
+            }
+            "presence" -> {
+                val plain = OfficeSync.decrypt(key, msg.data) ?: return
+                val p = runCatching { syncJson.decodeFromString<OfficePresence>(plain) }.getOrNull() ?: return
+                if (p.id == OfficeSync.deviceId) return
+                val now = System.currentTimeMillis()
+                _remotePresence.value = _remotePresence.value.filter { it.id != p.id && now - it.ts < 8000 } + p.copy(ts = now)
+            }
+        }
+    }
+
     /** This device's sync id. Empty until [initSync] has run. */
     val syncDeviceId: String get() = OfficeSync.deviceId
 
@@ -1989,6 +2067,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                         saveIndex(ds, index.values.toList())
                     }
                 }
+                startLive(docId, key)
                 OfficeSync.sendInvite(recipientId, docId, key, title, charMode)
             }.getOrDefault(false)
             withContext(Dispatchers.Main) { onResult(ok) }
@@ -2036,6 +2115,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 currentCrdt = crdt
                 currentCharMode = meta.charMode
+                startLive(meta.docId, key)
             }
         }
     }

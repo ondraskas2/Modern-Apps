@@ -6,7 +6,18 @@ import com.vayunmathur.e2ee.E2eeIdentity
 import com.vayunmathur.e2ee.E2eeKeyStore
 import com.vayunmathur.library.network.NetworkClient
 import com.vayunmathur.library.util.DataStoreUtils
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -117,6 +128,54 @@ object OfficeSync {
     suspend fun securityCode(peerPublicKeyPem: ByteArray): String? =
         runCatching { E2ee.securityCode(identity.publicKeyPem, peerPublicKeyPem) }.getOrNull()
 
+    // --- Live sync + presence over WebSocket (receive live; send presence) ---
+
+    private const val WS_URL = "wss://findfamily.cc/office/ws"
+    private val wsClient by lazy { HttpClient(CIO) { install(WebSockets) } }
+    @Volatile private var wsSession: DefaultClientWebSocketSession? = null
+    private var liveJob: Job? = null
+    private var liveChannel: String? = null
+
+    /**
+     * Opens a live subscription to [channel] and invokes [onMessage] for each server message
+     * (raw JSON; parse with [parseLive]). Ops still go out over HTTP [appendDocActions]; the server
+     * fans them out here in real time. Reconnection is caller-driven (call again).
+     */
+    fun startLive(scope: CoroutineScope, channel: String, onMessage: (String) -> Unit) {
+        if (liveChannel == channel && liveJob?.isActive == true) return
+        stopLive()
+        liveChannel = channel
+        liveJob = scope.launch(Dispatchers.IO) {
+            runCatching {
+                wsClient.webSocket(urlString = WS_URL) {
+                    wsSession = this
+                    send(Frame.Text(json.encodeToString(SubMsg("sub", channel))))
+                    for (frame in incoming) {
+                        if (frame is Frame.Text) onMessage(frame.readText())
+                    }
+                }
+            }
+            wsSession = null
+        }
+    }
+
+    fun stopLive() {
+        liveJob?.cancel(); liveJob = null; wsSession = null; liveChannel = null
+    }
+
+    /** Sends ephemeral presence (encrypted with the doc key) over the live socket, if connected. */
+    suspend fun sendPresence(channel: String, key: ByteArray, plaintext: String) {
+        val data = Base64.encode(E2ee.aesEncrypt(key, plaintext.encodeToByteArray()))
+        runCatching { wsSession?.send(Frame.Text(json.encodeToString(PresenceMsg("presence", channel, data)))) }
+    }
+
+    /** Parses a raw live message. */
+    fun parseLive(raw: String): LiveMsg? = runCatching { json.decodeFromString<LiveMsg>(raw) }.getOrNull()
+
+    /** Decrypts one AES blob with the doc key (for actions or presence data). */
+    fun decrypt(key: ByteArray, b64: String): String? =
+        runCatching { E2ee.aesDecrypt(key, Base64.decode(b64)).decodeToString() }.getOrNull()
+
     // --- Generic relay primitives ---
 
     private suspend fun append(channel: String, blobs: List<String>): Int? {
@@ -165,4 +224,16 @@ object OfficeSync {
 
     class InvitesResult(val invites: List<Invite>, val seq: Int)
     class DocActionsResult(val items: List<String>, val seq: Int)
+
+    @Serializable private data class SubMsg(val t: String, val channel: String)
+    @Serializable private data class PresenceMsg(val t: String, val channel: String, val data: String)
+
+    /** A live server message: `t` = "actions" (with [actions]+[seq]) or "presence" (with [data]). */
+    @Serializable data class LiveMsg(
+        val t: String = "",
+        val channel: String = "",
+        val actions: List<String> = emptyList(),
+        val seq: Int = 0,
+        val data: String = "",
+    )
 }

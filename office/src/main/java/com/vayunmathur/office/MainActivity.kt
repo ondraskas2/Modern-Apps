@@ -63,6 +63,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.zIndex
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -747,6 +748,20 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
             }
         ) { paddingValues ->
             Box(Modifier.padding(paddingValues)) {
+                val presence by viewModel.remotePresence.collectAsState()
+                if (presence.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.align(Alignment.TopCenter).zIndex(1f).fillMaxWidth()
+                    ) {
+                        Text(
+                            presence.joinToString(", ") { it.name + if (it.typing) " (typing…)" else "" }
+                                .let { "Online: $it" },
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                }
                 when (document) {
                     is OdfDocument.TextDocument -> TextDocumentView(doc = document, searchQuery = searchQuery, fontSizeMultiplier = fontSizeMultiplier, listState = listState,
                         onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge; activeTableBlock = -1; activeTableRow = -1; activeTableCol = -1 },
