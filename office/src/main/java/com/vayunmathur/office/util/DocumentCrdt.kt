@@ -93,46 +93,58 @@ class DocumentCrdt(
         val n = oldLines.size
         val m = newLines.size
 
-        // LCS length DP.
-        val dp = Array(n + 1) { IntArray(m + 1) }
-        for (i in n - 1 downTo 0) {
-            for (j in m - 1 downTo 0) {
-                dp[i][j] = if (oldLines[i] == newLines[j]) dp[i + 1][j + 1] + 1
+        // Trim the common prefix/suffix so the (expensive) LCS runs only over the changed middle.
+        // This makes a typical single-character edit O(1)-ish instead of O(n*m).
+        var pre = 0
+        while (pre < n && pre < m && oldLines[pre] == newLines[pre]) pre++
+        var suf = 0
+        while (suf < (n - pre) && suf < (m - pre) && oldLines[n - 1 - suf] == newLines[m - 1 - suf]) suf++
+
+        val oldMid = oldLines.subList(pre, n - suf)
+        val newMid = newLines.subList(pre, m - suf)
+        val a = oldMid.size
+        val b = newMid.size
+
+        // LCS over the middle only.
+        val dp = Array(a + 1) { IntArray(b + 1) }
+        for (i in a - 1 downTo 0) {
+            for (j in b - 1 downTo 0) {
+                dp[i][j] = if (oldMid[i] == newMid[j]) dp[i + 1][j + 1] + 1
                 else maxOf(dp[i + 1][j], dp[i][j + 1])
             }
         }
-        // Backtrack to align old<->new matches.
-        val newToOld = HashMap<Int, Int>()
+        val newMidToOldMid = HashMap<Int, Int>()
         run {
             var i = 0; var j = 0
-            while (i < n && j < m) {
+            while (i < a && j < b) {
                 when {
-                    oldLines[i] == newLines[j] -> { newToOld[j] = i; i++; j++ }
+                    oldMid[i] == newMid[j] -> { newMidToOldMid[j] = i; i++; j++ }
                     dp[i + 1][j] >= dp[i][j + 1] -> i++
                     else -> j++
                 }
             }
         }
-        val matchedOld = newToOld.values.toHashSet()
+        val matchedOldMid = newMidToOldMid.values.toHashSet()
 
         val ops = ArrayList<CrdtElement>()
-        // Deletions: any live element not matched to a new line becomes a tombstone.
-        for (idx in oldLines.indices) {
-            if (idx !in matchedOld) {
-                val e = live[idx]
+        // Deletions: middle old lines not matched become tombstones (prefix/suffix are untouched).
+        for (idx in oldMid.indices) {
+            if (idx !in matchedOldMid) {
+                val e = live[pre + idx]
                 if (!e.deleted) {
                     e.deleted = true
                     ops.add(e.copy())
                 }
             }
         }
-        // Insertions: walk new lines; new lines are inserted after the running "left" element.
-        var leftLamport = -1L
-        var leftDevice = ""
-        for (nj in newLines.indices) {
-            val oIdx = newToOld[nj]
+        // Insertions: walk the new middle; inserts chain after the running "left" element, which
+        // starts at the last prefix element (or head).
+        var leftLamport = if (pre > 0) live[pre - 1].lamport else -1L
+        var leftDevice = if (pre > 0) live[pre - 1].device else ""
+        for (nj in newMid.indices) {
+            val oIdx = newMidToOldMid[nj]
             if (oIdx != null) {
-                val e = live[oIdx]
+                val e = live[pre + oIdx]
                 leftLamport = e.lamport; leftDevice = e.device
             } else {
                 clock++
@@ -140,7 +152,7 @@ class DocumentCrdt(
                     lamport = clock, device = device,
                     originLamport = if (leftLamport < 0) -1 else leftLamport,
                     originDevice = leftDevice,
-                    content = newLines[nj],
+                    content = newMid[nj],
                 )
                 elements[key(clock, device)] = e
                 ops.add(e.copy())

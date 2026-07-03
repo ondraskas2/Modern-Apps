@@ -1892,7 +1892,12 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Subscribes to the live channel for [docId], applying incoming ops/presence in real time. */
     private fun startLive(docId: String, key: ByteArray) {
-        OfficeSync.startLive(viewModelScope, docId) { raw -> handleLive(raw, docId, key) }
+        OfficeSync.startLive(
+            viewModelScope,
+            docId,
+            onConnected = { runCatching { syncDoc(docId, key) } }, // catch up on (re)connect
+            onMessage = { raw -> handleLive(raw, docId, key) },
+        )
     }
 
     private fun handleLive(raw: String, docId: String, key: ByteArray) {

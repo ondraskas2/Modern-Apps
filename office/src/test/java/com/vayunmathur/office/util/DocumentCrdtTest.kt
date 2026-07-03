@@ -95,6 +95,18 @@ class DocumentCrdtTest {
     }
 
     @Test
+    fun single_edit_in_large_doc_is_minimal() {
+        val a = DocumentCrdt("A")
+        val base = (1..1000).map { "line$it" }
+        a.update(base)
+        val edited = base.toMutableList().also { it[500] = "line500-edited" }
+        val ops = a.update(edited)
+        // Only the changed line: one tombstone + one insert (prefix/suffix trimmed).
+        assertEquals(2, ops.size)
+        assertEquals(edited, a.render())
+    }
+
+    @Test
     fun codec_roundtrips_flat_odf() {
         val xml = "<office:document><body><text:p>Hello</text:p><text:p/></body></office:document>"
         val lines = OfficeCrdtCodec.toLines(xml)

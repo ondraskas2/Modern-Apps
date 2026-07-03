@@ -17,6 +17,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -137,25 +139,38 @@ object OfficeSync {
     private var liveChannel: String? = null
 
     /**
-     * Opens a live subscription to [channel] and invokes [onMessage] for each server message
-     * (raw JSON; parse with [parseLive]). Ops still go out over HTTP [appendDocActions]; the server
-     * fans them out here in real time. Reconnection is caller-driven (call again).
+     * Opens a live subscription to [channel] with **automatic reconnect** (exponential backoff).
+     * [onConnected] runs after each (re)subscribe so the caller can HTTP-pull anything missed while
+     * disconnected; [onMessage] receives each server message (raw JSON; parse with [parseLive]).
      */
-    fun startLive(scope: CoroutineScope, channel: String, onMessage: (String) -> Unit) {
+    fun startLive(
+        scope: CoroutineScope,
+        channel: String,
+        onConnected: suspend () -> Unit,
+        onMessage: (String) -> Unit,
+    ) {
         if (liveChannel == channel && liveJob?.isActive == true) return
         stopLive()
         liveChannel = channel
         liveJob = scope.launch(Dispatchers.IO) {
-            runCatching {
-                wsClient.webSocket(urlString = WS_URL) {
-                    wsSession = this
-                    send(Frame.Text(json.encodeToString(SubMsg("sub", channel))))
-                    for (frame in incoming) {
-                        if (frame is Frame.Text) onMessage(frame.readText())
+            var backoff = 1000L
+            while (isActive) {
+                runCatching {
+                    wsClient.webSocket(urlString = WS_URL) {
+                        wsSession = this
+                        send(Frame.Text(json.encodeToString(SubMsg("sub", channel))))
+                        backoff = 1000L
+                        runCatching { onConnected() } // catch up on anything missed
+                        for (frame in incoming) {
+                            if (frame is Frame.Text) onMessage(frame.readText())
+                        }
                     }
                 }
+                wsSession = null
+                if (!isActive) break
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(15_000)
             }
-            wsSession = null
         }
     }
 
