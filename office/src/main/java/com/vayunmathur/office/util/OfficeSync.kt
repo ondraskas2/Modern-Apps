@@ -96,9 +96,9 @@ object OfficeSync {
     // --- Inbox channel (invites encrypted to the recipient's public key) ---
 
     /** Shares a document by dropping an encrypted invite into the recipient's inbox channel. */
-    suspend fun sendInvite(recipientId: String, docId: String, key: ByteArray, title: String): Boolean {
+    suspend fun sendInvite(recipientId: String, docId: String, key: ByteArray, title: String, charMode: Boolean): Boolean {
         val peerPem = getKey(recipientId) ?: return false
-        val invite = json.encodeToString(Invite(docId, Base64.encode(key), title))
+        val invite = json.encodeToString(Invite(docId, Base64.encode(key), title, charMode))
         val blob = Base64.encode(E2ee.sealTo(peerPem, invite.encodeToByteArray()))
         return append("inbox:$recipientId", listOf(blob)) != null
     }
@@ -161,7 +161,7 @@ object OfficeSync {
     @Serializable data class DocAction(val type: String = "snapshot", val flat: String = "")
 
     /** An invite delivered via a device's inbox channel: everything a new member needs. */
-    @Serializable data class Invite(val docId: String, val key: String, val title: String)
+    @Serializable data class Invite(val docId: String, val key: String, val title: String, val charMode: Boolean = false)
 
     class InvitesResult(val invites: List<Invite>, val seq: Int)
     class DocActionsResult(val items: List<String>, val seq: Int)

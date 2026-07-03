@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
 
 /** Local metadata for a document in the online folder (title/key stay client-side; never sent in the clear). */
 @Serializable
-data class OfficeDocMeta(val docId: String, val title: String, val keyB64: String, val owner: Boolean)
+data class OfficeDocMeta(val docId: String, val title: String, val keyB64: String, val owner: Boolean, val charMode: Boolean = false)
 
 class OfficeViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<ViewState>(ViewState.Empty)
@@ -198,6 +198,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentDocId = onlineDocId
         currentDocKey = onlineDocKey
         currentCrdt = null
+        currentCharMode = false
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val doc = DocumentImporter.open(getApplication(), uri, fileName)
@@ -219,6 +220,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentDocId = null
         currentDocKey = null
         currentCrdt = null
+        currentCharMode = false
         autoSaveJob?.cancel()
     }
 
@@ -227,7 +229,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     // --- Create new documents ---
 
     fun createNewTextDocument() {
-        currentDocId = null; currentDocKey = null; currentCrdt = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.TextDocument(
@@ -241,7 +243,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewSpreadsheet() {
-        currentDocId = null; currentDocKey = null; currentCrdt = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val rows = (0 until 10).map { OdfRow(List(5) { OdfCell(text = "") }) }
@@ -256,7 +258,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createNewPresentation() {
-        currentDocId = null; currentDocKey = null; currentCrdt = null
+        currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.Presentation(
@@ -1848,6 +1850,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private var currentDocId: String? = null
     private var currentDocKey: ByteArray? = null
     private var currentCrdt: DocumentCrdt? = null
+    private var currentCharMode: Boolean = false
     private val syncJson = Json { ignoreUnknownKeys = true }
     private val indexMutex = Mutex()
     private val syncMutex = Mutex()
@@ -1889,7 +1892,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                         val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
                         for (inv in res.invites) {
                             if (!index.containsKey(inv.docId)) {
-                                index[inv.docId] = OfficeDocMeta(inv.docId, inv.title, inv.key, owner = false)
+                                index[inv.docId] = OfficeDocMeta(inv.docId, inv.title, inv.key, owner = false, charMode = inv.charMode)
                             }
                         }
                         saveIndex(ds, index.values.toList())
@@ -1922,12 +1925,27 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
      * Two-way CRDT sync for the open online document: diff local edits into ops and push them, then
      * pull + merge remote ops. If the merge changed the document, re-render it into the editor.
      */
+    /** Projects the open document to CRDT cells: character cells for eligible text docs, else XML lines. */
+    private fun currentDocCells(): List<String> {
+        val doc = (_state.value as? ViewState.Loaded)?.document
+        return if (currentCharMode && doc is OdfDocument.TextDocument) TextDocCodec.toCells(doc)
+        else OfficeCrdtCodec.toLines(exportFlat())
+    }
+
+    /** Rebuilds a document from merged cells (char cells → model directly; else XML lines → parse). */
+    private fun rebuildDoc(cells: List<String>): OdfDocument? {
+        val base = (_state.value as? ViewState.Loaded)?.document
+        return if (currentCharMode && base is OdfDocument.TextDocument)
+            runCatching { TextDocCodec.fromCells(cells, base) }.getOrNull()
+        else parseFlat(OfficeCrdtCodec.fromLines(cells))
+    }
+
     private suspend fun syncDoc(docId: String, key: ByteArray) = syncMutex.withLock {
         val ds = DataStoreUtils.getInstance(getApplication())
         val crdt = currentCrdt ?: (loadCrdt(ds, docId) ?: DocumentCrdt(OfficeSync.deviceId)).also { currentCrdt = it }
         val cursor = ds.getLong("crdtCursor:$docId")?.toInt() ?: 0
-        val localLines = OfficeCrdtCodec.toLines(exportFlat())
-        val localOps = crdt.update(localLines)
+        val localCells = currentDocCells()
+        val localOps = crdt.update(localCells)
         if (localOps.isNotEmpty()) {
             OfficeSync.appendDocActions(docId, key, listOf(syncJson.encodeToString(localOps)))
         }
@@ -1939,9 +1957,9 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
         ds.setLong("crdtCursor:$docId", pulled.seq.toLong())
         saveCrdt(ds, docId, crdt)
-        val mergedLines = crdt.render()
-        if (mergedLines != localLines) {
-            val doc = parseFlat(OfficeCrdtCodec.fromLines(mergedLines))
+        val mergedCells = crdt.render()
+        if (mergedCells != localCells) {
+            val doc = rebuildDoc(mergedCells)
             if (doc != null) withContext(Dispatchers.Main) { updateDocument(doc) }
         }
     }
@@ -1955,20 +1973,23 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
             val ok = runCatching {
                 OfficeSync.init(getApplication())
                 val ds = DataStoreUtils.getInstance(getApplication())
-                val title = (_state.value as? ViewState.Loaded)?.document?.title ?: "Document"
+                val doc = (_state.value as? ViewState.Loaded)?.document
+                val title = doc?.title ?: "Document"
+                val charMode = doc != null && TextDocCodec.isEligible(doc)
                 val docId = currentDocId ?: OfficeSync.newDocumentId()
                 val key = currentDocKey ?: OfficeSync.newDocumentKey()
                 currentDocId = docId
                 currentDocKey = key
+                currentCharMode = charMode
                 syncDoc(docId, key)
                 indexMutex.withLock {
                     val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
                     if (!index.containsKey(docId)) {
-                        index[docId] = OfficeDocMeta(docId, title, Base64.encode(key), owner = true)
+                        index[docId] = OfficeDocMeta(docId, title, Base64.encode(key), owner = true, charMode = charMode)
                         saveIndex(ds, index.values.toList())
                     }
                 }
-                OfficeSync.sendInvite(recipientId, docId, key, title)
+                OfficeSync.sendInvite(recipientId, docId, key, title, charMode)
             }.getOrDefault(false)
             withContext(Dispatchers.Main) { onResult(ok) }
         }
@@ -1999,7 +2020,13 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 ds.setLong("crdtCursor:${meta.docId}", pulled.seq.toLong())
                 saveCrdt(ds, meta.docId, crdt)
-                val flat = OfficeCrdtCodec.fromLines(crdt.render())
+                val flat = if (meta.charMode) {
+                    val base = OdfDocument.TextDocument(title = meta.title, content = emptyList())
+                    val doc = runCatching { TextDocCodec.fromCells(crdt.render(), base) }.getOrNull() ?: base
+                    OdfSerializer.serializeFlat(doc)
+                } else {
+                    OfficeCrdtCodec.fromLines(crdt.render())
+                }
                 val ctx: Context = getApplication()
                 val safeTitle = meta.title.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "document" }
                 val file = java.io.File(ctx.cacheDir, "online_${meta.docId}.fodt")
@@ -2008,6 +2035,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                     loadDocument(Uri.fromFile(file), "$safeTitle.fodt", meta.docId, key)
                 }
                 currentCrdt = crdt
+                currentCharMode = meta.charMode
             }
         }
     }
