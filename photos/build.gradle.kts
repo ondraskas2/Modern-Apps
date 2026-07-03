@@ -9,6 +9,9 @@ android {
     }
     androidResources {
         noCompress += "tflite"
+        // MobileCLIP .onnx encoders are already compressed; store them
+        // uncompressed so ONNX Runtime can read them directly from assets.
+        noCompress += "onnx"
     }
     packaging {
         jniLibs {
@@ -28,6 +31,10 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.mediapipe.tasks.vision)
     implementation(libs.litert)
+    // MobileCLIP semantic image search runs on ONNX Runtime (MIT, FOSS, no Play
+    // Services / no ML Kit). The native .so already ships via :library:ocr, but
+    // this module needs its own compile dependency to call the ORT API directly.
+    implementation(libs.onnxruntime.android)
 
     implementRoom(libs)
 

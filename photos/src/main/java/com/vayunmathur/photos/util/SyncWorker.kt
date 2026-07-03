@@ -68,6 +68,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         // inert if its data/model assets are missing.
         OCRWorker.enqueue(applicationContext)
         FaceWorker.enqueue(applicationContext)
+        ClipWorker.enqueue(applicationContext)
         
         dataStore.setLong("last_photos_generation", currentGeneration)
         
@@ -404,6 +405,141 @@ private fun decodeForOcr(context: Context, uri: Uri): Bitmap? {
 private const val OCR_INTER_ITEM_DELAY_MS = 250L
 private const val MIN_OCR_DIM = 64
 private const val OCR_DECODE_MAX = 1280
+
+class ClipWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): WorkResult = withContext(Dispatchers.IO) {
+        clipMutex.withLock {
+            setForeground(createForegroundInfo())
+            val database = applicationContext.buildDatabase<PhotoDatabase>()
+            runClipIndexing(database, applicationContext)
+            WorkResult.success()
+        }
+    }
+
+    private fun createForegroundInfo(): ForegroundInfo = applicationContext.syncForegroundInfo(
+        notificationId = 104,
+        channelId = "clip_worker",
+        channelName = "Photo Search Indexing",
+        title = "Understanding Photos",
+        text = "Indexing photos for visual search on-device...",
+    )
+
+    companion object {
+        const val WORK_NAME = "ClipWorker"
+        private val clipMutex = Mutex()
+
+        fun enqueue(context: Context) {
+            val request = OneTimeWorkRequestBuilder<ClipWorker>().build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request,
+            )
+        }
+    }
+}
+
+/**
+ * Embed any not-yet-embedded library photos with the on-device MobileCLIP image
+ * encoder and store the L2-normalised vector on the [Photo] row, so semantic
+ * search can cosine-compare them against the query's text embedding — all
+ * on-device (see [ClipEmbedder]).
+ *
+ * Mirrors [runOCR]: incremental (only un-embedded, non-video photos), one image
+ * at a time, downscaled off the UI thread, throttled between items to keep
+ * battery/CPU use low, and marks each photo scanned regardless of outcome so we
+ * never retry it forever. Inert (no crash) if the model assets are missing.
+ */
+suspend fun runClipIndexing(database: PhotoDatabase, context: Context) = coroutineScope {
+    val photoDao = database.photoDao()
+    val dataStore = DataStoreUtils.getInstance(context)
+
+    // Feature is inert without the model assets (see ClipEmbedder docs).
+    if (!ClipEmbedder.assetsPresent(context)) {
+        Log.w("ClipWorker", "MobileCLIP models missing; skipping semantic indexing")
+        return@coroutineScope
+    }
+
+    // If the model/version changed, old embeddings are incompatible: clear them
+    // and re-embed every photo so they land in the new shared space. Photo rows
+    // themselves (OCR text, faces) are untouched.
+    val storedVersion = dataStore.getLong("clip_embedder_version") ?: 0L
+    if (storedVersion != ClipEmbedder.EMBEDDER_VERSION.toLong()) {
+        photoDao.resetClipScanned()
+        dataStore.setLong("clip_embedder_version", ClipEmbedder.EMBEDDER_VERSION.toLong())
+    }
+
+    val photos = photoDao.getUnscannedForClip().sortedByDescending { it.date }
+    if (photos.isEmpty()) return@coroutineScope
+
+    // Load the encoders once. If they fail to load, return WITHOUT marking photos
+    // scanned so they get processed once the models are usable.
+    if (!ClipEmbedder.isAvailable(context)) {
+        Log.w("ClipWorker", "MobileCLIP failed to load; skipping semantic indexing")
+        return@coroutineScope
+    }
+
+    try {
+        for (photo in photos) {
+            ensureActive()
+
+            val embedding = try {
+                val bitmap = decodeForClip(context, photo.uri.toUri())
+                if (bitmap != null) {
+                    try {
+                        ClipEmbedder.imageEmbedding(context, bitmap)
+                    } finally {
+                        bitmap.recycle()
+                    }
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e("ClipWorker", "Error embedding photo ${photo.id}", e)
+                null
+            }
+
+            val bytes = embedding?.let { ClipEmbedder.floatsToBytes(it) }
+            // Store result and mark scanned regardless of outcome (mirrors OCR).
+            photoDao.upsertAll(listOf(photo.copy(clipEmbedding = bytes, clipScanned = true)))
+
+            // Short pause between images keeps sustained CPU/battery use low.
+            delay(CLIP_INTER_ITEM_DELAY_MS)
+        }
+    } finally {
+        // Release the sessions so we don't hold model memory while idle; search
+        // re-loads them on demand (a one-time cost on the first query).
+        ClipEmbedder.close()
+    }
+}
+
+/** Decode a downscaled software bitmap for CLIP (long side capped at [CLIP_DECODE_MAX]). */
+private fun decodeForClip(context: Context, uri: Uri): Bitmap? {
+    return try {
+        val source = ImageDecoder.createSource(context.contentResolver, uri)
+        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.isMutableRequired = false
+            val maxDim = maxOf(info.size.width, info.size.height)
+            if (maxDim > CLIP_DECODE_MAX) {
+                val scale = CLIP_DECODE_MAX.toFloat() / maxDim
+                decoder.setTargetSize(
+                    (info.size.width * scale).toInt().coerceAtLeast(1),
+                    (info.size.height * scale).toInt().coerceAtLeast(1),
+                )
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("ClipWorker", "Failed to decode $uri for CLIP", e)
+        null
+    }
+}
+
+private const val CLIP_INTER_ITEM_DELAY_MS = 250L
+// The encoder centre-crops to 256; decoding a bit larger preserves detail
+// without wasting work on full-resolution pixels.
+private const val CLIP_DECODE_MAX = 512
 
 class FaceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 

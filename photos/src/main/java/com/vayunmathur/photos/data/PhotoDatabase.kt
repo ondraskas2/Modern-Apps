@@ -50,6 +50,26 @@ interface PhotoDao {
     @Query("SELECT * FROM Photo WHERE faceScanned = 0 AND isTrashed = 0 AND duration IS NULL")
     suspend fun getUnscannedForFaces(): List<Photo>
 
+    /** Not-yet-CLIP-embedded images (skips videos and trashed items). */
+    @Query("SELECT * FROM Photo WHERE clipScanned = 0 AND isTrashed = 0 AND duration IS NULL")
+    suspend fun getUnscannedForClip(): List<Photo>
+
+    /** Photos already embedded by MobileCLIP (numerator of the progress bar). */
+    @Query("SELECT count(*) FROM Photo WHERE clipScanned = 1 AND isTrashed = 0 AND duration IS NULL")
+    fun getClipCountFlow(): Flow<Int>
+
+    /** Photos that count toward CLIP embedding (denominator of the progress bar). */
+    @Query("SELECT count(*) FROM Photo WHERE isTrashed = 0 AND duration IS NULL")
+    fun getClipTargetCountFlow(): Flow<Int>
+
+    /** Lightweight (id, embedding) rows for semantic search; excludes trashed. */
+    @Query("SELECT id, clipEmbedding FROM Photo WHERE clipEmbedding IS NOT NULL AND isTrashed = 0")
+    suspend fun getClipEmbeddings(): List<PhotoEmbedding>
+
+    /** Wipe every stored CLIP embedding (used when the model/version changes). */
+    @Query("UPDATE Photo SET clipEmbedding = NULL, clipScanned = 0")
+    suspend fun resetClipScanned()
+
     /** Photos that count toward face indexing (denominator of the progress bar). */
     @Query("SELECT count(*) FROM Photo WHERE isTrashed = 0 AND duration IS NULL")
     fun getFaceTargetCountFlow(): Flow<Int>
@@ -62,13 +82,19 @@ interface PhotoDao {
     suspend fun resetFaceScanned()
 }
 
-@Database(entities = [Photo::class, Person::class, PhotoFace::class], version = 9, exportSchema = false)
+/** Lightweight projection of a photo's CLIP embedding for in-memory search. */
+data class PhotoEmbedding(
+    val id: Long,
+    val clipEmbedding: ByteArray,
+)
+
+@Database(entities = [Photo::class, Person::class, PhotoFace::class], version = 10, exportSchema = false)
 abstract class PhotoDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
     abstract fun faceDao(): FaceDao
 
     companion object : com.vayunmathur.library.util.DatabaseMigrations {
-        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
     }
 }
 
@@ -129,4 +155,13 @@ val MIGRATION_8_9 = Migration(8, 9) {
     it.execSQL("ALTER TABLE Photo ADD COLUMN ocrText TEXT")
     it.execSQL("ALTER TABLE Photo ADD COLUMN ocrScanned INTEGER NOT NULL DEFAULT 0")
     it.execSQL("DROP TABLE IF EXISTS PhotoOCR")
+}
+
+val MIGRATION_9_10 = Migration(9, 10) {
+    // Add on-device MobileCLIP semantic search: store each photo's L2-normalised
+    // image embedding (BLOB) plus a clipScanned flag that mirrors ocrScanned so
+    // the CLIP worker only embeds new photos. OCR text and faces are untouched.
+    // SQL mirrors Room's generated schema exactly so schema validation passes.
+    it.execSQL("ALTER TABLE Photo ADD COLUMN clipEmbedding BLOB")
+    it.execSQL("ALTER TABLE Photo ADD COLUMN clipScanned INTEGER NOT NULL DEFAULT 0")
 }

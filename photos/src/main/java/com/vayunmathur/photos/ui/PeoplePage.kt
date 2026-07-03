@@ -60,7 +60,6 @@ fun PeoplePage(
     val showProgress = target > 0 && (indexing || scanned < target)
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.label_people)) }) },
         bottomBar = { NavigationBar(Route.People, backStack) },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {

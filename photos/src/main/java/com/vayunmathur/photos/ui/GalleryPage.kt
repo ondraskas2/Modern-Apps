@@ -103,6 +103,8 @@ fun GalleryPage(
     val searchResults by galleryViewModel.searchResults.collectAsState()
     val ocrCount by galleryViewModel.ocrCount.collectAsState()
     val ocrTargetCount by galleryViewModel.ocrTargetCount.collectAsState()
+    val clipCount by galleryViewModel.clipCount.collectAsState()
+    val clipTargetCount by galleryViewModel.clipTargetCount.collectAsState()
     var searchActive by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -251,15 +253,29 @@ fun GalleryPage(
                                 }
                             }
                         } else {
-                            // Show OCR processing progress
+                            // Show on-device indexing progress (text + visual).
                             if (ocrTargetCount > 0) {
                                 val pct = if (ocrTargetCount > 0) (ocrCount * 100 / ocrTargetCount) else 0
                                 ListItem(
                                     headlineContent = { Text("$pct% of photos processed") },
-                                    supportingContent = { Text("$ocrCount / $ocrTargetCount photos indexed for search") },
+                                    supportingContent = { Text("$ocrCount / $ocrTargetCount photos indexed for text search") },
                                     leadingContent = {
                                         CircularProgressIndicator(
                                             progress = { ocrCount.toFloat() / ocrTargetCount },
+                                            modifier = Modifier.size(40.dp),
+                                            strokeWidth = 4.dp
+                                        )
+                                    }
+                                )
+                            }
+                            if (clipTargetCount > 0) {
+                                val pct = if (clipTargetCount > 0) (clipCount * 100 / clipTargetCount) else 0
+                                ListItem(
+                                    headlineContent = { Text("$pct% of photos processed") },
+                                    supportingContent = { Text("$clipCount / $clipTargetCount photos indexed for visual search") },
+                                    leadingContent = {
+                                        CircularProgressIndicator(
+                                            progress = { clipCount.toFloat() / clipTargetCount },
                                             modifier = Modifier.size(40.dp),
                                             strokeWidth = 4.dp
                                         )

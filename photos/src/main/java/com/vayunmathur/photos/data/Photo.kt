@@ -35,4 +35,11 @@ data class Photo(
     // True once this photo has been through OCR (mirrors [faceScanned]); keeps
     // the OCR worker from re-processing the same photo on every sync.
     val ocrScanned: Boolean = false,
+    // L2-normalised MobileCLIP image embedding (float[] packed little-endian as
+    // bytes), null until scanned. Semantic search cosine-compares the query's
+    // text embedding against these. Videos and un-scanned photos stay null.
+    val clipEmbedding: ByteArray? = null,
+    // True once this photo has been through the MobileCLIP image encoder
+    // (mirrors [ocrScanned]); keeps the CLIP worker from re-embedding on sync.
+    val clipScanned: Boolean = false,
 ) : DatabaseItem

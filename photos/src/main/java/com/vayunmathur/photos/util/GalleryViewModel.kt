@@ -71,6 +71,14 @@ class GalleryViewModel(
     val ocrTargetCount: StateFlow<Int> = photoDao.getOCRTargetCountFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    /** Photos already embedded by MobileCLIP for semantic search (progress numerator). */
+    val clipCount: StateFlow<Int> = photoDao.getClipCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** Photos that count toward semantic indexing (progress denominator). */
+    val clipTargetCount: StateFlow<Int> = photoDao.getClipTargetCountFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
     /** True while the face-grouping worker is actively indexing. */
     val faceIndexing: StateFlow<Boolean> = WorkManager.getInstance(application)
         .getWorkInfosForUniqueWorkFlow(FaceWorker.WORK_NAME)
@@ -131,17 +139,73 @@ class GalleryViewModel(
                         return@collectLatest
                     }
                     val results = withContext(Dispatchers.IO) {
-                        try {
-                            photoDao.searchPhotos(query)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "searchPhotos failed", e)
-                            emptyList()
-                        }
+                        combinedSearch(query)
                     }
-                    Log.d(TAG, "Search '$query*' returned ${results.size} photos")
+                    Log.d(TAG, "Search '$query' returned ${results.size} photos")
                     _searchResults.value = results
                 }
         }
+    }
+
+    /**
+     * Combine the two on-device search signals into one result set for the search
+     * menu:
+     *  - OCR/name search: the existing case-insensitive LIKE over recognised text
+     *    and file name.
+     *  - Semantic search: encode the query with the MobileCLIP text encoder and
+     *    cosine-compare it against stored image embeddings (see [ClipEmbedder]);
+     *    keep matches at/above [SEMANTIC_THRESHOLD], capped to the top
+     *    [MAX_SEMANTIC_RESULTS].
+     *
+     * Results are de-duplicated by photo id and ranked by a combined score:
+     * the semantic cosine similarity plus a fixed [OCR_MATCH_BOOST] when the
+     * photo is also a literal text/name hit. So exact-text matches surface first,
+     * then the most visually-relevant photos, with photos that match both on top.
+     */
+    private suspend fun combinedSearch(query: String): List<Photo> {
+        // (a) OCR + filename LIKE search (existing behaviour).
+        val ocrHits = try {
+            photoDao.searchPhotos(query)
+        } catch (e: Exception) {
+            Log.e(TAG, "searchPhotos failed", e)
+            emptyList()
+        }
+        val ocrIds = ocrHits.map { it.id }.toSet()
+
+        // (b) Semantic search: one fast text-encoder run, then cosine vs stored
+        // image embeddings. Inert (empty) if the CLIP models aren't available.
+        val semanticById: Map<Long, Float> = try {
+            val textEmb = ClipEmbedder.textEmbedding(getApplication(), query)
+            if (textEmb == null) {
+                emptyMap()
+            } else {
+                photoDao.getClipEmbeddings()
+                    .asSequence()
+                    .map { it.id to ClipEmbedder.cosine(textEmb, ClipEmbedder.bytesToFloats(it.clipEmbedding)) }
+                    .filter { it.second >= SEMANTIC_THRESHOLD }
+                    .sortedByDescending { it.second }
+                    .take(MAX_SEMANTIC_RESULTS)
+                    .toMap()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "semantic search failed", e)
+            emptyMap()
+        }
+
+        // (c) Merge + dedupe by id, ranked by combined score. Include ocrHits in
+        // the lookup so literal matches are never lost if the photos cache is cold.
+        val photoById = (photos.value + ocrHits).associateBy { it.id }
+        val ids = LinkedHashSet<Long>().apply {
+            addAll(ocrIds)
+            addAll(semanticById.keys)
+        }
+        return ids.mapNotNull { id ->
+            val photo = photoById[id] ?: return@mapNotNull null
+            if (photo.isTrashed) return@mapNotNull null
+            val semScore = semanticById[id] ?: 0f
+            val ocrBoost = if (id in ocrIds) OCR_MATCH_BOOST else 0f
+            photo to (semScore + ocrBoost)
+        }.sortedByDescending { it.second }.map { it.first }
     }
 
     fun setSearchQuery(query: String) {
@@ -191,6 +255,28 @@ class GalleryViewModel(
 
     companion object {
         private const val TAG = "GalleryViewModel"
+
+        /**
+         * Minimum MobileCLIP cosine similarity for a photo to count as a semantic
+         * match. Single most-important tunable knob. MobileCLIP-S0 packs cosines
+         * into a compressed range — measured on real photos, unrelated pairs sit
+         * around ~0.10 while genuine matches land ~0.12–0.21 — so this floor just
+         * clears the noise; results are then ranked and capped, so the best
+         * matches surface first regardless. Higher = stricter/fewer, lower =
+         * looser/more. Retune if you swap the model.
+         */
+        private const val SEMANTIC_THRESHOLD = 0.12f
+
+        /** Cap on semantic matches merged into results (keeps the grid relevant). */
+        private const val MAX_SEMANTIC_RESULTS = 100
+
+        /**
+         * Score added to a photo that is a literal OCR/name hit, on top of any
+         * semantic similarity. Larger than the semantic cosine range so exact
+         * text matches rank above purely-visual matches, and photos matching both
+         * rank highest.
+         */
+        private const val OCR_MATCH_BOOST = 1.0f
     }
 }
 
