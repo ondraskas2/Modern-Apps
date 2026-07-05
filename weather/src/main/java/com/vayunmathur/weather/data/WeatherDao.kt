@@ -31,6 +31,10 @@ interface WeatherDao {
     @Query("UPDATE SavedLocation SET displayOrder = :order WHERE id = :id")
     suspend fun setOrder(id: Long, order: Int)
 
+    /** Updates a saved row's coordinates in place, preserving its id (unlike [replaceCurrentDeviceLocation]). */
+    @Query("UPDATE SavedLocation SET latitude = :lat, longitude = :lon WHERE id = :id")
+    suspend fun updateCoordinates(id: Long, lat: Double, lon: Double)
+
     /**
      * Replaces the existing "current device" row (if any) with [newRow] in a
      * single transaction. Used by the location provider when it gets a fresh

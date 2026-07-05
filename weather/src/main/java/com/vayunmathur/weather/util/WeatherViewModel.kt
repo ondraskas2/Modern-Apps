@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Per-location forecast state held in [WeatherViewModel.forecasts]. */
 data class ForecastUiState(
@@ -162,6 +163,12 @@ class WeatherViewModel(
                 //    the app no longer refetches every location's fresh data.
                 if (!force && haveFreshCache) return@launch
 
+                // 2b. For the device "current location" row, re-check the GPS fix now that we're
+                //     committed to a network refresh, so the forecast follows the user if they've
+                //     moved since the pin was created. Coordinates are updated in place (same row
+                //     id), and the fetch below uses the fresh ones.
+                val target = if (location.isCurrent) refreshDeviceLocationFix(location) else location
+
                 // 3. Mark refreshing, then fetch forecast + air quality in parallel.
                 _forecasts.update { current ->
                     val prev = current[location.id]
@@ -171,10 +178,10 @@ class WeatherViewModel(
                 data class FetchResult(val forecast: kotlin.Result<ForecastResponse>, val air: AirQualityResponse?)
                 val fetched: FetchResult = coroutineScope {
                     val forecastDeferred = async {
-                        runCatching { WeatherApi.forecast(location.latitude, location.longitude) }
+                        runCatching { WeatherApi.forecast(target.latitude, target.longitude) }
                     }
                     val airQualityDeferred = async {
-                        runCatching { WeatherApi.airQuality(location.latitude, location.longitude) }.getOrNull()
+                        runCatching { WeatherApi.airQuality(target.latitude, target.longitude) }.getOrNull()
                     }
                     FetchResult(forecastDeferred.await(), airQualityDeferred.await())
                 }
@@ -187,7 +194,7 @@ class WeatherViewModel(
                         // Keep previously-known air quality if this round's air-quality
                         // fetch failed, so a transient AQ error doesn't blank the block.
                         val resolvedAir = airQuality ?: _forecasts.value[location.id]?.airQuality
-                        dao.writeForecastCache(location.latitude, location.longitude, fresh, resolvedAir, now)
+                        dao.writeForecastCache(target.latitude, target.longitude, fresh, resolvedAir, now)
                         _forecasts.update { current ->
                             current + (location.id to ForecastUiState(
                                 forecast = fresh,
@@ -296,9 +303,40 @@ class WeatherViewModel(
         }
     }
 
+    /**
+     * Re-queries the device location for the "current location" [location] and, if it has moved
+     * more than [MIN_LOCATION_MOVE_METERS] from the stored fix, updates the row's coordinates in
+     * place (keeping the same id). Returns the (possibly updated) location to fetch against.
+     *
+     * Best-effort: if permission is missing or no fix arrives within the timeout, the stored
+     * coordinates are kept.
+     */
+    private suspend fun refreshDeviceLocationFix(location: SavedLocation): SavedLocation {
+        val context = getApplication<Application>()
+        if (!LocationProvider.hasPermission(context)) return location
+        val fix = withTimeoutOrNull(LOCATION_FIX_TIMEOUT_MS) {
+            LocationProvider.currentLocation(context)
+        } ?: return location
+
+        val distance = FloatArray(1)
+        android.location.Location.distanceBetween(
+            location.latitude, location.longitude, fix.latitude, fix.longitude, distance,
+        )
+        if (distance[0] < MIN_LOCATION_MOVE_METERS) return location
+
+        dao.updateCoordinates(location.id, fix.latitude, fix.longitude)
+        return location.copy(latitude = fix.latitude, longitude = fix.longitude)
+    }
+
     companion object {
         /** Forecasts older than this are refreshed on the next poll. */
         const val STALE_THRESHOLD_MS = 15 * 60 * 1000L
+
+        /** How long to wait for a device location fix when refreshing the current-location row. */
+        private const val LOCATION_FIX_TIMEOUT_MS = 8_000L
+
+        /** Ignore GPS jitter below this so we don't rewrite the row (and bust the cache) needlessly. */
+        private const val MIN_LOCATION_MOVE_METERS = 500f
     }
 
 }
