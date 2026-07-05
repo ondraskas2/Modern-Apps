@@ -433,6 +433,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
             val recorder = Recorder.Builder().build()
             val videoCapture = VideoCapture.withOutput(recorder)
+            videoCapture.targetRotation = targetRotation
             highSpeedVideoCapture = videoCapture
 
             val configBuilder = HighSpeedVideoSessionConfig.Builder(videoCapture)
@@ -580,6 +581,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (av1) recorderBuilder.setVideoMimeType(MediaFormat.MIMETYPE_VIDEO_AV1)
                 if (opus) recorderBuilder.setAudioMimeType(MediaFormat.MIMETYPE_AUDIO_OPUS)
                 val capture = VideoCapture.withOutput(recorderBuilder.build())
+                capture.targetRotation = targetRotation
                 videoCapture = capture
                 recordingWithAv1 = av1
                 return provider.bindToLifecycle(owner, selector, preview, capture)
@@ -662,6 +664,8 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setTargetRotation(rotation: Int) {
         targetRotation = rotation
         imageCapture?.targetRotation = rotation
+        videoCapture?.targetRotation = rotation
+        highSpeedVideoCapture?.targetRotation = rotation
     }
 
     /** Swaps the analyzer on the bound ImageAnalysis without rebinding. */
