@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">Watch Sync</string>
+    <string name="scan_pair">Scan &amp; Pair Watch</string>
+    <string name="stop_sync">Stop Sync</string>
+    <string name="grant_ble_permissions">Grant Bluetooth Permissions</string>
+    <string name="grant_hc_permissions">Grant Health Connect Permissions</string>
+    <string name="install_health_connect">Install Health Connect</string>
+    <string name="status_connection">Connection: %1$s</string>
+    <string name="status_synced">Records synced: %1$d</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_scanning">Scanning</string>
+    <string name="state_connecting">Connecting</string>
+    <string name="state_connected">Connected</string>
+    <string name="rationale_title">Health Connect Permissions</string>
+    <string name="rationale_body">This app writes heart rate and step data collected from your watch into Health Connect.</string>
+    <string name="notification_channel_name">Watch Sync</string>
+    <string name="notification_title">Syncing watch health data</string>
+    <string name="notification_text">Maintaining BLE link and writing to Health Connect</string>
+</resources>

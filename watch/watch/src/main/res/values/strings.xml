@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Health Collector</string>
+    <string name="status_collecting">Collecting: %1$s</string>
+    <string name="status_advertising">Advertising: %1$s</string>
+    <string name="status_rows">Stored rows: %1$d</string>
+    <string name="action_start">Start</string>
+    <string name="action_stop">Stop</string>
+    <string name="grant_permissions">Grant Permissions</string>
+    <string name="on">on</string>
+    <string name="off">off</string>
+    <string name="notification_channel_name">Sensor Collection</string>
+    <string name="notification_title">Collecting health data</string>
+    <string name="notification_text">Reading sensors and serving over BLE</string>
+</resources>
