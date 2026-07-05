@@ -14,6 +14,7 @@ import dev.whyoleg.cryptography.algorithms.SHA512
 class E2eeIdentity internal constructor(
     /** This identity's public key in PEM bytes (as stored / registered). */
     val publicKeyPem: ByteArray,
+    private val privateKeyPem: ByteArray,
     private val publicKey: RSA.OAEP.PublicKey,
     private val privateKey: RSA.OAEP.PrivateKey,
 ) {
@@ -22,6 +23,9 @@ class E2eeIdentity internal constructor(
 
     /** Decrypts data that was encrypted to this identity's public key (see [E2ee.encryptTo]). */
     suspend fun decrypt(ciphertext: ByteArray): ByteArray = privateKey.decryptor().decrypt(ciphertext)
+
+    /** Signs [data] with this identity's private key (authenticates authorship). */
+    suspend fun sign(data: ByteArray): ByteArray = E2ee.sign(privateKeyPem, data)
 
     /** Reverses [E2ee.sealTo]: unwraps the AES key with the private key, then AES-decrypts. */
     suspend fun unseal(data: ByteArray): ByteArray {
@@ -48,6 +52,7 @@ class E2eeIdentity internal constructor(
             if (pubBytes != null && privBytes != null) {
                 return E2eeIdentity(
                     pubBytes,
+                    privBytes,
                     p.publicKeyDecoder(SHA512).decodeFromByteArray(RSA.PublicKey.Format.PEM, pubBytes),
                     p.privateKeyDecoder(SHA512).decodeFromByteArray(RSA.PrivateKey.Format.PEM, privBytes),
                 )
@@ -57,7 +62,7 @@ class E2eeIdentity internal constructor(
             val privPem = kp.privateKey.encodeToByteArray(RSA.PrivateKey.Format.PEM)
             store.setBytes(publicName, pubPem, onlyIfAbsent = true)
             store.setBytes(privateName, privPem, onlyIfAbsent = true)
-            return E2eeIdentity(pubPem, kp.publicKey, kp.privateKey)
+            return E2eeIdentity(pubPem, privPem, kp.publicKey, kp.privateKey)
         }
     }
 }

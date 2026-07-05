@@ -2,6 +2,7 @@ package com.vayunmathur.e2ee
 
 import dev.whyoleg.cryptography.CryptographyProvider
 import dev.whyoleg.cryptography.algorithms.RSA
+import dev.whyoleg.cryptography.algorithms.SHA256
 import dev.whyoleg.cryptography.algorithms.SHA512
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -32,6 +33,21 @@ object E2ee {
     /** Canonical DER form of a PEM public key (stable across incidental formatting differences). */
     suspend fun canonicalDer(pem: ByteArray): ByteArray =
         decodePublicKeyPem(pem).encodeToByteArray(RSA.PublicKey.Format.DER)
+
+    // --- Signatures (RSA-PSS over the same identity key) ---
+    private val pss get() = CryptographyProvider.Default.get(RSA.PSS)
+
+    /** Signs [data] with a private key (PEM). Used to authenticate op authorship / owner roster changes. */
+    suspend fun sign(privateKeyPem: ByteArray, data: ByteArray): ByteArray =
+        pss.privateKeyDecoder(SHA256).decodeFromByteArray(RSA.PrivateKey.Format.PEM, privateKeyPem)
+            .signatureGenerator().generateSignature(data)
+
+    /** Verifies a signature produced by [sign] against a public key (PEM). */
+    suspend fun verify(publicKeyPem: ByteArray, data: ByteArray, signature: ByteArray): Boolean =
+        runCatching {
+            pss.publicKeyDecoder(SHA256).decodeFromByteArray(RSA.PublicKey.Format.PEM, publicKeyPem)
+                .signatureVerifier().tryVerifySignature(data, signature)
+        }.getOrDefault(false)
 
     /**
      * Verification security code between this device and a peer, from their PEM public keys.
