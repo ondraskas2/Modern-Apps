@@ -65,7 +65,7 @@
         <activity
             android:name=".cable.CableActivity"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
             android:theme="@style/Theme.General">
             <intent-filter android:autoVerify="false">

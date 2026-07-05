@@ -1,7 +1,6 @@
 package com.vayunmathur.passwords.cable
 
 import android.Manifest
-import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -17,9 +16,10 @@ import androidx.fragment.app.FragmentActivity
  * Entry point for scanned caBLE QR codes. The Camera app resolves a `FIDO:/…` value to a generic
  * "open URL" whose `fido:` scheme lands here via an `ACTION_VIEW` intent-filter (see the manifest).
  *
- * Flow: validate the URI → ask the user to approve the cross-device sign-in → verify the user with
- * a strong biometric → request the Nearby-devices / notification runtime permissions → start
- * [CableService] to run the protocol. The activity finishes immediately after handing off.
+ * Flow: validate the URI → a single strong-biometric prompt that serves as both consent and user
+ * verification → request the Nearby-devices / notification runtime permissions (first run only) →
+ * start [CableService]. The activity finishes immediately after handing off. The credential
+ * database is opened by the service via the no-auth key, so the app itself never needs unlocking.
  */
 class CableActivity : FragmentActivity() {
 
@@ -39,22 +39,13 @@ class CableActivity : FragmentActivity() {
             return
         }
         fidoUri = uri
-        confirmThenVerify()
+        verifyUser()
     }
 
     private fun looksLikeFido(uri: String): Boolean =
         uri.startsWith("fido:", ignoreCase = true) || uri.startsWith("FIDO:/")
 
-    private fun confirmThenVerify() {
-        AlertDialog.Builder(this)
-            .setTitle("Cross-device sign-in")
-            .setMessage("Approve signing in on your other device with a passkey from Passwords?")
-            .setPositiveButton("Approve") { _, _ -> verifyUser() }
-            .setNegativeButton("Cancel") { _, _ -> finish() }
-            .setOnCancelListener { finish() }
-            .show()
-    }
-
+    /** Single biometric prompt = approval + user verification for the cross-device sign-in. */
     private fun verifyUser() {
         val canAuth = BiometricManager.from(this)
             .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
@@ -80,8 +71,8 @@ class CableActivity : FragmentActivity() {
         )
         prompt.authenticate(
             BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Verify it's you")
-                .setSubtitle("Confirm cross-device sign-in")
+                .setTitle("Sign in on your other device?")
+                .setSubtitle("Verify to approve this passkey sign-in")
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                 .setNegativeButtonText("Cancel")
                 .build()
