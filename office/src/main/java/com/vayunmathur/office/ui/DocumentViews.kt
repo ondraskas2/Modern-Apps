@@ -546,7 +546,8 @@ fun TextDocumentView(
     onCellTextChange: (Int, Int, Int, String) -> Unit = { _, _, _, _ -> },
     onCellFocus: (Int, Int, Int) -> Unit = { _, _, _ -> },
     onChartClick: (Int) -> Unit = {},
-    onCropImage: (Int) -> Unit = {}
+    onCropImage: (Int) -> Unit = {},
+    remoteCarets: List<com.vayunmathur.library.ui.odf.RemoteCaret> = emptyList()
 ) {
     val segments = remember(doc.content) { buildSegments(doc.content) }
 
@@ -569,6 +570,7 @@ fun TextDocumentView(
                     onEnter = { gPos -> onRunEnter(seg.start, seg.endInclusive, gPos) },
                     onBackspace = { gPos -> onRunBackspace(seg.start, seg.endInclusive, gPos) },
                     onToggleCheckbox = onToggleCheckbox,
+                    remoteCarets = remoteCarets,
                 )
                 is DocSegment.Block -> when (val block = doc.content[seg.index]) {
                     is OdfContentBlock.Table -> TableView(block.table, seg.index, searchQuery, fontSizeMultiplier, onCellTextChange, onCellFocus)

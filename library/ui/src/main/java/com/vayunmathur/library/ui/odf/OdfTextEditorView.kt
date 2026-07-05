@@ -34,6 +34,12 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.material3.Text
 
 /**
  * Shared, framework-light text-run editor extracted from the Office app so the markdown editor and
@@ -137,6 +143,29 @@ private class PrefixOffsetMapping(
     }
 }
 
+/**
+ * Remaps a caret offset when the editor's text is replaced externally (e.g. a collaborator's merged
+ * edit) so the caret follows its surrounding content: insertions/deletions *before* the caret shift
+ * it, changes *after* it leave it put, and an edit *at* the caret lands at the start of the change.
+ */
+fun remapCaret(old: String, new: String, caret: Int): Int {
+    if (old == new) return caret
+    val lim = minOf(old.length, new.length)
+    var cp = 0
+    while (cp < lim && old[cp] == new[cp]) cp++
+    var cs = 0
+    while (cs < (old.length - cp) && cs < (new.length - cp) && old[old.length - 1 - cs] == new[new.length - 1 - cs]) cs++
+    val delta = new.length - old.length
+    return when {
+        caret <= cp -> caret                        // change is at/after the caret
+        caret >= old.length - cs -> caret + delta   // change is entirely before the caret
+        else -> cp                                  // caret sat inside the changed region
+    }
+}
+
+/** A collaborator's caret to render in the editor: [offset] in the plain text, ARGB [color], [name]. */
+data class RemoteCaret(val offset: Int, val color: Long, val name: String)
+
 @Composable
 fun ContinuousParagraphEditor(
     doc: OdfDocument.TextDocument,
@@ -149,6 +178,7 @@ fun ContinuousParagraphEditor(
     onBackspace: (gPos: Int) -> Int? = { null },
     onToggleCheckbox: ((globalParaIndex: Int) -> Unit)? = null,
     onFocusChangedCb: (Boolean) -> Unit = {},
+    remoteCarets: List<RemoteCaret> = emptyList(),
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     val paras = (start..endInclusive).mapNotNull { (doc.content[it] as? OdfContentBlock.Paragraph)?.paragraph }
@@ -156,8 +186,8 @@ fun ContinuousParagraphEditor(
     var tfv by remember { mutableStateOf(TextFieldValue(plainText)) }
     var pendingCaret by remember { mutableStateOf<Int?>(null) }
     if (tfv.text != plainText) {
-        val caret = (pendingCaret ?: tfv.selection.end).coerceIn(0, plainText.length)
-        tfv = TextFieldValue(plainText, TextRange(caret))
+        val caret = pendingCaret ?: remapCaret(tfv.text, plainText, tfv.selection.end)
+        tfv = TextFieldValue(plainText, TextRange(caret.coerceIn(0, plainText.length)))
     }
     pendingCaret = null
     val onSurface = MaterialTheme.colorScheme.onSurface
@@ -233,6 +263,32 @@ fun ContinuousParagraphEditor(
                                 .size(width = (rect.height).toDp(), height = rect.height.toDp())
                                 .clickable { onToggleCheckbox(start + pi) }
                         )
+                    }
+                }
+            }
+        }
+        // Remote collaborators' carets (live presence). Positions use the plain-text offset; for
+        // plain prose the visual transform is identity so this is exact (list prefixes shift it a bit).
+        if (lay != null && remoteCarets.isNotEmpty()) {
+            val density = LocalDensity.current
+            for (rc in remoteCarets) {
+                val off = rc.offset.coerceIn(0, tfv.text.length)
+                val rect = runCatching { lay.getCursorRect(off) }.getOrNull() ?: continue
+                val color = Color(rc.color.toInt())
+                with(density) {
+                    Box(
+                        Modifier
+                            .offset(x = rect.left.toDp(), y = rect.top.toDp())
+                            .width(2.dp)
+                            .height((rect.bottom - rect.top).toDp())
+                            .background(color)
+                    )
+                    Box(
+                        Modifier
+                            .offset(x = rect.left.toDp(), y = (rect.top - 14f).toDp())
+                            .background(color)
+                    ) {
+                        Text(rc.name, color = Color.White, fontSize = 8.sp, modifier = Modifier.padding(horizontal = 2.dp))
                     }
                 }
             }

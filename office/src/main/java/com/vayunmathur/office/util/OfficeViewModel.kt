@@ -29,7 +29,7 @@ data class OfficeDocMeta(val docId: String, val title: String, val keyB64: Strin
 
 /** Ephemeral presence for a collaborator in a document (relayed encrypted; never stored). */
 @Serializable
-data class OfficePresence(val id: String, val name: String, val typing: Boolean, val ts: Long)
+data class OfficePresence(val id: String, val name: String, val typing: Boolean, val ts: Long, val caret: Int? = null)
 
 class OfficeViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow<ViewState>(ViewState.Empty)
@@ -1867,6 +1867,24 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     val remotePresence: StateFlow<List<OfficePresence>> = _remotePresence.asStateFlow()
     private var applyingRemote = false
     private var livePushJob: Job? = null
+    private var localCaret = 0
+    private var caretPresenceJob: Job? = null
+
+    /** Called by the editor when the local caret/selection moves, to broadcast presence. */
+    fun setLocalCaret(offset: Int) {
+        localCaret = offset
+        val docId = currentDocId ?: return
+        val key = currentDocKey ?: return
+        caretPresenceJob?.cancel()
+        caretPresenceJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(120)
+            runCatching {
+                OfficeSync.sendPresence(docId, key, syncJson.encodeToString(
+                    OfficePresence(OfficeSync.deviceId, myName(), typing = false, ts = System.currentTimeMillis(), caret = localCaret)
+                ))
+            }
+        }
+    }
 
     /** Display name broadcast to collaborators (device-derived; not sensitive). */
     private fun myName(): String = "User " + OfficeSync.deviceId.takeLast(4)
@@ -1879,7 +1897,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 OfficeSync.sendPresence(docId, key, syncJson.encodeToString(
-                    OfficePresence(OfficeSync.deviceId, myName(), typing = true, ts = System.currentTimeMillis())
+                    OfficePresence(OfficeSync.deviceId, myName(), typing = true, ts = System.currentTimeMillis(), caret = localCaret)
                 ))
             }
         }

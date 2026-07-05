@@ -749,6 +749,9 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         ) { paddingValues ->
             Box(Modifier.padding(paddingValues)) {
                 val presence by viewModel.remotePresence.collectAsState()
+                val remoteCarets = presence.mapNotNull { p ->
+                    p.caret?.let { com.vayunmathur.library.ui.odf.RemoteCaret(it, 0xFF000000L or (p.id.hashCode().toLong() and 0xFFFFFFL), p.name) }
+                }
                 if (presence.isNotEmpty()) {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
@@ -764,7 +767,8 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                 }
                 when (document) {
                     is OdfDocument.TextDocument -> TextDocumentView(doc = document, searchQuery = searchQuery, fontSizeMultiplier = fontSizeMultiplier, listState = listState,
-                        onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge; activeTableBlock = -1; activeTableRow = -1; activeTableCol = -1 },
+                        remoteCarets = remoteCarets,
+                        onRunSelectionChange = { rs, re, gs, ge -> activeRunStart = rs; activeRunEnd = re; selStart = gs; selEnd = ge; activeTableBlock = -1; activeTableRow = -1; activeTableCol = -1; viewModel.setLocalCaret(gs) },
                         onRunTextChange = { rs, re, text -> viewModel.updateParagraphRun(rs, re, text) },
                         onRunEnter = { rs, re, gPos -> viewModel.handleListEnter(rs, re, gPos) },
                         onRunBackspace = { rs, re, gPos -> viewModel.handleListBackspace(rs, re, gPos) },
