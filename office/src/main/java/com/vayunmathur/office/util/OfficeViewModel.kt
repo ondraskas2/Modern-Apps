@@ -245,6 +245,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentDocKey = onlineDocKey
         currentCrdt = null
         currentCharMode = false
+        _isOnline.value = onlineDocId != null
         if (onlineDocId == null) {
             // Offline document: you own your own local file and may edit it freely.
             currentRole = OfficeRoles.OWNER
@@ -297,6 +298,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentCharMode = false
         OfficeSync.stopLive()
         _remotePresence.value = emptyList()
+        _isOnline.value = false
         autoSaveJob?.cancel()
     }
 
@@ -306,7 +308,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun createNewTextDocument() {
         currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
-        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear()
+        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear(); _isOnline.value = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.TextDocument(
@@ -321,7 +323,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun createNewSpreadsheet() {
         currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
-        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear()
+        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear(); _isOnline.value = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val rows = (0 until 10).map { OdfRow(List(5) { OdfCell(text = "") }) }
@@ -337,7 +339,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
 
     fun createNewPresentation() {
         currentDocId = null; currentDocKey = null; currentCrdt = null; currentCharMode = false
-        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear()
+        currentRole = OfficeRoles.OWNER; currentOwnerKey = null; currentMembers.clear(); _isOnline.value = false
         undoStack.clear(); redoStack.clear()
         _canUndo.value = false; _canRedo.value = false
         val doc = OdfDocument.Presentation(
@@ -1941,6 +1943,10 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private val _remotePresence = MutableStateFlow<List<OfficePresence>>(emptyList())
     /** Other people currently in the open document (name + typing), for the presence indicator. */
     val remotePresence: StateFlow<List<OfficePresence>> = _remotePresence.asStateFlow()
+
+    private val _isOnline = MutableStateFlow(false)
+    /** True when the open document is an online (cloud-synced) document — hides Save, changes back nav. */
+    val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
     private var applyingRemote = false
     private var livePushJob: Job? = null
     private var localCaret = 0
@@ -1979,7 +1985,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         }
         livePushJob?.cancel()
         livePushJob = viewModelScope.launch(Dispatchers.IO) {
-            delay(400)
+            delay(150)
             runCatching { OfficeSync.init(getApplication()); syncDoc(docId, key) }
         }
     }
@@ -2186,6 +2192,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                         currentDocId = docId
                         currentDocKey = key
                         currentCharMode = charMode
+                        _isOnline.value = true
                         val ownerKeyB64 = Base64.encode(OfficeSync.publicBundle)
                         syncDoc(docId, key)
                         indexMutex.withLock {

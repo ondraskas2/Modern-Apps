@@ -431,6 +431,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
 
     val isEditMode by viewModel.isEditMode.collectAsState()
     val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsState()
+    val isOnline by viewModel.isOnline.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val canUndo by viewModel.canUndo.collectAsState()
     val canRedo by viewModel.canRedo.collectAsState()
@@ -549,7 +550,11 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
         }
     }
 
-    BackHandler(enabled = hasUnsavedChanges) { showUnsavedDialog = true }
+    // Always intercept back inside a document so it returns to the home screen instead of exiting
+    // the app. Online docs sync live (nothing to save); offline docs with edits prompt to save.
+    BackHandler(enabled = true) {
+        if (!isOnline && hasUnsavedChanges) showUnsavedDialog = true else onBack()
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -611,8 +616,12 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                             Box {
                                 TextButton(onClick = { fileMenu = true }) { Text("File") }
                                 DropdownMenu(expanded = fileMenu, onDismissRequest = { fileMenu = false }) {
-                                    DropdownMenuItem(text = { Text("Save") }, enabled = hasUnsavedChanges, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), null) }, onClick = { fileMenu = false; if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() })
-                                    DropdownMenuItem(text = { Text("Save As…") }, onClick = { fileMenu = false; saveAsLauncher.launch(saveAsName) })
+                                    if (!isOnline) {
+                                        DropdownMenuItem(text = { Text("Save") }, enabled = hasUnsavedChanges, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), null) }, onClick = { fileMenu = false; if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() })
+                                        DropdownMenuItem(text = { Text("Save As…") }, onClick = { fileMenu = false; saveAsLauncher.launch(saveAsName) })
+                                    } else {
+                                        DropdownMenuItem(text = { Text("Synced to cloud") }, enabled = false, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.save_24px), null) }, onClick = {})
+                                    }
                                     DropdownMenuItem(text = { Text("Share online…") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.share_24px), null) }, onClick = { fileMenu = false; showShareDialog = true })
                                     DropdownMenuItem(text = { Text(stringResource(R.string.print_doc)) }, onClick = { fileMenu = false; printDocument(activity, document) })
                                     DropdownMenuItem(text = { Text("Export to PDF…") }, leadingIcon = { Icon(painterResource(com.vayunmathur.library.R.drawable.outline_file_download_24), null) }, onClick = { fileMenu = false; printDocument(activity, document) })
