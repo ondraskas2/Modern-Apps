@@ -66,6 +66,16 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    // The last calendar the user actively picked in the event calendar picker.
+    // Used as the default selection when creating a new event.
+    fun getDefaultCalendarId(): Long? = dataStore.getLong("last_selected_calendar_id")
+
+    fun setDefaultCalendar(id: Long) {
+        viewModelScope.launch {
+            dataStore.setLong("last_selected_calendar_id", id)
+        }
+    }
+
     fun setLastViewedDate(d: LocalDate?) {
         _lastViewedDate.value = d
     }

@@ -100,16 +100,23 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
     var descriptionText by remember { mutableStateOf(event?.description ?: editRoute.description ?: "") }
     val descriptionController = com.vayunmathur.library.ui.rememberOdfMarkdownEditorController(initialMarkdown = descriptionText) { descriptionText = it }
     var location by remember { mutableStateOf(event?.location ?: editRoute.location ?: "") }
-    // default to the event's calendar if editing; otherwise prefer the first editable calendar
-    var selectedCalendar by remember { mutableLongStateOf(event?.calendarID ?: (calendars.firstOrNull { it.canModify }?.id ?: calendars.firstOrNull()?.id ?: -1L)) }
-    // If calendars load/refresh after composition, ensure the default remains an editable calendar when creating a new event
+    // default to the event's calendar if editing; otherwise the last calendar the user picked, then first editable
+    var selectedCalendar by remember {
+        mutableLongStateOf(
+            event?.calendarID
+                ?: viewModel.getDefaultCalendarId()?.takeIf { id -> calendars.any { it.id == id && it.canModify } }
+                ?: calendars.firstOrNull { it.canModify }?.id ?: calendars.firstOrNull()?.id ?: -1L
+        )
+    }
+    // If calendars load/refresh after composition, ensure the default remains a valid, editable calendar when creating a new event
     LaunchedEffect(calendars) {
         if (event == null) {
             val current = selectedCalendar
             val currentIsEditable = calendars.any { it.id == current && it.canModify }
             if (!currentIsEditable) {
-                val editable = calendars.firstOrNull { it.canModify } ?: calendars.firstOrNull()
-                if (editable != null) selectedCalendar = editable.id
+                val fallback = viewModel.getDefaultCalendarId()?.takeIf { id -> calendars.any { it.id == id && it.canModify } }
+                    ?: calendars.firstOrNull { it.canModify }?.id ?: calendars.firstOrNull()?.id
+                if (fallback != null) selectedCalendar = fallback
             }
         }
     }

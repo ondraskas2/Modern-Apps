@@ -55,6 +55,7 @@ fun CalendarPickerDialog(backStack: NavBackStack<Route>, resultKey: String) {
                         Row(modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
+                                vm.setDefaultCalendar(cal.id)
                                 scope.launch { registry.dispatchResult(resultKey, cal.id) }
                                 backStack.pop()
                             }
