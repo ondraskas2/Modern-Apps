@@ -52,7 +52,15 @@ for dir in $MODULE_DIRS; do
         mkdir -p "$target_path/graphics/icon"
         mkdir -p "$target_path/graphics/phone-screenshots"
         if [ -f "$dir/src/main/ic_launcher-playstore.png" ]; then cp "$dir/src/main/ic_launcher-playstore.png" "$target_path/graphics/icon/icon.png"; fi
-        if [ -f "metadata_data/photos/${module_key}.png" ]; then cp "metadata_data/photos/${module_key}.png" "$target_path/graphics/phone-screenshots/1.png"; fi
+        if [ -d "metadata_data/photos/${module_key}" ]; then
+            i=1
+            for shot in $(ls "metadata_data/photos/${module_key}"/*.png 2>/dev/null | sort -V); do
+                cp "$shot" "$target_path/graphics/phone-screenshots/${i}.png"
+                i=$((i + 1))
+            done
+        elif [ -f "metadata_data/photos/${module_key}.png" ]; then
+            cp "metadata_data/photos/${module_key}.png" "$target_path/graphics/phone-screenshots/1.png"
+        fi
         if [ -f "metadata_data/${module_key}.md" ]; then
             head -n 1 "metadata_data/${module_key}.md" > "$target_path/short-description.txt"
             cp "metadata_data/${module_key}.md" "$target_path/full-description.txt"
