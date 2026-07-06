@@ -868,6 +868,12 @@ object MessagesSessionManager {
             is GMEvent.IncomingMessage -> {
                 val convId = "${event.source.idPrefix}:${event.conversationId}"
                 val msgId = "${event.source.idPrefix}:${event.messageId}"
+                // Whether we've already stored this exact message. Meta platforms
+                // (Instagram/Messenger) re-inject their entire history through
+                // IncomingMessage on every reconnect/backfill, so without this we
+                // re-notify for the whole message history. Only genuinely new
+                // messages (not yet in the DB) should fire a notification below.
+                val alreadySeen = db.messageDao().get(msgId) != null
                 // Ensure the conversation row exists (messages FK to it) and refresh its preview /
                 // unread, otherwise the insert crashes and the message never shows in the thread.
                 val existing = db.conversationDao().get(convId)
@@ -887,7 +893,9 @@ object MessagesSessionManager {
                         avatarUrl = existing?.avatarUrl,
                         lastMessagePreview = event.body,
                         lastMessageTimestamp = maxOf(toEpochMillis(event.timestamp), existing?.lastMessageTimestamp ?: 0L),
-                        unreadCount = (existing?.unreadCount ?: 0) + 1,
+                        // Don't re-count a message we've already seen — otherwise a
+                        // history re-sync inflates the unread badge on every reconnect.
+                        unreadCount = (existing?.unreadCount ?: 0) + if (alreadySeen) 0 else 1,
                         isGroup = existing?.isGroup ?: false,
                         participantCount = existing?.participantCount ?: 0,
                         conversationType = existing?.conversationType,
@@ -912,7 +920,7 @@ object MessagesSessionManager {
                         mediaJson = attachmentsToJson(event.attachments),
                     )
                 )
-                if (backfillComplete[event.source] == true) {
+                if (backfillComplete[event.source] == true && !alreadySeen) {
                     _incoming.tryEmit(event)
                 }
             }
