@@ -35,6 +35,18 @@ data class OfficeDocMeta(
     val ownerKeyB64: String = "",
 )
 
+/** Builds the local metadata for a shared document from an incoming invite (carries role + owner key). */
+fun officeDocMetaFromInvite(inv: OfficeSync.Invite): OfficeDocMeta =
+    OfficeDocMeta(
+        docId = inv.docId,
+        title = inv.title,
+        keyB64 = inv.key,
+        owner = false,
+        charMode = inv.charMode,
+        role = inv.role,
+        ownerKeyB64 = inv.ownerKey,
+    )
+
 /** Document access roles. Enforced entirely client-side via signature checks (server is a pure relay). */
 object OfficeRoles {
     const val OWNER = "owner"
@@ -2070,7 +2082,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                         val index = loadIndex(ds).associateBy { it.docId }.toMutableMap()
                         for (inv in res.invites) {
                             if (!index.containsKey(inv.docId)) {
-                                index[inv.docId] = OfficeDocMeta(inv.docId, inv.title, inv.key, owner = false, charMode = inv.charMode, role = inv.role, ownerKeyB64 = inv.ownerKey)
+                                index[inv.docId] = officeDocMetaFromInvite(inv)
                             }
                         }
                         saveIndex(ds, index.values.toList())

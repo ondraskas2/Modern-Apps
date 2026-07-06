@@ -1,0 +1,140 @@
+package com.vayunmathur.office.util
+
+import com.vayunmathur.e2ee.E2ee
+import com.vayunmathur.e2ee.E2eeKeyStore
+import com.vayunmathur.e2ee.Pqc
+import com.vayunmathur.e2ee.PqcIdentity
+import com.vayunmathur.library.ui.odf.OdfContentBlock
+import com.vayunmathur.library.ui.odf.OdfDocument
+import com.vayunmathur.library.ui.odf.OdfParagraph
+import com.vayunmathur.library.ui.odf.OdfSpan
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import kotlin.io.encoding.Base64
+
+/**
+ * End-to-end simulation of Office document sharing across two "devices", using the real crypto
+ * (PQC ML-KEM/ML-DSA), CRDT, text codec, and the actual wire types ([SignedOp], [SignedMember],
+ * [OfficeSync.Invite]) — only the network is replaced by an in-memory relay. This guards the whole
+ * pipeline that kept breaking: invite delivery, owner-signed roster, signed-op verification + role
+ * gate, CRDT merge, and document reconstruction.
+ */
+class OfficeSharingE2ETest {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private class MemStore : E2eeKeyStore {
+        private val m = HashMap<String, ByteArray>()
+        override fun getBytes(name: String) = m[name]
+        override suspend fun setBytes(name: String, value: ByteArray, onlyIfAbsent: Boolean) {
+            if (onlyIfAbsent && m.containsKey(name)) return
+            m[name] = value
+        }
+    }
+
+    /** In-memory relay: append-only channels + a public-key directory. */
+    private class Relay {
+        val channels = HashMap<String, MutableList<String>>()
+        val directory = HashMap<String, ByteArray>()
+        fun append(ch: String, blob: String) { channels.getOrPut(ch) { mutableListOf() }.add(blob) }
+        fun pull(ch: String) = channels[ch]?.toList() ?: emptyList()
+    }
+
+    private fun memberBytes(docId: String, m: OfficeMember) = "$docId|${m.id}|${m.role}".encodeToByteArray()
+
+    private fun textDoc(vararg paras: String) = OdfDocument.TextDocument(
+        title = "E2E",
+        content = paras.map { OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(it)))) }
+    )
+
+    private fun paraTexts(doc: OdfDocument.TextDocument) =
+        doc.content.mapNotNull { (it as? OdfContentBlock.Paragraph)?.paragraph?.spans?.joinToString("") { s -> s.text } }
+
+    @Test
+    fun owner_shares_editor_reconstructs_document_and_viewer_is_rejected() = runBlocking {
+        val relay = Relay()
+        val owner = PqcIdentity.loadOrCreate(MemStore(), "o")
+        val editor = PqcIdentity.loadOrCreate(MemStore(), "e")
+        val ownerId = "owner"; val editorId = "editor"
+        relay.directory[ownerId] = owner.publicBundle
+        relay.directory[editorId] = editor.publicBundle
+
+        val docId = "doc-1"
+        val docKey = E2ee.newContentKey()
+        val ownerDoc = textDoc("Shared heading", "A paragraph of content")
+
+        // ---- Owner: push signed op + owner-signed roster + invite ----
+        val crdtO = DocumentCrdt(ownerId)
+        val opsJson = json.encodeToString(crdtO.update(TextDocCodec.toCells(ownerDoc)))
+        val signedOp = SignedOp(ownerId, Base64.encode(owner.sign(opsJson.encodeToByteArray())), opsJson)
+        relay.append(docId, Base64.encode(E2ee.aesEncrypt(docKey, json.encodeToString(signedOp).encodeToByteArray())))
+
+        for (m in listOf(OfficeMember(ownerId, "Owner", OfficeRoles.OWNER), OfficeMember(editorId, "", OfficeRoles.EDITOR))) {
+            val sm = SignedMember(m, Base64.encode(owner.sign(memberBytes(docId, m))))
+            relay.append("members:$docId", Base64.encode(E2ee.aesEncrypt(docKey, json.encodeToString(sm).encodeToByteArray())))
+        }
+        val invite = OfficeSync.Invite(docId, Base64.encode(docKey), ownerDoc.title, charMode = true, role = OfficeRoles.EDITOR, ownerKey = Base64.encode(owner.publicBundle))
+        relay.append("inbox:$editorId", Base64.encode(Pqc.encryptTo(editor.publicBundle, json.encodeToString(invite).encodeToByteArray())))
+
+        // ---- Editor: open the shared document ----
+        val inv = json.decodeFromString<OfficeSync.Invite>(
+            editor.decrypt(Base64.decode(relay.pull("inbox:$editorId").single())).decodeToString()
+        )
+        assertEquals(OfficeRoles.EDITOR, inv.role)
+        assertTrue("invite must carry owner key", inv.ownerKey.isNotBlank())
+        val recDocKey = Base64.decode(inv.key)
+        val ownerKey = Base64.decode(inv.ownerKey)
+
+        // roster: honor only owner-signed records
+        val roleById = HashMap<String, String>()
+        for (blob in relay.pull("members:$docId")) {
+            val sm = json.decodeFromString<SignedMember>(E2ee.aesDecrypt(recDocKey, Base64.decode(blob)).decodeToString())
+            if (Pqc.verify(ownerKey, memberBytes(docId, sm.member), Base64.decode(sm.sig))) roleById[sm.member.id] = sm.member.role
+        }
+        assertEquals(OfficeRoles.OWNER, roleById[ownerId])
+
+        // ops: verify author signature + editor/owner role, then apply
+        val crdtR = DocumentCrdt(editorId)
+        for (blob in relay.pull(docId)) {
+            val so = json.decodeFromString<SignedOp>(E2ee.aesDecrypt(recDocKey, Base64.decode(blob)).decodeToString())
+            val authorKey = relay.directory[so.author] ?: continue
+            val sigOk = Pqc.verify(authorKey, so.ops.encodeToByteArray(), Base64.decode(so.sig))
+            val roleOk = OfficeRoles.canEdit(roleById[so.author] ?: OfficeRoles.VIEWER)
+            if (sigOk && roleOk) crdtR.apply(json.decodeFromString(so.ops))
+        }
+        val rebuilt = TextDocCodec.fromCells(crdtR.render(), OdfDocument.TextDocument(inv.title, emptyList()))
+        assertEquals(paraTexts(ownerDoc), paraTexts(rebuilt)) // reconstructed identically
+
+        // ---- Negative: a viewer's forged op is rejected ----
+        roleById[editorId] = OfficeRoles.VIEWER
+        val forgedOps = DocumentCrdt(editorId).update(TextDocCodec.toCells(textDoc("malicious edit")))
+        val forgedJson = json.encodeToString(forgedOps)
+        val forged = SignedOp(editorId, Base64.encode(editor.sign(forgedJson.encodeToByteArray())), forgedJson)
+        val sigOk = Pqc.verify(relay.directory[editorId]!!, forged.ops.encodeToByteArray(), Base64.decode(forged.sig))
+        val roleOk = OfficeRoles.canEdit(roleById[forged.author] ?: OfficeRoles.VIEWER)
+        assertTrue("signature itself is valid", sigOk)
+        assertFalse("but a viewer's edit must be rejected by the role gate", sigOk && roleOk)
+
+        // ---- Negative: an op that lies about authorship fails signature verification ----
+        val liar = SignedOp(ownerId, Base64.encode(editor.sign(forgedJson.encodeToByteArray())), forgedJson)
+        assertFalse(
+            "editor cannot forge an op as the owner (wrong signing key)",
+            Pqc.verify(relay.directory[ownerId]!!, liar.ops.encodeToByteArray(), Base64.decode(liar.sig))
+        )
+    }
+
+    @Test
+    fun invite_maps_to_metadata_with_role_and_owner_key() {
+        val inv = OfficeSync.Invite("d", "k", "Title", charMode = true, role = OfficeRoles.VIEWER, ownerKey = "OWNERKEY")
+        val meta = officeDocMetaFromInvite(inv)
+        assertEquals("d", meta.docId)
+        assertEquals(OfficeRoles.VIEWER, meta.role)
+        assertEquals("OWNERKEY", meta.ownerKeyB64) // the field whose omission caused empty docs
+        assertTrue(meta.charMode)
+        assertFalse(meta.owner)
+    }
+}
