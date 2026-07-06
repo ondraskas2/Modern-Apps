@@ -11,4 +11,22 @@
     <string name="notification_channel_name">Sensor Collection</string>
     <string name="notification_title">Collecting health data</string>
     <string name="notification_text">Reading sensors and serving over BLE</string>
+
+    <!-- Exercise session -->
+    <string name="exercise_notification_channel">Workout Tracking</string>
+    <string name="exercise_notification_title">Workout in progress</string>
+    <string name="exercise_notification_text">Tracking your active exercise session</string>
+    <string name="exercise_title">Workout</string>
+    <string name="exercise_pick_type">Pick a workout</string>
+    <string name="exercise_start_workout">Start workout</string>
+    <string name="exercise_pause">Pause</string>
+    <string name="exercise_resume">Resume</string>
+    <string name="exercise_stop">Stop</string>
+    <string name="exercise_back">Back</string>
+    <string name="exercise_state">State: %1$s</string>
+    <string name="exercise_duration">Duration: %1$s</string>
+    <string name="exercise_hr">HR: %1$s</string>
+    <string name="exercise_calories">Calories: %1$s</string>
+    <string name="exercise_distance">Distance: %1$s m</string>
+    <string name="exercise_dash">--</string>
 </resources>

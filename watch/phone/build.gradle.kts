@@ -11,6 +11,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":watch:shared"))
     implementation(libs.androidx.connect.client)
     implementation(libs.androidx.work.runtime.ktx)
     implementRoom(libs)

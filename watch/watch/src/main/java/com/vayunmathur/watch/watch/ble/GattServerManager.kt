@@ -15,6 +15,7 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import com.vayunmathur.watch.shared.ble.BleConstants
 import com.vayunmathur.watch.watch.data.SensorDao
 import com.vayunmathur.watch.watch.data.SensorRecord
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,7 @@ private data class WireRecord(
     val value: Double,
     val delta: Double,
     val stationary: Boolean = false,
+    val session: String? = null,
 )
 
 @Serializable
@@ -230,7 +232,7 @@ class GattServerManager(
         scope.launch(Dispatchers.IO) {
             val rows: List<SensorRecord> = dao.getAll()
             val batch = WireBatch(rows.map {
-                WireRecord(it.id, it.type.name, it.timestamp, it.value, it.delta, it.stationary)
+                WireRecord(it.id, it.type.name, it.timestamp, it.value, it.delta, it.stationary, it.session)
             })
             pendingAck[device.address] = rows.map { it.id }
 

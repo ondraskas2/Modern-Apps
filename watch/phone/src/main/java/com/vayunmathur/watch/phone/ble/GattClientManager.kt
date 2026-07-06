@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import com.vayunmathur.watch.shared.ble.BleConstants
 import com.vayunmathur.watch.phone.data.WatchBatch
 import com.vayunmathur.watch.phone.data.WatchRecord
 import java.io.ByteArrayOutputStream

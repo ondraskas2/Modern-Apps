@@ -1,10 +1,10 @@
-package com.vayunmathur.watch.watch.ble
+package com.vayunmathur.watch.shared.ble
 
 import java.util.UUID
 
 /**
- * Shared BLE contract between the watch (GATT server) and phone (GATT client).
- * These UUIDs and opcodes are duplicated verbatim in the :watch:phone module.
+ * Single source of truth for the BLE contract between the watch (GATT server) and
+ * phone (GATT client). Shared by both apps so the UUIDs/opcodes cannot drift.
  */
 object BleConstants {
     val SERVICE_UUID: UUID = UUID.fromString("4a3b2c1d-1234-5678-1234-567812345678")
@@ -14,6 +14,11 @@ object BleConstants {
 
     // WRITE: phone sends control opcodes (ACK / CLEAR) back to the watch.
     val CONTROL_CHARACTERISTIC_UUID: UUID = UUID.fromString("4a3b2c1d-1234-5678-1234-56781234567a")
+
+    // READ + WRITE + NOTIFY: the current Do-Not-Disturb interruption filter as a
+    // single byte (1=ALL, 2=PRIORITY, 3=NONE, 4=ALARMS). Either side can write it
+    // and both get notified; the watch holds the authoritative value.
+    val DND_CHARACTERISTIC_UUID: UUID = UUID.fromString("4a3b2c1d-1234-5678-1234-56781234567b")
 
     // Client Characteristic Configuration Descriptor (standard 0x2902).
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")

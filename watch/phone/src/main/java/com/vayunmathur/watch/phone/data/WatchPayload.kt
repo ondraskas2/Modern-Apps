@@ -11,6 +11,9 @@ data class WatchRecord(
     val value: Double,
     val delta: Double,
     val stationary: Boolean = false,
+    // Present only for type == "ExerciseSession": the serialized session summary
+    // (com.vayunmathur.watch.shared.data.ExerciseSessionSummary JSON).
+    val session: String? = null,
 )
 
 @Serializable
