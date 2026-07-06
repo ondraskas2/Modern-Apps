@@ -16,4 +16,5 @@
     <string name="notification_channel_name">Watch Sync</string>
     <string name="notification_title">Syncing watch health data</string>
     <string name="notification_text">Maintaining BLE link and writing to Health Connect</string>
+    <string name="grant_dnd_access">Grant Do Not Disturb Access</string>
 </resources>

@@ -1,9 +1,11 @@
 package com.vayunmathur.watch.watch
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -182,6 +184,28 @@ class MainActivity : ComponentActivity() {
             }
             Button(onClick = onOpenPicker, modifier = Modifier.padding(top = 8.dp)) {
                 Text(stringResource(R.string.exercise_start_workout))
+            }
+
+            val notificationManager = remember {
+                context.getSystemService(NotificationManager::class.java)
+            }
+            var hasDndAccess by remember {
+                mutableStateOf(notificationManager.isNotificationPolicyAccessGranted)
+            }
+            if (!hasDndAccess) {
+                Button(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS),
+                            )
+                        }
+                        hasDndAccess = notificationManager.isNotificationPolicyAccessGranted
+                    },
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Text(stringResource(R.string.grant_dnd_access))
+                }
             }
         }
     }

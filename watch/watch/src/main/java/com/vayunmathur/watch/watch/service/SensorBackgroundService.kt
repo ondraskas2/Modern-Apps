@@ -37,6 +37,7 @@ class SensorBackgroundService : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private lateinit var gattServer: GattServerManager
     private lateinit var healthServices: HealthServicesCollector
+    private lateinit var dndController: DndController
 
     private var lastHeartRateAt = 0L
     // The step counter reports a cumulative count since boot; we store deltas.
@@ -47,8 +48,15 @@ class SensorBackgroundService : Service(), SensorEventListener {
     override fun onCreate() {
         super.onCreate()
         val db = SensorDatabase.get(this)
-        gattServer = GattServerManager(this, db.sensorDao(), scope)
+        gattServer = GattServerManager(
+            this,
+            db.sensorDao(),
+            scope,
+            onRemoteDnd = { dndController.onRemoteDnd(it) },
+        )
         healthServices = HealthServicesCollector(this, db.sensorDao(), scope)
+        dndController = DndController(this, gattServer)
+        dndController.register()
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
 
@@ -182,6 +190,7 @@ class SensorBackgroundService : Service(), SensorEventListener {
         )
         gattServer.stop()
         healthServices.stop()
+        dndController.unregister()
         scope.cancel()
         super.onDestroy()
     }

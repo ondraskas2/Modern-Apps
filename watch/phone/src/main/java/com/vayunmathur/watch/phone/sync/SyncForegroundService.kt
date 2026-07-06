@@ -35,6 +35,7 @@ class SyncForegroundService : Service() {
     private lateinit var client: GattClientManager
     private lateinit var health: HealthConnectManager
     private lateinit var buffer: ReceivedDatabase
+    private lateinit var dndController: DndController
     private val derivations = HealthDerivations()
 
     override fun onCreate() {
@@ -42,6 +43,8 @@ class SyncForegroundService : Service() {
         client = GattClientManager(this)
         health = HealthConnectManager(this)
         buffer = ReceivedDatabase.get(this)
+        dndController = DndController(this, client)
+        dndController.register(scope)
 
         scope.launch {
             client.state.collect { state ->
@@ -113,6 +116,7 @@ class SyncForegroundService : Service() {
 
     override fun onDestroy() {
         client.disconnect()
+        dndController.unregister()
         scope.cancel()
         connectionState.value = ConnectionState.Disconnected
         super.onDestroy()
