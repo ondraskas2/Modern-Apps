@@ -4,10 +4,6 @@ import com.vayunmathur.e2ee.E2ee
 import com.vayunmathur.e2ee.E2eeKeyStore
 import com.vayunmathur.e2ee.Pqc
 import com.vayunmathur.e2ee.PqcIdentity
-import com.vayunmathur.library.ui.odf.OdfContentBlock
-import com.vayunmathur.library.ui.odf.OdfDocument
-import com.vayunmathur.library.ui.odf.OdfParagraph
-import com.vayunmathur.library.ui.odf.OdfSpan
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
@@ -47,14 +43,6 @@ class OfficeSharingE2ETest {
 
     private fun memberBytes(docId: String, m: OfficeMember) = "$docId|${m.id}|${m.role}".encodeToByteArray()
 
-    private fun textDoc(vararg paras: String) = OdfDocument.TextDocument(
-        title = "E2E",
-        content = paras.map { OdfContentBlock.Paragraph(OdfParagraph(listOf(OdfSpan(it)))) }
-    )
-
-    private fun paraTexts(doc: OdfDocument.TextDocument) =
-        doc.content.mapNotNull { (it as? OdfContentBlock.Paragraph)?.paragraph?.spans?.joinToString("") { s -> s.text } }
-
     @Test
     fun owner_shares_editor_reconstructs_document_and_viewer_is_rejected() = runBlocking {
         val relay = Relay()
@@ -66,11 +54,11 @@ class OfficeSharingE2ETest {
 
         val docId = "doc-1"
         val docKey = E2ee.newContentKey()
-        val ownerDoc = textDoc("Shared heading", "A paragraph of content")
+        val ownerXml = "<office:text><text:p>Shared heading</text:p><text:p>A paragraph of content</text:p></office:text>"
 
         // ---- Owner: push signed op + owner-signed roster + invite ----
-        val crdtO = DocumentCrdt(ownerId)
-        val opsJson = json.encodeToString(crdtO.update(TextDocCodec.toCells(ownerDoc)))
+        val crdtO = DocumentTreeCrdt(ownerId)
+        val opsJson = json.encodeToString(crdtO.update(ownerXml))
         val signedOp = SignedOp(ownerId, Base64.encode(owner.sign(opsJson.encodeToByteArray())), opsJson)
         relay.append(docId, Base64.encode(E2ee.aesEncrypt(docKey, json.encodeToString(signedOp).encodeToByteArray())))
 
@@ -78,7 +66,7 @@ class OfficeSharingE2ETest {
             val sm = SignedMember(m, Base64.encode(owner.sign(memberBytes(docId, m))))
             relay.append("members:$docId", Base64.encode(E2ee.aesEncrypt(docKey, json.encodeToString(sm).encodeToByteArray())))
         }
-        val invite = OfficeSync.Invite(docId, Base64.encode(docKey), ownerDoc.title, charMode = true, role = OfficeRoles.EDITOR, ownerKey = Base64.encode(owner.publicBundle))
+        val invite = OfficeSync.Invite(docId, Base64.encode(docKey), "E2E", charMode = true, role = OfficeRoles.EDITOR, ownerKey = Base64.encode(owner.publicBundle))
         relay.append("inbox:$editorId", Base64.encode(Pqc.encryptTo(editor.publicBundle, json.encodeToString(invite).encodeToByteArray())))
 
         // ---- Editor: open the shared document ----
@@ -99,20 +87,19 @@ class OfficeSharingE2ETest {
         assertEquals(OfficeRoles.OWNER, roleById[ownerId])
 
         // ops: verify author signature + editor/owner role, then apply
-        val crdtR = DocumentCrdt(editorId)
+        val crdtR = DocumentTreeCrdt(editorId)
         for (blob in relay.pull(docId)) {
             val so = json.decodeFromString<SignedOp>(E2ee.aesDecrypt(recDocKey, Base64.decode(blob)).decodeToString())
             val authorKey = relay.directory[so.author] ?: continue
             val sigOk = Pqc.verify(authorKey, so.ops.encodeToByteArray(), Base64.decode(so.sig))
             val roleOk = OfficeRoles.canEdit(roleById[so.author] ?: OfficeRoles.VIEWER)
-            if (sigOk && roleOk) crdtR.apply(json.decodeFromString(so.ops))
+            if (sigOk && roleOk) crdtR.apply(json.decodeFromString<List<DocumentTreeCrdt.Node>>(so.ops))
         }
-        val rebuilt = TextDocCodec.fromCells(crdtR.render(), OdfDocument.TextDocument(inv.title, emptyList()))
-        assertEquals(paraTexts(ownerDoc), paraTexts(rebuilt)) // reconstructed identically
+        assertEquals(ownerXml, crdtR.render()) // reconstructed identically
 
         // ---- Negative: a viewer's forged op is rejected ----
         roleById[editorId] = OfficeRoles.VIEWER
-        val forgedOps = DocumentCrdt(editorId).update(TextDocCodec.toCells(textDoc("malicious edit")))
+        val forgedOps = DocumentTreeCrdt(editorId).update("<office:text><text:p>malicious edit</text:p></office:text>")
         val forgedJson = json.encodeToString(forgedOps)
         val forged = SignedOp(editorId, Base64.encode(editor.sign(forgedJson.encodeToByteArray())), forgedJson)
         val sigOk = Pqc.verify(relay.directory[editorId]!!, forged.ops.encodeToByteArray(), Base64.decode(forged.sig))

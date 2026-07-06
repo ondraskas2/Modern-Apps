@@ -4,15 +4,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * A hierarchical (tree) CRDT over a flat-ODF XML document. Unlike the flat sequence CRDT, every
- * character/element is a **node with a parent**, so deleting an element deletes its whole subtree —
- * including characters a peer inserted into it concurrently. This eliminates the "stranded text"
- * edge of char-merging serialized markup while still merging text within a node at character level.
+ * A hierarchical (tree) CRDT over a flat-ODF XML document. Every character/element is a **node with a
+ * parent**, so deleting an element deletes its whole subtree — including characters a peer inserted
+ * into it concurrently. Text within a node merges at character level (RGA among sibling char nodes),
+ * and an element's **attributes merge by last-writer-wins** (elements keep identity across attribute
+ * edits, so concurrent formatting changes never drop the element or its text).
  *
- * Model: each node has an id `lamport:device`, a `parent` id, a `left` sibling id (RGA order), a
- * [kind] ("e" element, "s" self-closing element, "c" character, "r" raw/opaque run) and a [payload]
- * (the open tag, the char, or the raw text). Rendering is a DFS that skips deleted nodes and never
- * descends into a deleted element, so a deletion cascades automatically.
+ * Node kinds: "e" element (has children; [payload] is the open tag, [name] the tag name), "s" opaque
+ * leaf (self-closing element / `<?xml?>` / comment / doctype), "c" character, "r" raw run (base64).
  */
 class DocumentTreeCrdt(private val device: String) {
 
@@ -21,40 +20,54 @@ class DocumentTreeCrdt(private val device: String) {
         val id: String,
         val parent: String,
         val left: String,
-        val kind: String,        // "e" | "s" | "c" | "r"
-        val payload: String,
+        val kind: String,
+        var payload: String,
         var deleted: Boolean = false,
         val lamport: Long,
         val dev: String,
+        val name: String = "",      // element tag name (kind "e"); used for identity across attr edits
+        var attrLamport: Long = 0,  // LWW clock for attribute (payload) updates on elements
+        var attrDev: String = "",   // device of the last attribute write (LWW tie-break)
     )
 
     @Serializable
     data class State(val device: String, val clock: Long, val nodes: List<Node>)
 
     private val nodes = LinkedHashMap<String, Node>()
+    private val childrenByParent = HashMap<String, MutableList<Node>>() // parent id -> children (incl. tombstones)
     private var clock = 0L
     private val json = Json { ignoreUnknownKeys = true }
 
     fun toState(): State = State(device, clock, nodes.values.map { it.copy() })
 
-    fun loadState(json: String) {
-        val s = runCatching { this.json.decodeFromString<State>(json) }.getOrNull() ?: return
-        nodes.clear(); s.nodes.forEach { nodes[it.id] = it.copy() }; clock = s.clock
+    fun loadState(jsonStr: String) {
+        val s = runCatching { json.decodeFromString<State>(jsonStr) }.getOrNull() ?: return
+        nodes.clear(); childrenByParent.clear()
+        for (n in s.nodes) { val c = n.copy(); nodes[c.id] = c; childrenByParent.getOrPut(c.parent) { ArrayList() }.add(c) }
+        clock = s.clock
     }
 
     fun serialize(): String = json.encodeToString(toState())
 
-    /** Merges a batch of remote node ops. Commutative + idempotent; deletion is monotonic. */
+    private fun index(node: Node) { childrenByParent.getOrPut(node.parent) { ArrayList() }.add(node) }
+
+    /** Merges a batch of remote node ops. Commutative + idempotent; deletion + attrs are monotonic. */
     fun apply(ops: List<Node>) {
         for (op in ops) {
-            clock = maxOf(clock, op.lamport)
+            clock = maxOf(clock, maxOf(op.lamport, op.attrLamport))
             val cur = nodes[op.id]
-            if (cur == null) nodes[op.id] = op.copy()
-            else if (op.deleted) cur.deleted = true
+            if (cur == null) { val c = op.copy(); nodes[c.id] = c; index(c) }
+            else {
+                if (op.deleted) cur.deleted = true
+                // Attribute LWW: the write with the higher lamport wins (device breaks ties).
+                if (op.kind == "e" && (op.attrLamport > cur.attrLamport ||
+                        (op.attrLamport == cur.attrLamport && op.attrDev > cur.attrDev))) {
+                    cur.payload = op.payload; cur.attrLamport = op.attrLamport; cur.attrDev = op.attrDev
+                }
+            }
         }
     }
 
-    /** Renders the current merged document back to flat XML. */
     fun render(): String {
         val sb = StringBuilder()
         renderChildren("", sb)
@@ -66,19 +79,19 @@ class DocumentTreeCrdt(private val device: String) {
             if (node.deleted) continue // skip deleted node + its subtree (never descend)
             when (node.kind) {
                 "e" -> { sb.append(node.payload); renderChildren(node.id, sb); sb.append(closeTagOf(node.payload)) }
-                else -> sb.append(node.payload) // "s", "c", "r"
+                else -> sb.append(node.payload)
             }
         }
     }
 
-    /** RGA order of a parent's children, INCLUDING tombstones (needed to chain `left` links). */
+    /** RGA order of a parent's children (incl. tombstones, needed to chain `left`). O(children). */
     private fun orderedChildren(parent: String): List<Node> {
+        val kids = childrenByParent[parent] ?: return emptyList()
         val byLeft = HashMap<String, MutableList<Node>>()
-        for (n in nodes.values) if (n.parent == parent) byLeft.getOrPut(n.left) { mutableListOf() }.add(n)
-        if (byLeft.isEmpty()) return emptyList()
+        for (n in kids) byLeft.getOrPut(n.left) { mutableListOf() }.add(n)
         val cmp = compareByDescending<Node> { it.lamport }.thenByDescending { it.dev }
         for (l in byLeft.values) l.sortWith(cmp)
-        val result = ArrayList<Node>()
+        val result = ArrayList<Node>(kids.size)
         val stack = ArrayDeque<Node>()
         byLeft[""]?.asReversed()?.forEach { stack.addLast(it) }
         while (stack.isNotEmpty()) {
@@ -91,7 +104,6 @@ class DocumentTreeCrdt(private val device: String) {
 
     // --- Reconcile the current tree toward a new flat-XML state, producing ops ---
 
-    /** Diffs [xml] against the current tree, mutating this replica and returning ops to broadcast. */
     fun update(xml: String): List<Node> {
         val ops = ArrayList<Node>()
         diffChildren("", parse(xml).children, ops)
@@ -101,18 +113,17 @@ class DocumentTreeCrdt(private val device: String) {
     private fun newId(): String { clock += 1; return "$clock:$device" }
 
     private fun keyOfDesired(d: Desired): String = when (d) {
-        is Desired.El -> (if (d.selfClosing) "s:" else "e:") + d.tag
+        is Desired.El -> if (d.selfClosing) "s:" + d.tag else "e:" + nameOf(d.tag)
         is Desired.Text -> (if (d.raw) "r:" else "c:") + d.text
     }
 
-    private fun keyOfNode(n: Node): String = n.kind + ":" + n.payload
+    private fun keyOfNode(n: Node): String = if (n.kind == "e") "e:" + n.name else n.kind + ":" + n.payload
 
     private fun diffChildren(parent: String, desired: List<Desired>, ops: MutableList<Node>) {
-        val current = orderedChildren(parent).filter { !it.deleted }
+        val current = (childrenByParent[parent]?.let { orderedChildren(parent) } ?: emptyList()).filter { !it.deleted }
         val keyC = current.map { keyOfNode(it) }
         val keyD = desired.map { keyOfDesired(it) }
 
-        // Common prefix / suffix are matched directly (keeps typing O(changed), not O(n^2)).
         var pre = 0
         while (pre < current.size && pre < desired.size && keyC[pre] == keyD[pre]) pre++
         var suf = 0
@@ -121,22 +132,27 @@ class DocumentTreeCrdt(private val device: String) {
 
         var prevId = ""
         fun reuse(node: Node, d: Desired) {
-            if (d is Desired.El && node.kind == "e") diffChildren(node.id, d.children, ops)
+            if (d is Desired.El && node.kind == "e") {
+                if (node.payload != d.tag) { // attributes changed → LWW update, identity kept
+                    node.payload = d.tag; node.attrLamport = ++clock; node.attrDev = device
+                    ops.add(node.copy())
+                }
+                if (!d.selfClosing) diffChildren(node.id, d.children, ops)
+            }
             prevId = node.id
         }
         fun insert(d: Desired) {
             val id = newId()
             val kind = when (d) { is Desired.El -> if (d.selfClosing) "s" else "e"; is Desired.Text -> if (d.raw) "r" else "c" }
             val payload = when (d) { is Desired.El -> d.tag; is Desired.Text -> d.text }
-            val node = Node(id, parent, prevId, kind, payload, false, clock, device)
-            nodes[id] = node; ops.add(node.copy())
+            val name = if (d is Desired.El && !d.selfClosing) nameOf(d.tag) else ""
+            val node = Node(id, parent, prevId, kind, payload, false, clock, device, name, if (kind == "e") clock else 0, if (kind == "e") device else "")
+            nodes[id] = node; index(node); ops.add(node.copy())
             if (d is Desired.El && !d.selfClosing) diffChildren(id, d.children, ops)
             prevId = id
         }
 
-        // prefix
         for (i in 0 until pre) reuse(current[i], desired[i])
-        // middle via LCS
         val midC = current.subList(pre, current.size - suf)
         val midD = desired.subList(pre, desired.size - suf)
         val pairs = lcs(midD.map { keyOfDesired(it) }, midC.map { keyOfNode(it) })
@@ -149,19 +165,10 @@ class DocumentTreeCrdt(private val device: String) {
                 reuse(midC[ci], midD[di])
             } else insert(midD[di])
         }
-        for (ci in midC.indices) if (ci !in matchedC) tombstone(midC[ci], ops)
-        // suffix
+        for (ci in midC.indices) if (ci !in matchedC && !midC[ci].deleted) { midC[ci].deleted = true; ops.add(midC[ci].copy(deleted = true)) }
         for (i in 0 until suf) reuse(current[current.size - suf + i], desired[desired.size - suf + i])
     }
 
-    private fun tombstone(node: Node, ops: MutableList<Node>) {
-        if (node.deleted) return
-        node.deleted = true
-        ops.add(node.copy(deleted = true))
-        // Children cascade at render time; no need to tombstone them individually.
-    }
-
-    /** Longest common subsequence of two key lists → matched (indexInA, indexInB) pairs, in order. */
     private fun lcs(a: List<String>, b: List<String>): List<Pair<Int, Int>> {
         val n = a.size; val m = b.size
         if (n == 0 || m == 0) return emptyList()
@@ -208,7 +215,6 @@ class DocumentTreeCrdt(private val device: String) {
                 val tag = xml.substring(i, minOf(j + 1, n))
                 when {
                     tag.startsWith("</") -> { if (stack.size > 1) stack.removeLast(); if (tag.startsWith("</office:binary-data")) inBinary = false }
-                    // XML declaration, processing instructions, comments, doctype: opaque leaves (no close tag).
                     tag.startsWith("<?") || tag.startsWith("<!") -> stack.last().children.add(Desired.El(tag, true))
                     tag.endsWith("/>") -> stack.last().children.add(Desired.El(tag, true))
                     else -> {
@@ -228,10 +234,11 @@ class DocumentTreeCrdt(private val device: String) {
         return root
     }
 
-    private fun closeTagOf(openTag: String): String {
-        // "<name att...>" -> "</name>"
+    private fun nameOf(tag: String): String {
         var k = 1
-        while (k < openTag.length && openTag[k] != ' ' && openTag[k] != '>' && openTag[k] != '\t' && openTag[k] != '\n') k++
-        return "</" + openTag.substring(1, k) + ">"
+        while (k < tag.length && tag[k] != ' ' && tag[k] != '>' && tag[k] != '/' && tag[k] != '\t' && tag[k] != '\n') k++
+        return tag.substring(1, k)
     }
+
+    private fun closeTagOf(openTag: String): String = "</" + nameOf(openTag) + ">"
 }

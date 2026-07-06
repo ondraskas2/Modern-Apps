@@ -35,6 +35,29 @@ class DocumentTreeCrdtTest {
     }
 
     @Test
+    fun concurrent_attribute_edit_and_text_edit_both_preserved() {
+        val (a, b) = replicas("<t><p a=\"1\">Hello</p></t>")
+        val opsA = a.update("<t><p a=\"2\">Hello</p></t>")       // A changes the attribute
+        val opsB = b.update("<t><p a=\"1\">Hello World</p></t>") // B edits the text
+        a.apply(opsB); b.apply(opsA)
+        assertEquals(a.render(), b.render())
+        val r = a.render()
+        assertTrue("text edit kept", r.contains("Hello World"))
+        assertTrue("attr change kept", r.contains("<p a=\"2\">"))
+        assertEquals("element not duplicated", 1, Regex("<p").findAll(r).count())
+    }
+
+    @Test
+    fun concurrent_conflicting_attr_edits_converge() {
+        val (a, b) = replicas("<t><p x=\"0\">z</p></t>")
+        val opsA = a.update("<t><p x=\"A\">z</p></t>")
+        val opsB = b.update("<t><p x=\"B\">z</p></t>")
+        a.apply(opsB); b.apply(opsA)
+        assertEquals("deterministic LWW winner on both replicas", a.render(), b.render())
+        assertEquals(1, Regex("<p").findAll(a.render()).count())
+    }
+
+    @Test
     fun roundtrip_render_equals_input() {
         val a = DocumentTreeCrdt("A")
         val xml = "<office:text><text:p>Hello &amp; world</text:p><draw:frame svg:width=\"1>2\"/></office:text>"
