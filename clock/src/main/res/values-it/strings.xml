@@ -40,4 +40,6 @@
     <string name="search_city_hint">Cerca città o regione…</string>
     <string name="time_am">AM</string>
     <string name="time_pm">PM</string>
+    <string name="analog_clock_widget_label">Orologio analogico</string>
+    <string name="analog_clock_widget_description">Orologio analogico Materiale You — tocca per aprire l\'orologio</string>
 </resources>
