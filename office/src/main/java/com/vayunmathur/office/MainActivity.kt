@@ -407,31 +407,38 @@ fun OnlineTab(viewModel: OfficeViewModel, onOpenDoc: (com.vayunmathur.office.uti
     val docs by viewModel.onlineDocs.collectAsState()
     val deviceId = viewModel.syncDeviceId
     val clipboard = LocalClipboardManager.current
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Online", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            IconButton(onClick = { viewModel.refreshOnline() }) {
-                Icon(painterResource(com.vayunmathur.library.R.drawable.refresh_24px), "Refresh")
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Online") },
+                actions = {
+                    IconButton(onClick = { viewModel.refreshOnline() }) {
+                        Icon(painterResource(com.vayunmathur.library.R.drawable.refresh_24px), "Refresh")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
+            Text("Your device id (share this so others can send you documents):",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(deviceId.ifEmpty { "…" }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = { if (deviceId.isNotEmpty()) clipboard.setText(AnnotatedString(deviceId)) }) { Text("Copy") }
             }
-        }
-        Text("Your device id (share this so others can send you documents):",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(deviceId.ifEmpty { "…" }, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-            TextButton(onClick = { if (deviceId.isNotEmpty()) clipboard.setText(AnnotatedString(deviceId)) }) { Text("Copy") }
-        }
-        Spacer(Modifier.height(12.dp))
-        if (docs.isEmpty()) {
-            Text("No online documents yet. Open a document and use \u201CShare\u201D to copy it here and send it to someone, or ask them to share to your device id, then tap refresh.",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(docs) { meta ->
-                    Card(Modifier.fillMaxWidth().clickable { onOpenDoc(meta) }) {
-                        ListItem(
-                            headlineContent = { Text(meta.title) },
-                            supportingContent = { Text(if (meta.owner) "Shared by you" else "Shared with you") }
-                        )
+            Spacer(Modifier.height(12.dp))
+            if (docs.isEmpty()) {
+                Text("No online documents yet. Open a document and use \u201CShare\u201D to copy it here and send it to someone, or ask them to share to your device id, then tap refresh.",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(docs) { meta ->
+                        Card(Modifier.fillMaxWidth().clickable { onOpenDoc(meta) }) {
+                            ListItem(
+                                headlineContent = { Text(meta.title) },
+                                supportingContent = { Text(if (meta.owner) "Shared by you" else "Shared with you") }
+                            )
+                        }
                     }
                 }
             }
