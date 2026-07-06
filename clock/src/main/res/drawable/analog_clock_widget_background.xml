@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Material You rounded "blob" container for the analog clock widget. -->
+<!-- 12-leaf clover blob for the analog clock widget: analogous to Material 3
+     MaterialShapes.Clover8Leaf (round petal tips, sharp valleys; same dA/dB and tip-rounding
+     proportions) but with 12 petals whose tips sit on the 12 hour marks. Kept 1:1 (square)
+     so it always renders as a blob; the layout scales it with fitCenter to stay centered
+     and as large as possible in any widget size. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="120dp"
     android:height="120dp"
@@ -7,9 +11,41 @@
     android:viewportHeight="100">
     <path
         android:fillColor="@android:color/system_neutral1_800"
-        android:pathData="M50,2
-            C78,2 98,22 98,50
-            C98,78 78,98 50,98
-            C22,98 2,78 2,50
-            C2,22 22,2 50,2 Z" />
+        android:pathData="M40.01,7.25
+            A11.57,11.57 0 0,1 59.99,7.25
+            L61,8.96
+            L62.72,7.98
+            A11.57,11.57 0 0,1 80.03,17.97
+            L80.04,19.96
+            L82.03,19.97
+            A11.57,11.57 0 0,1 92.02,37.28
+            L91.04,39
+            L92.75,40.01
+            A11.57,11.57 0 0,1 92.75,59.99
+            L91.04,61
+            L92.02,62.72
+            A11.57,11.57 0 0,1 82.03,80.03
+            L80.04,80.04
+            L80.03,82.03
+            A11.57,11.57 0 0,1 62.72,92.02
+            L61,91.04
+            L59.99,92.75
+            A11.57,11.57 0 0,1 40.01,92.75
+            L39,91.04
+            L37.28,92.02
+            A11.57,11.57 0 0,1 19.97,82.03
+            L19.96,80.04
+            L17.97,80.03
+            A11.57,11.57 0 0,1 7.98,62.72
+            L8.96,61
+            L7.25,59.99
+            A11.57,11.57 0 0,1 7.25,40.01
+            L8.96,39
+            L7.98,37.28
+            A11.57,11.57 0 0,1 17.97,19.97
+            L19.96,19.96
+            L19.97,17.97
+            A11.57,11.57 0 0,1 37.28,7.98
+            L39,8.96
+            Z" />
 </vector>
