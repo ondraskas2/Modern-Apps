@@ -10,5 +10,6 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.health.services.client)
     implementRoom(libs)
 }

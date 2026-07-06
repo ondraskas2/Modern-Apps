@@ -36,11 +36,11 @@ class SensorBackgroundService : Service(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
     private lateinit var gattServer: GattServerManager
+    private lateinit var healthServices: HealthServicesCollector
 
     private var lastHeartRateAt = 0L
     // The step counter reports a cumulative count since boot; we store deltas.
     private var lastStepCount = -1.0
-    private var lastPressureAt = 0L
     // Current motion state, maintained via the one-shot trigger sensors.
     @Volatile private var isStationary = false
 
@@ -48,6 +48,7 @@ class SensorBackgroundService : Service(), SensorEventListener {
         super.onCreate()
         val db = SensorDatabase.get(this)
         gattServer = GattServerManager(this, db.sensorDao(), scope)
+        healthServices = HealthServicesCollector(this, db.sensorDao(), scope)
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
     }
 
@@ -55,6 +56,7 @@ class SensorBackgroundService : Service(), SensorEventListener {
         startForeground(NOTIFICATION_ID, buildNotification())
         registerSensors()
         gattServer.start()
+        healthServices.start()
         return START_STICKY
     }
 
@@ -63,9 +65,6 @@ class SensorBackgroundService : Service(), SensorEventListener {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
         sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
-        }
-        sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
         // Arm the stationary detector; the two trigger sensors re-arm each other.
@@ -139,13 +138,6 @@ class SensorBackgroundService : Service(), SensorEventListener {
                     ),
                 )
             }
-            Sensor.TYPE_PRESSURE -> {
-                val hpa = event.values.firstOrNull()?.toDouble() ?: return
-                if (hpa <= 0.0) return
-                if (now - lastPressureAt < PRESSURE_INTERVAL_MS) return
-                lastPressureAt = now
-                persist(SensorRecord(type = MetricType.Pressure, timestamp = now, value = hpa))
-            }
         }
     }
 
@@ -189,6 +181,7 @@ class SensorBackgroundService : Service(), SensorEventListener {
             sensorManager.getDefaultSensor(Sensor.TYPE_MOTION_DETECT),
         )
         gattServer.stop()
+        healthServices.stop()
         scope.cancel()
         super.onDestroy()
     }
@@ -200,7 +193,6 @@ class SensorBackgroundService : Service(), SensorEventListener {
         private const val CHANNEL_ID = "sensor_collection"
         private const val NOTIFICATION_ID = 1
         private const val HEART_RATE_INTERVAL_MS = 60_000L
-        private const val PRESSURE_INTERVAL_MS = 30_000L
 
         fun start(context: Context) {
             val intent = Intent(context, SensorBackgroundService::class.java)

@@ -14,8 +14,12 @@ import kotlinx.coroutines.flow.Flow
 enum class MetricType {
     HeartRate,
     Steps,
-    Pressure,
     Motion,
+    // Directly-measured daily totals from Wear OS Health Services.
+    Distance,
+    Floors,
+    Elevation,
+    Calories,
 }
 
 @Entity
@@ -24,7 +28,8 @@ data class SensorRecord(
     val type: MetricType,
     val timestamp: Long,
     // For HeartRate: the bpm reading. For Steps: cumulative counter value.
-    // For Pressure: hPa. For Motion: 1.0 = stationary, 0.0 = moving.
+    // For Motion: 1.0 = stationary, 0.0 = moving. For Distance/Floors/Elevation/
+    // Calories: the running daily total from Health Services.
     val value: Double,
     // For Steps: increment since the previous reading. Otherwise 0.
     val delta: Double = 0.0,
