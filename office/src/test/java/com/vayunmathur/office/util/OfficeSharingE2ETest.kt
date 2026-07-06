@@ -10,6 +10,7 @@ import com.vayunmathur.library.ui.odf.OdfParagraph
 import com.vayunmathur.library.ui.odf.OdfSpan
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -125,6 +126,28 @@ class OfficeSharingE2ETest {
             "editor cannot forge an op as the owner (wrong signing key)",
             Pqc.verify(relay.directory[ownerId]!!, liar.ops.encodeToByteArray(), Base64.decode(liar.sig))
         )
+    }
+
+    @Test
+    fun revoked_member_cannot_read_after_key_rotation() = runBlocking {
+        val owner = PqcIdentity.loadOrCreate(MemStore(), "o")
+        val editor = PqcIdentity.loadOrCreate(MemStore(), "e")
+        val revoked = PqcIdentity.loadOrCreate(MemStore(), "r")
+        // Owner rotates: new content key sealed only to the remaining members (owner + editor).
+        val newKey = E2ee.newContentKey()
+        val wraps = mapOf(
+            "owner" to Base64.encode(Pqc.encryptTo(owner.publicBundle, newKey)),
+            "editor" to Base64.encode(Pqc.encryptTo(editor.publicBundle, newKey)),
+        )
+        // The remaining editor recovers the new key; the revoked member has no wrap for it.
+        assertArrayEquals(newKey, editor.decrypt(Base64.decode(wraps.getValue("editor"))))
+        assertTrue(wraps["revoked"] == null)
+        // New content encrypted under the new key is readable by the editor but not by the revoked
+        // member (who only ever held the old key).
+        val ct = E2ee.aesEncrypt(newKey, "post-revoke secret".encodeToByteArray())
+        assertEquals("post-revoke secret", E2ee.aesDecrypt(newKey, ct).decodeToString())
+        val oldKey = E2ee.newContentKey()
+        assertTrue(runCatching { E2ee.aesDecrypt(oldKey, ct) }.isFailure) // wrong key can't decrypt
     }
 
     @Test

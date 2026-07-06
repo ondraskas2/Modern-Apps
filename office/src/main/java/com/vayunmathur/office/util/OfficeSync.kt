@@ -141,6 +141,18 @@ object OfficeSync {
     suspend fun verify(publicBundle: ByteArray, data: ByteArray, signature: ByteArray): Boolean =
         Pqc.verify(publicBundle, data, signature)
 
+    /** Seals [data] to a recipient's public bundle (hybrid PQC) — e.g. a rotated document key. */
+    suspend fun seal(bundle: ByteArray, data: ByteArray): ByteArray = Pqc.encryptTo(bundle, data)
+
+    /** Unseals data that was sealed to this device. */
+    suspend fun unseal(data: ByteArray): ByteArray = identity.decrypt(data)
+
+    /** Appends opaque (already-encoded) blobs to a channel (no extra encryption). */
+    suspend fun appendRaw(channel: String, items: List<String>): Int? = append(channel, items)
+
+    /** Pulls opaque blobs from a channel (no decryption). */
+    suspend fun pullRaw(channel: String, since: Int): List<String> = pull(channel, since)?.actions ?: emptyList()
+
     // --- Live sync + presence over WebSocket (receive live; send presence) ---
 
     private const val WS_URL = "wss://findfamily.cc/office/ws"

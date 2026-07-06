@@ -85,6 +85,16 @@ data class SignedMember(val member: OfficeMember, val sig: String)
 @Serializable
 data class SignedTitle(val title: String, val sig: String)
 
+/**
+ * An owner-signed key epoch for cryptographic read-revocation. On revoke the owner mints a new
+ * content key, seals it to each remaining member (id → PQC-sealed key), and future ops use it. The
+ * removed member never receives the new key, so they can't read new content. Op decryption is
+ * unchanged (undecryptable ops are simply skipped), so a member who misses a key degrades to stale
+ * sync rather than being locked out.
+ */
+@Serializable
+data class KeyEpoch(val epoch: Int, val wraps: Map<String, String>, val sig: String)
+
 /** An author-signed CRDT op batch: author id, signature over [ops], and the ops JSON. */
 @Serializable
 data class SignedOp(val author: String, val sig: String, val ops: String)
@@ -1999,6 +2009,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     private var currentCharMode: Boolean = false
     private var currentRole: String = OfficeRoles.OWNER
     private var currentOwnerKey: ByteArray? = null
+    private var currentEpoch: Int = 0
+    private var currentBaseKey: ByteArray? = null // epoch-0 (invite) key, used to read the key-epoch channel context
     private val currentMembers = java.util.concurrent.ConcurrentHashMap<String, String>() // id -> role
     private val memberKeyCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>() // id -> pubkey PEM
     private val syncJson = Json { ignoreUnknownKeys = true }
@@ -2312,6 +2324,8 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                     currentRole = OfficeRoles.OWNER
                     currentOwnerKey = OfficeSync.publicBundle
                     currentMembers[OfficeSync.deviceId] = OfficeRoles.OWNER
+                    currentEpoch = 0
+                    currentBaseKey = key
                     // Reflect the chosen name in the open editor so its title matches the online doc.
                     if (doc != null) withContext(Dispatchers.Main) {
                         (_state.value as? ViewState.Loaded)?.document?.let { _state.value = ViewState.Loaded(withTitle(it, title)) }
@@ -2366,10 +2380,14 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 OfficeSync.init(getApplication())
                 val ds = DataStoreUtils.getInstance(getApplication())
-                val key = Base64.decode(meta.keyB64)
+                val inviteKey = Base64.decode(meta.keyB64)
                 currentRole = meta.role
                 currentOwnerKey = meta.ownerKeyB64.takeIf { it.isNotBlank() }?.let { Base64.decode(it) }
+                currentBaseKey = inviteKey
                 currentMembers.clear()
+                // Resolve the current content key (honors key rotations / read-revocation).
+                val (epoch, key) = fetchCurrentKey(meta.docId, inviteKey, currentOwnerKey)
+                currentEpoch = epoch
                 val crdt = loadCrdt(ds, meta.docId) ?: DocumentCrdt(OfficeSync.deviceId)
                 // Refresh the (owner-signed) roster so op role-checks are correct before applying.
                 runCatching { fetchMembers(meta.docId, key, currentOwnerKey) }
@@ -2501,9 +2519,65 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 OfficeSync.init(getApplication())
                 recordMembers(docId, key, listOf(OfficeMember(memberId, "", role)))
+                // Revoking read access requires rotating the content key so the removed member can no
+                // longer decrypt new content.
+                if (role == OfficeRoles.REVOKED) rotateKey(docId)
             }
             onResult(true)
         }
+    }
+
+    private fun epochSigningBytes(docId: String, epoch: Int, wraps: Map<String, String>): ByteArray =
+        (listOf(docId, epoch.toString()) + wraps.entries.sortedBy { it.key }.map { "${it.key}=${it.value}" }).joinToString("|").encodeToByteArray()
+
+    /**
+     * Resolves the current content key: the highest owner-signed [KeyEpoch] this device can unseal,
+     * falling back to the epoch-0 (invite) key. Returns (epoch, key).
+     */
+    private suspend fun fetchCurrentKey(docId: String, inviteKey: ByteArray, ownerKey: ByteArray?): Pair<Int, ByteArray> {
+        if (ownerKey == null) return 0 to inviteKey
+        var bestEpoch = 0; var bestKey = inviteKey
+        for (blob in runCatching { OfficeSync.pullRaw("keys:$docId", 0) }.getOrDefault(emptyList())) {
+            val ke = runCatching { syncJson.decodeFromString<KeyEpoch>(Base64.decode(blob).decodeToString()) }.getOrNull() ?: continue
+            if (!OfficeSync.verify(ownerKey, epochSigningBytes(docId, ke.epoch, ke.wraps), Base64.decode(ke.sig))) continue
+            val myWrap = ke.wraps[OfficeSync.deviceId] ?: continue
+            val k = runCatching { OfficeSync.unseal(Base64.decode(myWrap)) }.getOrNull() ?: continue
+            if (ke.epoch >= bestEpoch) { bestEpoch = ke.epoch; bestKey = k }
+        }
+        return bestEpoch to bestKey
+    }
+
+    /** Owner mints a new content key sealed to the remaining members and re-baselines the doc under it. */
+    private suspend fun rotateKey(docId: String) {
+        if (currentRole != OfficeRoles.OWNER) return
+        val oldKey = currentDocKey ?: return
+        val members = runCatching { fetchMembers(docId, oldKey, currentOwnerKey) }.getOrDefault(emptyList())
+            .filter { it.role != OfficeRoles.REVOKED }
+        val newEpoch = currentEpoch + 1
+        val newKey = OfficeSync.newDocumentKey()
+        val wraps = HashMap<String, String>()
+        for (m in members) {
+            val bundle = memberKey(m.id) ?: continue
+            wraps[m.id] = Base64.encode(OfficeSync.seal(bundle, newKey))
+        }
+        // Always include ourselves so the owner keeps access even if not yet in the roster fetch.
+        wraps[OfficeSync.deviceId] = Base64.encode(OfficeSync.seal(OfficeSync.publicBundle, newKey))
+        val sig = Base64.encode(OfficeSync.sign(epochSigningBytes(docId, newEpoch, wraps)))
+        val record = Base64.encode(syncJson.encodeToString(KeyEpoch(newEpoch, wraps, sig)).encodeToByteArray())
+        OfficeSync.appendRaw("keys:$docId", listOf(record))
+        // Switch to the new key and re-baseline: push the full current CRDT under the new key so
+        // remaining members rebuild from it (their old-key ops still apply; new ops use the new key).
+        currentEpoch = newEpoch
+        currentDocKey = newKey
+        val crdt = currentCrdt
+        if (crdt != null) {
+            val snapshot = crdt.toState().elements
+            val opsJson = syncJson.encodeToString(snapshot)
+            val opSig = Base64.encode(OfficeSync.sign(opsJson.encodeToByteArray()))
+            OfficeSync.appendDocActions(docId, newKey, listOf(syncJson.encodeToString(SignedOp(OfficeSync.deviceId, opSig, opsJson))))
+        }
+        // Restart the live loop on the new key.
+        startLive(docId, newKey)
     }
 
     private fun titleSigningBytes(docId: String, title: String): ByteArray = "$docId|title|$title".encodeToByteArray()
