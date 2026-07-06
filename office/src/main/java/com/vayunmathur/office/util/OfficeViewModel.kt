@@ -57,9 +57,21 @@ object OfficeRoles {
     fun canEdit(role: String) = role == OWNER || role == EDITOR
 }
 
+/** How long a collaborator stays visible after their last activity, and how long "typing…" lingers. */
+private const val PRESENCE_TTL_MS = 5 * 60 * 1000L
+private const val TYPING_TTL_MS = 3000L
+
 /** Ephemeral presence for a collaborator in a document (relayed encrypted; never stored). */
 @Serializable
-data class OfficePresence(val id: String, val name: String, val typing: Boolean, val ts: Long, val caret: Int? = null)
+data class OfficePresence(
+    val id: String,
+    val name: String,
+    val typing: Boolean,
+    val ts: Long,
+    val caret: Int? = null,
+    /** Local-only: when this peer was last seen typing (drives the "typing…" auto-clear). */
+    val typingTs: Long = 0,
+)
 
 /** A member of a document (who has access + their role). Distributed as owner-signed records. */
 @Serializable
@@ -194,12 +206,32 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         pushUndo(current)
         // Keep ordered-list numbering live after every text edit (matches the markdown editor).
         val stored = if (newDoc is OdfDocument.TextDocument) renumberLists(newDoc) else newDoc
+        // Shift remote collaborators' carets by this text change so they stay at the right spot until
+        // the peer sends fresh presence (otherwise inserting/deleting before their caret misplaces it).
+        remapRemoteCarets(current, stored)
         _state.value = ViewState.Loaded(stored)
         _hasUnsavedChanges.value = true
         // Bump the local-edit version for genuine user edits (not remote merges) so a background
         // sync/merge won't overwrite a keystroke that landed while it was running.
         if (!applyingRemote) editVersion++
         onLocalEdit()
+    }
+
+    /** Plain text of a text document (paragraphs joined by newlines), matching editor caret offsets. */
+    private fun docPlainText(doc: OdfDocument): String? =
+        (doc as? OdfDocument.TextDocument)?.content
+            ?.mapNotNull { (it as? OdfContentBlock.Paragraph)?.paragraph?.spans?.joinToString("") { s -> s.text } }
+            ?.joinToString("\n")
+
+    private fun remapRemoteCarets(old: OdfDocument, new: OdfDocument) {
+        val presence = _remotePresence.value
+        if (presence.none { it.caret != null }) return
+        val oldText = docPlainText(old) ?: return
+        val newText = docPlainText(new) ?: return
+        if (oldText == newText) return
+        _remotePresence.value = presence.map { p ->
+            if (p.caret != null) p.copy(caret = remapCaret(oldText, newText, p.caret)) else p
+        }
     }
 
     // --- Recent files ---
@@ -302,6 +334,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
         currentCharMode = false
         OfficeSync.stopLive()
         livePollJob?.cancel()
+        presenceTickJob?.cancel()
         _remotePresence.value = emptyList()
         _isOnline.value = false
         autoSaveJob?.cancel()
@@ -1956,6 +1989,7 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var editVersion = 0
     private var livePushJob: Job? = null
     private var livePollJob: Job? = null
+    private var presenceTickJob: Job? = null
     private var localCaret = 0
     private var caretPresenceJob: Job? = null
 
@@ -2012,6 +2046,19 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 kotlinx.coroutines.delay(1200)
                 runCatching { syncDoc(docId, key) }
+            }
+        }
+        // Presence upkeep: clear a peer's "typing…" a few seconds after they stop, and drop the whole
+        // presence entry after 5 minutes of no cursor movement / typing.
+        presenceTickJob?.cancel()
+        presenceTickJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                kotlinx.coroutines.delay(1000)
+                val now = System.currentTimeMillis()
+                val cur = _remotePresence.value
+                val next = cur.filter { now - it.ts < PRESENCE_TTL_MS }
+                    .map { if (it.typing && now - it.typingTs > TYPING_TTL_MS) it.copy(typing = false) else it }
+                if (next != cur) _remotePresence.value = next
             }
         }
     }
@@ -2076,7 +2123,11 @@ class OfficeViewModel(application: Application) : AndroidViewModel(application) 
                 val p = runCatching { syncJson.decodeFromString<OfficePresence>(plain) }.getOrNull() ?: return
                 if (p.id == OfficeSync.deviceId) return
                 val now = System.currentTimeMillis()
-                _remotePresence.value = _remotePresence.value.filter { it.id != p.id && now - it.ts < 8000 } + p.copy(ts = now)
+                val prev = _remotePresence.value.firstOrNull { it.id == p.id }
+                val typingTs = if (p.typing) now else (prev?.typingTs ?: 0L)
+                // Keep peers for up to 5 minutes; the ticker prunes/clears typing over time.
+                _remotePresence.value = _remotePresence.value.filter { it.id != p.id && now - it.ts < PRESENCE_TTL_MS } +
+                    p.copy(ts = now, typingTs = typingTs)
             }
         }
     }
