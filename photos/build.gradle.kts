@@ -1,5 +1,6 @@
 plugins {
     id("common-conventions-app")
+    id("common-conventions-metadata")
     alias(libs.plugins.ksp)
 }
 
@@ -19,6 +20,15 @@ android {
             pickFirsts.add("**/libtensorflowlite_jni.so")
         }
     }
+}
+
+metadataScreenshots {
+    permissions.addAll(
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+    )
+    appops.add("MANAGE_MEDIA")
 }
 
 dependencies {
