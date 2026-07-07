@@ -2,6 +2,7 @@ import java.util.Properties
 
 plugins {
     id("common-conventions-app")
+    id("common-conventions-metadata")
     alias(libs.plugins.ksp)
 }
 
