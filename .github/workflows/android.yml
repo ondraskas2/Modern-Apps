@@ -63,7 +63,8 @@ jobs:
           echo "Using Version Name: $VERSION_NAME"
           echo "Using Version Code: $VERSION_CODE"
           
-          find . -mindepth 2 -name "build.gradle.kts" | while read file; do
+          find . -mindepth 2 -name "build.gradle.kts" | \
+            grep -vE '^\./(library/|watch/shared/)' | while read file; do
             sed -i '/versionCode[[:space:]]*=[[:space:]]*/d' "$file"
             sed -i '/versionName[[:space:]]*=[[:space:]]*/d' "$file"
             sed -i "/defaultConfig[[:space:]]*{/a \        versionCode = $VERSION_CODE\n        versionName = \"$VERSION_NAME\"" "$file"
