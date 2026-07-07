@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import com.vayunmathur.games.chess.data.Board
+import com.vayunmathur.stockfish.Stockfish
 import java.io.File
 
 object StockfishEngine {
@@ -23,14 +24,6 @@ object StockfishEngine {
 
     var difficulty: Difficulty = Difficulty.BEGINNER
 
-    private external fun nativeInit()
-    private external fun nativeSendCommand(command: String)
-    private external fun nativeSetOutputCallback(callback: OutputCallback)
-
-    interface OutputCallback {
-        fun onOutput(line: String)
-    }
-
     suspend fun nextMove(board: Board) {
         inputChannel.send("position fen ${board.toFen()}")
         inputChannel.send("setoption name Skill Level value ${difficulty.skill}")
@@ -39,24 +32,19 @@ object StockfishEngine {
 
     fun start(context: Context) {
         if (engineStarted) return
-        System.loadLibrary("stockfish")
         engineStarted = true
 
-        nativeSetOutputCallback(object : OutputCallback {
-            override fun onOutput(line: String) {
-                Log.d("StockfishEngine", "Stockfish output: $line")
-                outputChannel.trySend(line)
-            }
-        })
-
-        nativeInit()
+        Stockfish.init { line ->
+            Log.d("StockfishEngine", "Stockfish output: $line")
+            outputChannel.trySend(line)
+        }
 
         val nnuePath = copyAssetToFiles(context, "nn-71d6d32cb962.nnue")
 
         CoroutineScope(Dispatchers.IO).launch {
             for (cmd in inputChannel) {
                 Log.d("StockfishEngine", "Stockfish Input: $cmd")
-                nativeSendCommand(cmd)
+                Stockfish.sendCommand(cmd)
             }
         }
 
