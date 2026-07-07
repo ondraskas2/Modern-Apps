@@ -55,4 +55,7 @@ dependencies {
     implementation(project(":library:widgets"))
     implementation(project(":library:biometric"))
     implementation(project(":library:ocr"))
+
+    // The metadata screenshot generator writes EXIF GPS into seeded JPEGs.
+    androidTestImplementation(libs.androidx.exifinterface)
 }
