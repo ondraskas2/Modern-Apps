@@ -9,6 +9,12 @@ android {
         applicationId = "com.vayunmathur.clock"
     }
 }
+
+metadataScreenshots {
+    permissions.add("android.permission.POST_NOTIFICATIONS")
+    appops.addAll("SCHEDULE_EXACT_ALARM", "USE_FULL_SCREEN_INTENT")
+}
+
 dependencies {
     implementRoom(libs)
 }
