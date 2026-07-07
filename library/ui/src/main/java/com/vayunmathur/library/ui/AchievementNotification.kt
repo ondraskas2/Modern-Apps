@@ -39,7 +39,7 @@ fun AchievementNotification(
     visibleState.targetState = true
 
     LaunchedEffect(achievement) {
-        delay(3000)
+        delay(7000)
         visibleState.targetState = false
     }
     // Notify the caller only once the exit transition has fully played out.
