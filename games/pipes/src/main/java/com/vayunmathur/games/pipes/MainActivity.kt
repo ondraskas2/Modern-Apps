@@ -56,6 +56,7 @@ import com.vayunmathur.library.ui.AchievementNotification
 import com.vayunmathur.library.ui.GameCenterScreen
 import com.vayunmathur.library.ui.IconCheck
 import com.vayunmathur.library.ui.IconNavigation
+import com.vayunmathur.library.ui.IconSettings
 import com.vayunmathur.library.ui.IconStar
 import com.vayunmathur.library.util.MainNavigation
 import com.vayunmathur.library.util.NavBackStack
@@ -141,7 +142,7 @@ fun PackScreen(backStack: NavBackStack<Route>, viewModel: PipesViewModel, onOpen
             title = { Text(stringResource(R.string.pack_selector)) },
             actions = {
                 IconButton(onClick = { backStack.add(Route.Settings) }) {
-                    Icon(painterResource(id = android.R.drawable.ic_menu_manage), "Settings")
+                    IconSettings()
                 }
                 IconButton(onClick = onOpenGameCenter) {
                     Icon(painterResource(id = android.R.drawable.btn_star_big_on), "Achievements")
