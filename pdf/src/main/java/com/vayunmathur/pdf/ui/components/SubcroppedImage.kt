@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,10 +70,6 @@ private fun PerspectiveCroppedImage(
                 croppedBitmap = result
             } catch (_: Exception) {}
         }
-    }
-
-    DisposableEffect(croppedBitmap) {
-        onDispose { croppedBitmap?.recycle() }
     }
 
     croppedBitmap?.let { bmp ->
