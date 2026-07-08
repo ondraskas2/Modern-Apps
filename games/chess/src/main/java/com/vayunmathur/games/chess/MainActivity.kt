@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -629,7 +630,13 @@ fun LearnHomeScreen(onOpenStage: (String, String) -> Unit) {
             return@Scaffold
         }
         LazyColumn(
-            Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp),
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = pad.calculateTopPadding() + 8.dp,
+                bottom = pad.calculateBottomPadding() + 8.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             cats.forEach { cat ->
