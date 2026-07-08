@@ -30,4 +30,5 @@
     <string name="drafts">草稿</string>
     <string name="save">保存</string>
     <string name="cancel">取消</string>
+    <string name="email_widget_description">来自统一收件箱的最新邮件 — 点按即可打开 Email</string>
 </resources>
