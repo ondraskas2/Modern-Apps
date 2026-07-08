@@ -185,6 +185,17 @@ data class Board(
         return !movePieceInternal(start, end).isKingInCheck(piece.color)
     }
 
+    /**
+     * Legality of a move ignoring whether it leaves the mover's own king in check
+     * (i.e. pseudo-legal). Used by the Learn feature to model Lichess's antichess-style
+     * kingless lesson boards and its "offer illegal move" levels.
+     */
+    fun isPseudoLegalMove(start: Position, end: Position): Boolean =
+        isValidMoveIgnoringCheck(start, end)
+
+    /** Total number of kings on the board (both colors). */
+    fun kingCount(): Int = pieces.sumOf { row -> row.count { it?.type == PieceType.KING } }
+
     private fun isValidMoveIgnoringCheck(start: Position, end: Position): Boolean {
         val piece = pieces[start.row][start.col] ?: return false
         val targetPiece = pieces[end.row][end.col]
