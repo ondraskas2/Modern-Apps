@@ -33,6 +33,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -96,6 +97,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -196,7 +202,10 @@ class MainActivity : ComponentActivity() {
                             }
                             LearnStageScreen(
                                 viewModel = learnViewModel,
-                                onBack = { backStack.pop() }
+                                onBack = { backStack.pop() },
+                                onOpenStage = { cat, stage ->
+                                    backStack.setLast(Route.LearnStage(cat, stage))
+                                }
                             )
                         }
                         entry<Route.GameCenter> {
@@ -632,12 +641,17 @@ fun LearnHomeScreen(onOpenStage: (String, String) -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LearnStageScreen(viewModel: LearnViewModel, onBack: () -> Unit) {
+fun LearnStageScreen(
+    viewModel: LearnViewModel,
+    onBack: () -> Unit,
+    onOpenStage: (String, String) -> Unit
+) {
     val ui by viewModel.uiState.collectAsState()
     val stage = ui.stage
     val level = ui.level
 
-    LaunchedEffect(ui.stageFinished) { if (ui.stageFinished) onBack() }
+    // Lichess shows a "Stage N: title … Let's go!" card once when the stage opens.
+    var showIntro by remember(stage?.key) { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
@@ -657,14 +671,18 @@ fun LearnStageScreen(viewModel: LearnViewModel, onBack: () -> Unit) {
         }
         val isLast = ui.levelIndex + 1 >= stage.levels.size
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp),
-            Arrangement.Center,
-            Alignment.CenterHorizontally
+            Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                stringResource(R.string.learn_level, ui.levelIndex + 1, stage.levels.size),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                stage.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -676,23 +694,23 @@ fun LearnStageScreen(viewModel: LearnViewModel, onBack: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             LearnBoard(ui, viewModel::onSquareClick)
             Spacer(Modifier.height(12.dp))
+            LevelStepper(
+                count = stage.levels.size,
+                current = ui.levelIndex,
+                stars = ui.stageStars,
+                onSelect = { viewModel.goToLevel(it) }
+            )
+            Spacer(Modifier.height(12.dp))
 
             // Fixed-height status/action area so the board never shifts.
-            Box(Modifier.height(96.dp), contentAlignment = Alignment.TopCenter) {
+            Box(Modifier.height(112.dp), contentAlignment = Alignment.TopCenter) {
                 when (ui.status) {
-                    LearnStatus.Completed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    LearnStatus.Completed -> if (!isLast) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         StarRow(ui.starsEarned)
-                        Text(
-                            if (isLast) stringResource(R.string.learn_stage_complete)
-                            else stringResource(R.string.learn_completed),
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text(stringResource(R.string.learn_completed), fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { viewModel.nextLevel() }) {
-                            Text(
-                                if (isLast) stringResource(R.string.learn_back_to_lessons)
-                                else stringResource(R.string.learn_next)
-                            )
+                            Text(stringResource(R.string.learn_next))
                         }
                     }
                     LearnStatus.Failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -704,6 +722,146 @@ fun LearnStageScreen(viewModel: LearnViewModel, onBack: () -> Unit) {
                     }
                     LearnStatus.Playing -> {}
                 }
+            }
+        }
+
+        if (showIntro) StageIntroDialog(stage, onStart = { showIntro = false })
+
+        // Stage-complete overlay after the final level (Lichess "Stage N complete").
+        if (ui.status == LearnStatus.Completed && isLast) {
+            val next = com.vayunmathur.games.chess.data.LearnRepository.nextStage(stage.key)
+            StageCompleteDialog(
+                stage = stage,
+                stageStars = ui.stageStars,
+                score = ui.stageScore,
+                nextTitle = next?.second?.title,
+                onNext = { next?.let { onOpenStage(it.first, it.second.key) } },
+                onBackToMenu = onBack
+            )
+        }
+    }
+}
+
+@Composable
+fun StageCompleteDialog(
+    stage: com.vayunmathur.games.chess.data.LearnStage,
+    stageStars: List<Int>,
+    score: Int,
+    nextTitle: String?,
+    onNext: () -> Unit,
+    onBackToMenu: () -> Unit
+) {
+    val total = stageStars.sum()
+    val max = stageStars.size * 3
+    val rank = when {
+        max > 0 && total >= max -> 3
+        max > 0 && total >= max * 2 / 3 -> 2
+        else -> 1
+    }
+    AlertDialog(
+        onDismissRequest = onBackToMenu,
+        title = {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                StarRow(rank)
+                Spacer(Modifier.height(8.dp))
+                Text(stringResource(R.string.learn_stage_complete_n, stage.id))
+            }
+        },
+        text = {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    stringResource(R.string.learn_your_score, score),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(stage.complete, textAlign = TextAlign.Center)
+            }
+        },
+        confirmButton = {
+            if (nextTitle != null) {
+                Button(onClick = onNext, Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.learn_next_stage, nextTitle))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onBackToMenu, Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.learn_back_to_menu))
+            }
+        }
+    )
+}
+
+private fun stageIconRes(key: String): Int = when (key) {
+    "rook" -> R.drawable.chess_rook_fill1_24px
+    "bishop" -> R.drawable.chess_bishop_fill1_24px
+    "queen" -> R.drawable.chess_queen_fill1_24px
+    "king" -> R.drawable.chess_king_2_fill1_24px
+    "knight" -> R.drawable.chess_knight_fill1_24px
+    "pawn" -> R.drawable.chess_pawn_fill1_24px
+    else -> R.drawable.school_24px
+}
+
+@Composable
+fun StageIntroDialog(stage: com.vayunmathur.games.chess.data.LearnStage, onStart: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onStart,
+        title = {
+            Text(
+                stringResource(R.string.learn_stage_number, stage.id, stage.title),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(painterResource(stageIconRes(stage.key)), null, Modifier.size(64.dp))
+                Spacer(Modifier.height(12.dp))
+                Text(stage.intro, textAlign = TextAlign.Center)
+            }
+        },
+        confirmButton = {
+            Button(onClick = onStart, Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.learn_lets_go))
+            }
+        }
+    )
+}
+
+@Composable
+fun LevelStepper(count: Int, current: Int, stars: List<Int>, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        for (i in 0 until count) {
+            val done = stars.getOrElse(i) { 0 } > 0
+            val isCurrent = i == current
+            val bg = when {
+                isCurrent -> MaterialTheme.colorScheme.primary
+                done -> MaterialTheme.colorScheme.primaryContainer
+                else -> MaterialTheme.colorScheme.surfaceVariant
+            }
+            val fg = when {
+                isCurrent -> MaterialTheme.colorScheme.onPrimary
+                done -> MaterialTheme.colorScheme.onPrimaryContainer
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(bg)
+                    .clickable { onSelect(i) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "${i + 1}",
+                    color = fg,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                )
             }
         }
     }
