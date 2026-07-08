@@ -606,18 +606,23 @@ fun PuzzleScreen(viewModel: PuzzleViewModel) {
             )
             Spacer(Modifier.height(16.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Reserve the action-row height whether or not the Failed buttons are
+            // shown, so the board and everything above it never shift.
+            Box(Modifier.height(40.dp), contentAlignment = Alignment.Center) {
                 if (uiState.status == PuzzleStatus.Failed) {
-                    Button(onClick = { viewModel.retry() }) {
-                        Text(stringResource(R.string.puzzle_retry))
-                    }
-                    OutlinedButton(onClick = { viewModel.showSolution() }) {
-                        Text(stringResource(R.string.puzzle_show_solution))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { viewModel.retry() }) {
+                            Text(stringResource(R.string.puzzle_retry))
+                        }
+                        OutlinedButton(onClick = { viewModel.showSolution() }) {
+                            Text(stringResource(R.string.puzzle_show_solution))
+                        }
                     }
                 }
-                Button(onClick = { viewModel.loadRandom() }) {
-                    Text(stringResource(R.string.puzzle_next))
-                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = { viewModel.loadRandom() }) {
+                Text(stringResource(R.string.puzzle_next))
             }
         }
     }
