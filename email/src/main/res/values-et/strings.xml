@@ -30,4 +30,5 @@
     <string name="drafts">Kavandid</string>
     <string name="save">Salvesta</string>
     <string name="cancel">Katkesta</string>
+    <string name="email_widget_description">Vaata e-kirju ühtsest postkastist - klõpsa ja ava E-post</string>
 </resources>
