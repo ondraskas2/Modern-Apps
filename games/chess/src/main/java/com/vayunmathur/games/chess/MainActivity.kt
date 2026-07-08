@@ -430,6 +430,7 @@ fun CapturedPiecesRow(pieces: List<Piece>) {
 // File-scope so the chess board doesn't allocate 32 Color instances per recomposition.
 private val lightSquareColor = Color(0xFFBBBBBB)
 private val darkSquareColor = Color.Gray
+private val lastMoveColor = Color(0xFF4CAF50)
 
 @Composable
 fun BoardGrid(
@@ -437,9 +438,12 @@ fun BoardGrid(
     selectedPiece: Position?,
     isFlipped: Boolean,
     turn: PieceColor,
-    onSquareClick: (Position) -> Unit
+    onSquareClick: (Position) -> Unit,
+    showLastMove: Boolean = false
 ) {
     val isKingInCheck = board.isKingInCheck(turn)
+    // The puzzle board seeds a synthetic zero-length lastMove to encode turn; skip it.
+    val lastMove = board.lastMove?.takeIf { showLastMove && it.start != it.end }
     Column(
         Modifier
             .fillMaxWidth()
@@ -453,6 +457,9 @@ fun BoardGrid(
                     val isSelected = selectedPiece?.let { it.row == i && it.col == j } ?: false
                     val isKingInCheckSquare =
                         isKingInCheck && piece?.type == PieceType.KING && piece.color == turn
+                    val isLastMoveSquare = lastMove?.let {
+                        (it.start.row == i && it.start.col == j) || (it.end.row == i && it.end.col == j)
+                    } ?: false
                     val color = if ((i + j) % 2 == 0) lightSquareColor else darkSquareColor
 
                     Box(
@@ -464,11 +471,12 @@ fun BoardGrid(
                                 onSquareClick(Position(i, j))
                             }
                             .then(
-                                if (isSelected)
-                                    Modifier.border(2.dp, Color.Yellow)
-                                else if (isKingInCheckSquare)
-                                    Modifier.border(2.dp, Color.Red)
-                                else Modifier
+                                when {
+                                    isSelected -> Modifier.border(2.dp, Color.Yellow)
+                                    isKingInCheckSquare -> Modifier.border(2.dp, Color.Red)
+                                    isLastMoveSquare -> Modifier.border(3.dp, lastMoveColor)
+                                    else -> Modifier
+                                }
                             )
                     ) {
                         piece?.let {
@@ -578,7 +586,8 @@ fun PuzzleScreen(viewModel: PuzzleViewModel) {
                 selectedPiece = uiState.selectedPiece,
                 isFlipped = uiState.isBoardFlipped,
                 turn = uiState.playerColor,
-                onSquareClick = viewModel::onSquareClick
+                onSquareClick = viewModel::onSquareClick,
+                showLastMove = true
             )
             Spacer(Modifier.height(16.dp))
 
@@ -597,8 +606,8 @@ fun PuzzleScreen(viewModel: PuzzleViewModel) {
             )
             Spacer(Modifier.height(16.dp))
 
-            if (uiState.status == PuzzleStatus.Failed) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (uiState.status == PuzzleStatus.Failed) {
                     Button(onClick = { viewModel.retry() }) {
                         Text(stringResource(R.string.puzzle_retry))
                     }
@@ -606,10 +615,9 @@ fun PuzzleScreen(viewModel: PuzzleViewModel) {
                         Text(stringResource(R.string.puzzle_show_solution))
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-            }
-            Button(onClick = { viewModel.loadRandom() }) {
-                Text(stringResource(R.string.puzzle_next))
+                Button(onClick = { viewModel.loadRandom() }) {
+                    Text(stringResource(R.string.puzzle_next))
+                }
             }
         }
     }
