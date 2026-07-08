@@ -78,4 +78,5 @@
     <string name="by_week_no_label">Nädala numbri järgi (1-53, -1 kuni -53)</string>
     <string name="by_week_no_placeholder">nt. 1,26,52</string>
     <string name="add_reminder">Lisa meeldetuletus</string>
+    <string name="calendar_widget_description">Tulevaset sündmused ühe vaatena - klõpsa ja ava Kalender</string>
 </resources>
