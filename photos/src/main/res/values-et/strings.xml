@@ -47,4 +47,5 @@
         <item quantity="one">%1$d inimene</item>
         <item quantity="other">%1$d inimest</item>
     </plurals>
+    <string name="photo_widget_description">Fotod sinu galeriist - klõpsa ja seadista</string>
 </resources>
