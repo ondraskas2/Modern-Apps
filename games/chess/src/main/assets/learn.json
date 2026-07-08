@@ -5,6 +5,7 @@
    "name": "Chess pieces",
    "stages": [
     {
+     "id": 1,
      "key": "rook",
      "title": "The rook",
      "subtitle": "It moves in straight lines",
@@ -81,6 +82,7 @@
      ]
     },
     {
+     "id": 2,
      "key": "bishop",
      "title": "The bishop",
      "subtitle": "It moves diagonally",
@@ -150,6 +152,7 @@
      ]
     },
     {
+     "id": 3,
      "key": "queen",
      "title": "The queen",
      "subtitle": "Queen = rook + bishop",
@@ -211,6 +214,7 @@
      ]
     },
     {
+     "id": 4,
      "key": "king",
      "title": "The king",
      "subtitle": "The most important piece",
@@ -264,6 +268,7 @@
      ]
     },
     {
+     "id": 5,
      "key": "knight",
      "title": "The knight",
      "subtitle": "It moves in an L shape",
@@ -333,6 +338,7 @@
      ]
     },
     {
+     "id": 6,
      "key": "pawn",
      "title": "The pawn",
      "subtitle": "It moves forward only",
@@ -480,6 +486,7 @@
    "name": "Fundamentals",
    "stages": [
     {
+     "id": 7,
      "key": "capture",
      "title": "Capture",
      "subtitle": "Take the enemy pieces",
@@ -573,6 +580,7 @@
      ]
     },
     {
+     "id": 8,
      "key": "protection",
      "title": "Protection",
      "subtitle": "Keep your pieces safe",
@@ -673,6 +681,7 @@
      ]
     },
     {
+     "id": 9,
      "key": "combat",
      "title": "Combat",
      "subtitle": "Capture and defend pieces",
@@ -759,6 +768,7 @@
      ]
     },
     {
+     "id": 10,
      "key": "check1",
      "title": "Check in one",
      "subtitle": "Attack the opponent's king",
@@ -831,6 +841,7 @@
      ]
     },
     {
+     "id": 11,
      "key": "outOfCheck",
      "title": "Out of check",
      "subtitle": "Defend your king",
@@ -908,6 +919,7 @@
      ]
     },
     {
+     "id": 12,
      "key": "checkmate1",
      "title": "Mate in one",
      "subtitle": "Defeat the opponent's king",
@@ -989,6 +1001,7 @@
    "name": "Intermediate",
    "stages": [
     {
+     "id": 13,
      "key": "setup",
      "title": "Board setup",
      "subtitle": "How the game starts",
@@ -1066,6 +1079,7 @@
      ]
     },
     {
+     "id": 14,
      "key": "castling",
      "title": "Castling",
      "subtitle": "The special king move",
@@ -1238,6 +1252,7 @@
      ]
     },
     {
+     "id": 15,
      "key": "enpassant",
      "title": "En passant rights",
      "subtitle": "The special pawn move",
@@ -1301,6 +1316,7 @@
      ]
     },
     {
+     "id": 16,
      "key": "stalemate",
      "title": "Stalemate",
      "subtitle": "The game is a draw",
@@ -1378,6 +1394,7 @@
    "name": "Advanced",
    "stages": [
     {
+     "id": 17,
      "key": "value",
      "title": "Piece value",
      "subtitle": "Evaluate piece strength",
@@ -1465,6 +1482,7 @@
      ]
     },
     {
+     "id": 18,
      "key": "check2",
      "title": "Check in two",
      "subtitle": "Two moves to give a check",

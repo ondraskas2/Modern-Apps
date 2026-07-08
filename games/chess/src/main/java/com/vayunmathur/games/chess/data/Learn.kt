@@ -47,6 +47,7 @@ data class LearnLevel(
 
 @Serializable
 data class LearnStage(
+    val id: Int = 0,
     val key: String,
     val title: String,
     val subtitle: String,
@@ -96,6 +97,13 @@ object LearnRepository {
 
     fun stage(categoryKey: String, stageKey: String): LearnStage? =
         categories.firstOrNull { it.key == categoryKey }?.stages?.firstOrNull { it.key == stageKey }
+
+    /** The (categoryKey, stage) that follows [stageKey] across all categories, or null if last. */
+    fun nextStage(stageKey: String): Pair<String, LearnStage>? {
+        val flat = categories.flatMap { c -> c.stages.map { c.key to it } }
+        val idx = flat.indexOfFirst { it.second.key == stageKey }
+        return if (idx >= 0 && idx + 1 < flat.size) flat[idx + 1] else null
+    }
 
     /**
      * Builds the starting [Board] for [level]. Apple target squares are placed as
