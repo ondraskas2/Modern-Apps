@@ -1,0 +1,132 @@
+package com.vayunmathur.pdf.util
+
+import android.content.Context
+import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * A parsed PDF for the "safe" viewer, backed by the native Rust renderer.
+ *
+ * Reads the [Uri] bytes through the [Context]'s content resolver, hands them to
+ * [PdfNative.openDocument], and exposes the [pageCount] plus a per-page
+ * [renderPage]. Rendered pages are cached so scrolling back does not re-decode.
+ * All native work happens on [Dispatchers.IO]; callers must [close] when done.
+ */
+class SafePdfDocument private constructor(
+    private val handle: Long,
+    val pageCount: Int,
+) {
+    private val cache = ConcurrentHashMap<Int, SafePdfPage>()
+
+    /** Decode page [index] (0-based), or `null` if the native render fails. */
+    suspend fun renderPage(index: Int): SafePdfPage? = withContext(Dispatchers.IO) {
+        cache[index]?.let { return@withContext it }
+        val bytes = PdfNative.renderPage(handle, index) ?: return@withContext null
+        val page = SafePdfParser.parse(bytes)
+        cache[index] = page
+        page
+    }
+
+    /** Release native resources. Idempotent-safe to call once. */
+    fun close() {
+        PdfNative.closeDocument(handle)
+    }
+
+    private fun invalidate(index: Int) {
+        cache.remove(index)
+    }
+
+    /** Annotations on [index] for the editing overlay. */
+    suspend fun annotations(index: Int): List<SafeAnnotation> = withContext(Dispatchers.IO) {
+        PdfNative.listAnnotations(handle, index)
+            ?.let { SafePdfParser.parseAnnotations(it) } ?: emptyList()
+    }
+
+    /** AcroForm widget fields on [index]. */
+    suspend fun formFields(index: Int): List<SafeFormField> = withContext(Dispatchers.IO) {
+        PdfNative.listFormFields(handle, index)
+            ?.let { SafePdfParser.parseFormFields(it) } ?: emptyList()
+    }
+
+    suspend fun addText(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, size: Float, text: String,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addTextAnnotation(handle, index, x0, y0, x1, y1, argb, size, text)
+            .also { invalidate(index) }
+    }
+
+    suspend fun addHighlight(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float, argb: Int,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addHighlight(handle, index, x0, y0, x1, y1, argb).also { invalidate(index) }
+    }
+
+    suspend fun addRect(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addRectAnnotation(handle, index, x0, y0, x1, y1, argb, lineWidth)
+            .also { invalidate(index) }
+    }
+
+    suspend fun addInk(
+        index: Int, argb: Int, lineWidth: Float, pts: FloatArray,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addInkAnnotation(handle, index, argb, lineWidth, pts).also { invalidate(index) }
+    }
+
+    suspend fun addImageStamp(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float, imgW: Int, imgH: Int, jpeg: ByteArray,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addImageStamp(handle, index, x0, y0, x1, y1, imgW, imgH, jpeg)
+            .also { invalidate(index) }
+    }
+
+    suspend fun moveAnnotation(
+        index: Int, annotId: Long, x0: Float, y0: Float, x1: Float, y1: Float,
+    ): Boolean = withContext(Dispatchers.IO) {
+        PdfNative.updateAnnotationRect(handle, annotId, x0, y0, x1, y1).also { invalidate(index) }
+    }
+
+    suspend fun editText(index: Int, annotId: Long, text: String): Boolean =
+        withContext(Dispatchers.IO) {
+            PdfNative.updateTextAnnotation(handle, annotId, text).also { invalidate(index) }
+        }
+
+    suspend fun deleteAnnotation(index: Int, annotId: Long): Boolean = withContext(Dispatchers.IO) {
+        PdfNative.deleteAnnotation(handle, index, annotId).also { invalidate(index) }
+    }
+
+    suspend fun setTextField(index: Int, widgetId: Long, value: String): Boolean =
+        withContext(Dispatchers.IO) {
+            PdfNative.setTextField(handle, widgetId, value).also { invalidate(index) }
+        }
+
+    suspend fun setCheckbox(index: Int, widgetId: Long, on: Boolean): Boolean =
+        withContext(Dispatchers.IO) {
+            PdfNative.setCheckbox(handle, widgetId, on).also { invalidate(index) }
+        }
+
+    /** Serialize the (possibly edited) document to PDF bytes. */
+    suspend fun save(): ByteArray? = withContext(Dispatchers.IO) { PdfNative.saveDocument(handle) }
+
+    companion object {
+        /**
+         * Open [uri] as a safe PDF, or return `null` when the native lib is
+         * unavailable, the bytes can't be read, or parsing fails (e.g. the PDF
+         * is encrypted). Runs entirely off the main thread.
+         */
+        suspend fun open(context: Context, uri: Uri): SafePdfDocument? =
+            withContext(Dispatchers.IO) {
+                if (!PdfNative.isAvailable) return@withContext null
+                val bytes = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull() ?: return@withContext null
+
+                val handle = PdfNative.openDocument(bytes)
+                if (handle == 0L) return@withContext null
+                SafePdfDocument(handle, PdfNative.getPageCount(handle))
+            }
+    }
+}
