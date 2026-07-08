@@ -18,3 +18,5 @@ local.properties
 .kotlin/
 *.env
 distribution_apks/
+.venv/
+__pycache__/
