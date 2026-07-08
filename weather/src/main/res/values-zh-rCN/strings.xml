@@ -12,4 +12,5 @@
     <string name="map_time">时间</string>
     <string name="map_back">返回</string>
     <string name="map_attribution">© OpenStreetMap · © CARTO</string>
+    <string name="weather_widget_description">一览当前时间、日期和天气 — 点按即可查看天气预报</string>
 </resources>
