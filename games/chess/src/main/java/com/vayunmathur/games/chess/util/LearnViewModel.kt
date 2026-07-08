@@ -79,7 +79,9 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
                 LearnRepository.ensureLoaded(getApplication())
                 LearnRepository.stage(categoryKey, stageKey)
             } ?: return@launch
-            startLevel(stage, 0)
+            // Resume at the first level that hasn't been solved yet.
+            val firstIncomplete = loadStageStars(stage).indexOfFirst { it == 0 }
+            startLevel(stage, if (firstIncomplete >= 0) firstIncomplete else 0)
         }
     }
 
