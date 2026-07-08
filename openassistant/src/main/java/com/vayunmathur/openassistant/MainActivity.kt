@@ -24,6 +24,7 @@ import com.vayunmathur.openassistant.data.MessageDao
 import com.vayunmathur.openassistant.ui.LiteRTChatUi
 import com.vayunmathur.openassistant.ui.SettingsPage
 import com.vayunmathur.openassistant.util.AssistantViewModel
+import com.vayunmathur.openassistant.util.SiglipEmbedder
 
 class MainActivity : ComponentActivity() {
 
@@ -57,6 +58,11 @@ class MainActivity : ComponentActivity() {
             DynamicTheme {
                 InitialDownloadChecker(ds, listOf(
                     Triple("https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm", "gemma4-2b.litertlm", "Model"),
+                    // SigLIP2 semantic-search models, downloaded upfront so the
+                    // photos app's first embed request is served immediately.
+                    Triple(SiglipEmbedder.VISION_URL, SiglipEmbedder.VISION_FILE, "Vision Model"),
+                    Triple(SiglipEmbedder.TEXT_URL, SiglipEmbedder.TEXT_FILE, "Text Model"),
+                    Triple(SiglipEmbedder.TOKENIZER_URL, SiglipEmbedder.TOKENIZER_FILE, "Tokenizer"),
                 )) {
                     // Touching the assistantViewModel triggers init, which pre-warms
                     // the inference service and runs the legacy model-file cleanup.

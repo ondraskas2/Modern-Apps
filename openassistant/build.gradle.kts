@@ -16,6 +16,13 @@ android {
         }
     }
 
+    androidResources {
+        // SigLIP2 .onnx encoders are downloaded to external files at runtime,
+        // but the SentencePiece tokenizer.model is downloaded too; keep .onnx
+        // uncompressed for consistency with the ONNX Runtime memory-mapped read.
+        noCompress += "onnx"
+    }
+
     packaging {
         jniLibs {
             pickFirsts.add("**/libLiteRtTopKOpenClSampler.so")
@@ -37,6 +44,9 @@ dependencies {
 
     // ai
     implementation(libs.litertlm.android)
+    // SigLIP2 image/text embedding (semantic photo search served to the photos
+    // app) runs on ONNX Runtime; litertlm stays for the chat LLM.
+    implementation(libs.onnxruntime.android)
 
     implementation(project(":library:downloadservice"))
 }

@@ -68,6 +68,7 @@ class AssistantViewModel(
 
     init {
         cleanupLegacyModelFile()
+        cleanupStaleSiglipModels()
         // Pre-warm the inference engine so the first user prompt is responsive.
         val context = getApplication<Application>()
         context.startService(Intent(context, InferenceService::class.java))
@@ -174,20 +175,15 @@ class AssistantViewModel(
                 val externalDir = context.getExternalFilesDir(null) ?: return@launch
                 // Every model file we no longer use. Add to this list when the
                 // active model changes (e.g. gemma4-4b → gemma4-2b) so users
-                // don't keep stale gigabytes on disk and so the next launch
-                // re-triggers the downloader for the new file.
+                // don't keep stale gigabytes on disk. Re-download of the new file
+                // happens automatically: InitialDownloadChecker gates on file
+                // presence, so an absent (renamed) active model shows the download
+                // screen on next launch.
                 val legacyModelFiles = listOf("gemma4.litertlm", "gemma4-4b.litertlm")
-            var removedAny = false
                 for (name in legacyModelFiles) {
                     if (File(externalDir, name).delete()) {
                         Log.i(TAG, "Deleted legacy model file $name")
-                        removedAny = true
                     }
-                }
-                if (removedAny) {
-                    // Forces InitialDownloadChecker to re-evaluate which files
-                    // need downloading on next composition.
-                    DataStoreUtils.getInstance(context).setBoolean("dbSetupComplete", false)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error cleaning up legacy model file", e)
@@ -199,6 +195,40 @@ class AssistantViewModel(
         audioRecorder?.stop()
         audioRecorder = null
         super.onCleared()
+    }
+
+    /**
+     * Version the on-demand SigLIP2 model files: if [SiglipEmbedder.MODEL_VERSION]
+     * changed since we last downloaded them, delete the stale files and clear the
+     * downloadservice `done_`/`dlid_`/`progress_` keys so they re-download on the
+     * next embedding request. Unlike the gemma path this never touches
+     * `dbSetupComplete` — SigLIP2 is optional and fetched on demand.
+     */
+    private fun cleanupStaleSiglipModels() {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ds = DataStoreUtils.getInstance(context)
+                val stored = ds.getLong("siglip_model_version") ?: 0L
+                if (stored == SiglipEmbedder.MODEL_VERSION.toLong()) return@launch
+
+                val externalDir = context.getExternalFilesDir(null)
+                val files = listOf(
+                    SiglipEmbedder.VISION_FILE,
+                    SiglipEmbedder.TEXT_FILE,
+                    SiglipEmbedder.TOKENIZER_FILE,
+                )
+                for (name in files) {
+                    externalDir?.let { File(it, name).takeIf { f -> f.exists() }?.delete() }
+                    ds.setBoolean("done_$name", false)
+                    ds.setLong("dlid_$name", 0L)
+                    ds.setDouble("progress_$name", 0.0)
+                }
+                ds.setLong("siglip_model_version", SiglipEmbedder.MODEL_VERSION.toLong())
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up stale SigLIP2 model files", e)
+            }
+        }
     }
 
     companion object {
