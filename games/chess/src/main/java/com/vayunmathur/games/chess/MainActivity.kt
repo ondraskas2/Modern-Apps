@@ -65,6 +65,12 @@ import com.vayunmathur.games.chess.util.GameResult
 import com.vayunmathur.games.chess.util.PuzzleViewModel
 import com.vayunmathur.games.chess.util.PuzzleStatus
 import com.vayunmathur.games.chess.util.PuzzleDifficulty
+import com.vayunmathur.games.chess.util.LearnViewModel
+import com.vayunmathur.games.chess.util.LearnUiState
+import com.vayunmathur.games.chess.util.LearnStatus
+import com.vayunmathur.games.chess.util.LearnProgress
+import com.vayunmathur.games.chess.data.LearnCategory
+import com.vayunmathur.games.chess.data.square
 import com.vayunmathur.games.chess.util.StockfishEngine
 import com.vayunmathur.games.chess.data.Piece
 import com.vayunmathur.games.chess.data.PieceColor
@@ -88,6 +94,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.ui.platform.LocalContext
 
 class MainActivity : ComponentActivity() {
@@ -120,13 +136,18 @@ class MainActivity : ComponentActivity() {
                             stringResource(R.string.tab_puzzles),
                             Route.Puzzles,
                             R.drawable.chess_knight_fill1_24px
+                        ),
+                        BottomBarItem(
+                            stringResource(R.string.tab_learn),
+                            Route.Learn,
+                            R.drawable.school_24px
                         )
                     )
                     MainNavigation(
                         backStack,
                         bottomBar = {
                             val cur = backStack.last()
-                            if (cur is Route.Game || cur is Route.Puzzles) {
+                            if (cur is Route.Game || cur is Route.Puzzles || cur is Route.Learn) {
                                 BottomNavBar(backStack, pages, cur)
                             }
                         }
@@ -160,6 +181,23 @@ class MainActivity : ComponentActivity() {
                         entry<Route.Puzzles> {
                             val puzzleViewModel: PuzzleViewModel = viewModel()
                             PuzzleScreen(puzzleViewModel)
+                        }
+                        entry<Route.Learn> {
+                            LearnHomeScreen(
+                                onOpenStage = { cat, stage ->
+                                    backStack.add(Route.LearnStage(cat, stage))
+                                }
+                            )
+                        }
+                        entry<Route.LearnStage> { route ->
+                            val learnViewModel: LearnViewModel = viewModel()
+                            LaunchedEffect(route.categoryKey, route.stageKey) {
+                                learnViewModel.loadStage(route.categoryKey, route.stageKey)
+                            }
+                            LearnStageScreen(
+                                viewModel = learnViewModel,
+                                onBack = { backStack.pop() }
+                            )
                         }
                         entry<Route.GameCenter> {
                             GameCenterScreen(
@@ -525,7 +563,243 @@ sealed interface Route: NavKey {
     @Serializable
     data object Puzzles: Route
     @Serializable
+    data object Learn: Route
+    @Serializable
+    data class LearnStage(val categoryKey: String, val stageKey: String): Route
+    @Serializable
     data object GameCenter: Route
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LearnHomeScreen(onOpenStage: (String, String) -> Unit) {
+    val context = LocalContext.current
+    val categories by produceState<List<LearnCategory>?>(initialValue = null) {
+        value = withContext(Dispatchers.IO) {
+            com.vayunmathur.games.chess.data.LearnRepository.ensureLoaded(context)
+            com.vayunmathur.games.chess.data.LearnRepository.categories
+        }
+    }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(stringResource(R.string.tab_learn)) }) }
+    ) { pad ->
+        val cats = categories
+        if (cats == null) {
+            Box(Modifier.fillMaxSize().padding(pad), Alignment.Center) { CircularProgressIndicator() }
+            return@Scaffold
+        }
+        LazyColumn(
+            Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            cats.forEach { cat ->
+                item(key = "cat_${cat.key}") {
+                    Text(
+                        cat.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+                items(cat.stages, key = { "stage_${it.key}" }) { stage ->
+                    val done = LearnProgress.completedCount(context, stage)
+                    Card(Modifier.fillMaxWidth().clickable { onOpenStage(cat.key, stage.key) }) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(stage.title, fontWeight = FontWeight.Bold)
+                                Text(
+                                    stage.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                stringResource(R.string.learn_progress, done, stage.levels.size),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (done == stage.levels.size) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LearnStageScreen(viewModel: LearnViewModel, onBack: () -> Unit) {
+    val ui by viewModel.uiState.collectAsState()
+    val stage = ui.stage
+    val level = ui.level
+
+    LaunchedEffect(ui.stageFinished) { if (ui.stageFinished) onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stage?.title ?: stringResource(R.string.tab_learn)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(painterResource(com.vayunmathur.library.R.drawable.arrow_back_24px), "Back")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        if (stage == null || level == null) {
+            Box(Modifier.fillMaxSize().padding(pad), Alignment.Center) { CircularProgressIndicator() }
+            return@Scaffold
+        }
+        val isLast = ui.levelIndex + 1 >= stage.levels.size
+        Column(
+            Modifier.fillMaxSize().padding(pad).padding(16.dp),
+            Arrangement.Center,
+            Alignment.CenterHorizontally
+        ) {
+            Text(
+                stringResource(R.string.learn_level, ui.levelIndex + 1, stage.levels.size),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                level.goal,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(12.dp))
+            LearnBoard(ui, viewModel::onSquareClick)
+            Spacer(Modifier.height(12.dp))
+
+            // Fixed-height status/action area so the board never shifts.
+            Box(Modifier.height(96.dp), contentAlignment = Alignment.TopCenter) {
+                when (ui.status) {
+                    LearnStatus.Completed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        StarRow(ui.starsEarned)
+                        Text(
+                            if (isLast) stringResource(R.string.learn_stage_complete)
+                            else stringResource(R.string.learn_completed),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { viewModel.nextLevel() }) {
+                            Text(
+                                if (isLast) stringResource(R.string.learn_back_to_lessons)
+                                else stringResource(R.string.learn_next)
+                            )
+                        }
+                    }
+                    LearnStatus.Failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(R.string.learn_failed), fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { viewModel.retryLevel() }) {
+                            Text(stringResource(R.string.learn_retry))
+                        }
+                    }
+                    LearnStatus.Playing -> {}
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StarRow(stars: Int) {
+    Row {
+        for (i in 1..3) {
+            Text(
+                if (i <= stars) "\u2605" else "\u2606",
+                fontSize = 28.sp,
+                color = if (i <= stars) Color(0xFFFFC107) else Color.Gray
+            )
+        }
+    }
+}
+
+private fun brushColor(brush: String): Color = when (brush) {
+    "red" -> Color(0xCCE04040)
+    "yellow" -> Color(0xCCE0B020)
+    "blue" -> Color(0xCC4070E0)
+    else -> Color(0xCC2F9E52) // green / paleGreen
+}
+
+private fun DrawScope.drawLearnArrow(from: Position, to: Position, cell: Float, color: Color) {
+    val start = Offset(from.col * cell + cell / 2, from.row * cell + cell / 2)
+    val end = Offset(to.col * cell + cell / 2, to.row * cell + cell / 2)
+    drawLine(color, start, end, strokeWidth = cell * 0.14f, cap = StrokeCap.Round)
+    val angle = atan2((end.y - start.y).toDouble(), (end.x - start.x).toDouble())
+    val headLen = cell * 0.34f
+    val spread = 0.45
+    val p1 = Offset(
+        (end.x + cos(angle + Math.PI - spread) * headLen).toFloat(),
+        (end.y + sin(angle + Math.PI - spread) * headLen).toFloat()
+    )
+    val p2 = Offset(
+        (end.x + cos(angle + Math.PI + spread) * headLen).toFloat(),
+        (end.y + sin(angle + Math.PI + spread) * headLen).toFloat()
+    )
+    val path = Path().apply {
+        moveTo(end.x, end.y); lineTo(p1.x, p1.y); lineTo(p2.x, p2.y); close()
+    }
+    drawPath(path, color)
+}
+
+private fun DrawScope.drawStar(center: Offset, outerR: Float, innerR: Float, color: Color) {
+    val path = Path()
+    for (i in 0 until 10) {
+        val r = if (i % 2 == 0) outerR else innerR
+        val a = -Math.PI / 2 + i * Math.PI / 5
+        val x = (center.x + cos(a) * r).toFloat()
+        val y = (center.y + sin(a) * r).toFloat()
+        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    drawPath(path, color)
+}
+
+@Composable
+fun LearnBoard(ui: LearnUiState, onSquareClick: (Position) -> Unit) {
+    Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+        BoardGrid(
+            board = ui.board,
+            selectedPiece = ui.selectedPiece,
+            isFlipped = ui.isFlipped,
+            turn = ui.playerColor,
+            onSquareClick = onSquareClick
+        )
+        Canvas(
+            Modifier
+                .matchParentSize()
+                .graphicsLayer { if (ui.isFlipped) rotationZ = 180f }
+        ) {
+            val cell = size.width / 8f
+            ui.shapes.forEach { s ->
+                val color = brushColor(s.brush)
+                val o = square(s.orig)
+                val dest = s.dest
+                if (dest != null) {
+                    drawLearnArrow(o, square(dest), cell, color)
+                } else {
+                    drawCircle(
+                        color,
+                        radius = cell * 0.42f,
+                        center = Offset(o.col * cell + cell / 2, o.row * cell + cell / 2),
+                        style = Stroke(width = cell * 0.08f)
+                    )
+                }
+            }
+            ui.apples.forEach { a ->
+                val center = Offset(a.col * cell + cell / 2, a.row * cell + cell / 2)
+                drawStar(center, cell * 0.36f, cell * 0.15f, Color(0xF0FFC107))
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

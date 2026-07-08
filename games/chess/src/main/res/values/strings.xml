@@ -35,6 +35,15 @@
 
     <string name="tab_play">Play</string>
     <string name="tab_puzzles">Puzzles</string>
+    <string name="tab_learn">Learn</string>
+    <string name="learn_level">Level %1$d/%2$d</string>
+    <string name="learn_next">Next</string>
+    <string name="learn_retry">Retry</string>
+    <string name="learn_completed">Well done!</string>
+    <string name="learn_failed">Not quite — try again.</string>
+    <string name="learn_stage_complete">Stage complete!</string>
+    <string name="learn_back_to_lessons">Back to Lessons</string>
+    <string name="learn_progress">%1$d/%2$d</string>
     <string name="puzzle_rating">Rating %1$d</string>
     <string name="puzzle_your_move">Your turn — find the best move.</string>
     <string name="puzzle_white_to_move">White to move.</string>
