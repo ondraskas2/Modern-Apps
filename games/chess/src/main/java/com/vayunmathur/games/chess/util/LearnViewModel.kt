@@ -199,14 +199,23 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val failed = isFailingMove(level, newBoard, state.playerColor)
+        // A move that hangs a piece (per detectCapture) fails — and the opponent is
+        // shown grabbing the hanging piece, like Lichess.
+        val capture = detectCaptureMove(level, newBoard, state.playerColor)
+        if (capture != null) {
+            punishAndFail(newBoard, newApples, newMoves, capture)
+            return
+        }
+
+        val failed = isFailingMove(level, newBoard, state.playerColor, newMoves)
         val outcome = when {
             failed -> LearnStatus.Failed
             isSuccess(level, newBoard, newApples, newMoves, state.playerColor) -> LearnStatus.Completed
             else -> LearnStatus.Playing
         }
 
-        applyOutcome(newBoard, newApples, newMoves, outcome)
+        // On multi-move levels keep the moved piece selected so it's quick to move again.
+        applyOutcome(newBoard, newApples, newMoves, outcome, keepSelected = to)
     }
 
     private fun handleScenarioMove(from: Position, to: Position) {
@@ -267,7 +276,13 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun applyOutcome(board: Board, apples: Set<Position>, moves: Int, outcome: LearnStatus) {
+    private fun applyOutcome(
+        board: Board,
+        apples: Set<Position>,
+        moves: Int,
+        outcome: LearnStatus,
+        keepSelected: Position? = null
+    ) {
         var stars = 0
         var stageStars = _uiState.value.stageStars
         if (outcome == LearnStatus.Completed) {
@@ -279,7 +294,7 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 board = board,
-                selectedPiece = null,
+                selectedPiece = if (outcome == LearnStatus.Playing) keepSelected else null,
                 apples = apples,
                 nbMoves = moves,
                 shapes = if (outcome == LearnStatus.Playing) it.shapes else emptyList(),
@@ -288,6 +303,23 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
                 stageScore = stageScore,
                 stageStars = stageStars
             )
+        }
+    }
+
+    /** Shows the player's move, then the opponent capturing the hanging piece, then fails. */
+    private fun punishAndFail(board: Board, apples: Set<Position>, moves: Int, capture: Pair<Position, Position>) {
+        _uiState.update {
+            it.copy(
+                board = board, selectedPiece = null, apples = apples,
+                nbMoves = moves, shapes = emptyList(), stageScore = stageScore
+            )
+        }
+        val myToken = token
+        viewModelScope.launch {
+            delay(opponentDelayMs)
+            if (token != myToken) return@launch
+            val punished = board.movePiece(capture.first, capture.second)
+            _uiState.update { it.copy(board = punished, status = LearnStatus.Failed) }
         }
     }
 
@@ -309,15 +341,23 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Levels that must succeed on this very move fail if the success condition isn't met. */
-    private fun isFailingMove(level: LearnLevel, board: Board, player: PieceColor): Boolean {
-        val opponent = player.opposite
-
-        // A move that hangs a piece (per the level's detectCapture rule) fails.
-        when (level.detectCapture) {
-            "all" -> if (opponentHasCapture(board, opponent)) return true
-            "unprotected" -> if (opponentHasUnprotectedCapture(board, opponent)) return true
+    /** The opponent's punishing capture if this move hangs a piece, else null. */
+    private fun detectCaptureMove(level: LearnLevel, board: Board, player: PieceColor): Pair<Position, Position>? {
+        if (level.goalType == "info") return null
+        val opp = player.opposite
+        return when (level.detectCapture) {
+            "all" -> captures(board, opp).firstOrNull()
+            "unprotected" -> captures(board, opp).firstOrNull { (from, to) ->
+                val after = board.movePiece(from, to)
+                positionsOf(after, player).none { after.isValidMove(it, to) }
+            }
+            else -> null
         }
+    }
+
+    /** Non-capture failure conditions: path constraints and single-move goals not met. */
+    private fun isFailingMove(level: LearnLevel, board: Board, player: PieceColor, moves: Int): Boolean {
+        val opponent = player.opposite
 
         // Pawn-stage path constraints.
         if (level.failIfWhitePawnOn.isNotEmpty()) {
@@ -335,7 +375,7 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
         // Single-move goals that weren't achieved this move.
         return when (level.goalType) {
             "check" -> !board.isKingInCheck(opponent)
-            "checkIn" -> !board.isKingInCheck(opponent) && _uiState.value.nbMoves + 1 >= (level.n ?: level.nbMoves)
+            "checkIn" -> !board.isKingInCheck(opponent) && moves >= (level.n ?: level.nbMoves)
             "escapeCheck" -> board.isKingInCheck(player)
             "mate" -> !board.isCheckmate(opponent)
             else -> false
@@ -355,17 +395,6 @@ class LearnViewModel(application: Application) : AndroidViewModel(application) {
         val targets = positionsOf(board, attacker.opposite)
         return positionsOf(board, attacker).flatMap { from ->
             targets.filter { to -> board.isValidMove(from, to) }.map { from to it }
-        }
-    }
-
-    private fun opponentHasCapture(board: Board, opponent: PieceColor): Boolean =
-        captures(board, opponent).isNotEmpty()
-
-    private fun opponentHasUnprotectedCapture(board: Board, opponent: PieceColor): Boolean {
-        val player = opponent.opposite
-        return captures(board, opponent).any { (from, to) ->
-            val after = board.movePiece(from, to)
-            positionsOf(after, player).none { after.isValidMove(it, to) }
         }
     }
 
