@@ -107,8 +107,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 import androidx.compose.ui.platform.LocalContext
 
@@ -478,6 +478,7 @@ fun CapturedPiecesRow(pieces: List<Piece>) {
 private val lightSquareColor = Color(0xFFBBBBBB)
 private val darkSquareColor = Color.Gray
 private val lastMoveColor = Color(0xFF4CAF50)
+private val moveHintColor = Color(0x66000000)
 
 @Composable
 fun BoardGrid(
@@ -489,6 +490,16 @@ fun BoardGrid(
     showLastMove: Boolean = false
 ) {
     val isKingInCheck = board.isKingInCheck(turn)
+    // The squares the selected piece can legally move to (for move-hint dots).
+    val destinations = remember(board, selectedPiece) {
+        val sel = selectedPiece
+        if (sel == null) emptySet()
+        else buildSet {
+            for (i in board.pieces.indices) for (j in board.pieces[i].indices) {
+                if (board.isValidMove(sel, Position(i, j))) add(Position(i, j))
+            }
+        }
+    }
     // The puzzle board seeds a synthetic zero-length lastMove to encode turn; skip it.
     val lastMove = board.lastMove?.takeIf { showLastMove && it.start != it.end }
     Column(
@@ -528,6 +539,26 @@ fun BoardGrid(
                     ) {
                         piece?.let {
                             ChessPiece(it, isFlipped = isFlipped)
+                        }
+                        if (Position(i, j) in destinations) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                if (piece != null) {
+                                    // Capturable square: a ring around the piece.
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize(0.92f)
+                                            .border(3.dp, moveHintColor, CircleShape)
+                                    )
+                                } else {
+                                    // Empty square: a centered dot.
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize(0.30f)
+                                            .clip(CircleShape)
+                                            .background(moveHintColor)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -850,18 +881,27 @@ fun LevelStepper(count: Int, current: Int, stars: List<Int>, onSelect: (Int) -> 
             }
             Box(
                 Modifier
-                    .size(32.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(bg)
                     .clickable { onSelect(i) },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "${i + 1}",
-                    color = fg,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-                )
+                val starCount = stars.getOrElse(i) { 0 }
+                if (done && !isCurrent) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                        repeat(starCount) {
+                            Text("\u2605", fontSize = 9.sp, color = Color(0xFFFFC107))
+                        }
+                    }
+                } else {
+                    Text(
+                        "${i + 1}",
+                        color = fg,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
             }
         }
     }
@@ -890,18 +930,22 @@ private fun brushColor(brush: String): Color = when (brush) {
 private fun DrawScope.drawLearnArrow(from: Position, to: Position, cell: Float, color: Color) {
     val start = Offset(from.col * cell + cell / 2, from.row * cell + cell / 2)
     val end = Offset(to.col * cell + cell / 2, to.row * cell + cell / 2)
-    drawLine(color, start, end, strokeWidth = cell * 0.14f, cap = StrokeCap.Round)
-    val angle = atan2((end.y - start.y).toDouble(), (end.x - start.x).toDouble())
-    val headLen = cell * 0.34f
-    val spread = 0.45
-    val p1 = Offset(
-        (end.x + cos(angle + Math.PI - spread) * headLen).toFloat(),
-        (end.y + sin(angle + Math.PI - spread) * headLen).toFloat()
-    )
-    val p2 = Offset(
-        (end.x + cos(angle + Math.PI + spread) * headLen).toFloat(),
-        (end.y + sin(angle + Math.PI + spread) * headLen).toFloat()
-    )
+    val dx = end.x - start.x
+    val dy = end.y - start.y
+    val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+    if (dist == 0f) return
+    val ux = dx / dist
+    val uy = dy / dist
+    // Arrowhead spanning ~90% of a square, matching Lichess's chunky learn arrows.
+    val headWidth = cell * 0.9f
+    val headLen = cell * 0.8f
+    val baseX = end.x - ux * headLen
+    val baseY = end.y - uy * headLen
+    val perpX = -uy
+    val perpY = ux
+    val p1 = Offset(baseX + perpX * headWidth / 2, baseY + perpY * headWidth / 2)
+    val p2 = Offset(baseX - perpX * headWidth / 2, baseY - perpY * headWidth / 2)
+    drawLine(color, start, Offset(baseX, baseY), strokeWidth = cell * 0.18f, cap = StrokeCap.Round)
     val path = Path().apply {
         moveTo(end.x, end.y); lineTo(p1.x, p1.y); lineTo(p2.x, p2.y); close()
     }
