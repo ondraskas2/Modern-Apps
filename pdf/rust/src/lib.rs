@@ -199,13 +199,6 @@ struct FontInfo {
 }
 
 impl FontInfo {
-    /// Decode a shown PDF string's raw bytes into text using this font.
-    fn decode(&self, bytes: &[u8]) -> String {
-        let mut out = String::new();
-        self.for_each_code(bytes, |code, _| self.push_code(code, &mut out));
-        out
-    }
-
     /// Invoke `f(code, is_single_byte_space)` for each character code in the
     /// string, honoring this font's code width (1 or 2 bytes).
     fn for_each_code(&self, bytes: &[u8], mut f: impl FnMut(u32, bool)) {
@@ -228,21 +221,6 @@ impl FontInfo {
         self.widths.get(&code).copied().unwrap_or(self.default_width)
     }
 
-    /// Total horizontal advance (user-space units) of `bytes` given the current
-    /// text state, per PDF 9.4.4:
-    /// `tx = Σ ((w0)*Tfs + Tc + Tw[space]) * Th`.
-    fn advance(&self, bytes: &[u8], tfs: f64, tc: f64, tw: f64, th: f64) -> f64 {
-        let mut adv = 0.0;
-        self.for_each_code(bytes, |code, is_space| {
-            let mut t = self.width(code) * tfs + tc;
-            if is_space {
-                t += tw;
-            }
-            adv += t;
-        });
-        adv * th
-    }
-
     fn push_code(&self, code: u32, out: &mut String) {
         if let Some(map) = &self.to_unicode {
             if let Some(s) = map.get(&code) {
@@ -250,12 +228,14 @@ impl FontInfo {
                 return;
             }
         }
-        // Embedded-cmap recovery for re-encoded subset fonts.
-        if let Some(c) = self.cmap_uni.get(&code) {
+        // Prefer the declared encoding (WinAnsi / Differences) so standard
+        // punctuation is correct; fall back to the embedded cmap for symbolic
+        // re-encoded subset fonts whose encoding doesn't cover the code.
+        if let Some(c) = self.encoding.get(&code) {
             out.push(*c);
             return;
         }
-        if let Some(c) = self.encoding.get(&code) {
+        if let Some(c) = self.cmap_uni.get(&code) {
             out.push(*c);
             return;
         }
@@ -1826,6 +1806,176 @@ fn save_document(handle: i64) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+// ---------------------------------------------------------------------------
+// Document outline (bookmarks)
+// ---------------------------------------------------------------------------
+
+/// Resolve a destination (array, or named) to a 0-based page index, or -1.
+fn resolve_dest(doc: &Document, dest: &Object, page_index: &HashMap<ObjectId, i32>) -> i32 {
+    let arr = match dest {
+        Object::Array(a) => Some(a.clone()),
+        Object::Name(n) => named_dest(doc, n),
+        Object::String(s, _) => named_dest(doc, s),
+        _ => None,
+    };
+    if let Some(a) = arr {
+        if let Some(first) = a.first() {
+            if let Ok(id) = first.as_reference() {
+                return page_index.get(&id).copied().unwrap_or(-1);
+            }
+        }
+    }
+    -1
+}
+
+/// Look up a named destination's explicit dest array via `/Dests` and the
+/// `/Names` name tree.
+fn named_dest(doc: &Document, name: &[u8]) -> Option<Vec<Object>> {
+    let catalog = doc.catalog().ok()?;
+    // Old-style /Dests dictionary.
+    if let Some(Object::Dictionary(dests)) = catalog.get(b"Dests").ok().and_then(|o| deref(doc, o)) {
+        if let Ok(v) = dests.get(name) {
+            return dest_array(doc, v);
+        }
+    }
+    // /Names /Dests name tree.
+    let root = catalog
+        .get(b"Names")
+        .ok()
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok())
+        .and_then(|d| d.get(b"Dests").ok())
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok())?;
+    let mut visited = std::collections::HashSet::new();
+    search_name_tree(doc, root, name, &mut visited)
+}
+
+fn dest_array(doc: &Document, obj: &Object) -> Option<Vec<Object>> {
+    match deref(doc, obj)? {
+        Object::Array(a) => Some(a.clone()),
+        Object::Dictionary(d) => d.get(b"D").ok().and_then(|o| dest_array(doc, o)),
+        _ => None,
+    }
+}
+
+fn search_name_tree(
+    doc: &Document,
+    node: &lopdf::Dictionary,
+    name: &[u8],
+    visited: &mut std::collections::HashSet<ObjectId>,
+) -> Option<Vec<Object>> {
+    if let Some(Object::Array(names)) = node.get(b"Names").ok().and_then(|o| deref(doc, o)) {
+        let mut i = 0;
+        while i + 1 < names.len() {
+            if names[i].as_str().ok() == Some(name) {
+                return dest_array(doc, &names[i + 1]);
+            }
+            i += 2;
+        }
+    }
+    if let Some(Object::Array(kids)) = node.get(b"Kids").ok().and_then(|o| deref(doc, o)) {
+        for kid in kids {
+            if let Ok(id) = kid.as_reference() {
+                if !visited.insert(id) {
+                    continue;
+                }
+                if let Ok(child) = doc.get_dictionary(id) {
+                    if let Some(r) = search_name_tree(doc, child, name, visited) {
+                        return Some(r);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Walk the outline linked-list/tree collecting `(level, pageIndex, title)`.
+fn walk_outline(
+    doc: &Document,
+    start: Option<ObjectId>,
+    level: u16,
+    page_index: &HashMap<ObjectId, i32>,
+    visited: &mut std::collections::HashSet<ObjectId>,
+    out: &mut Vec<(u16, i32, String)>,
+) {
+    let mut cur = start;
+    while let Some(id) = cur {
+        if !visited.insert(id) || out.len() > 5000 {
+            break;
+        }
+        let dict = match doc.get_dictionary(id) {
+            Ok(d) => d,
+            Err(_) => break,
+        };
+        let title = dict
+            .get(b"Title")
+            .ok()
+            .and_then(|o| o.as_str().ok())
+            .map(decode_pdf_text)
+            .unwrap_or_default();
+        let page = dict
+            .get(b"Dest")
+            .ok()
+            .and_then(|o| deref(doc, o))
+            .map(|d| resolve_dest(doc, d, page_index))
+            .or_else(|| {
+                dict.get(b"A")
+                    .ok()
+                    .and_then(|o| deref(doc, o))
+                    .and_then(|o| o.as_dict().ok())
+                    .and_then(|a| a.get(b"D").ok())
+                    .and_then(|o| deref(doc, o))
+                    .map(|d| resolve_dest(doc, d, page_index))
+            })
+            .unwrap_or(-1);
+        out.push((level, page, title));
+
+        if let Some(first) = dict.get(b"First").ok().and_then(|o| o.as_reference().ok()) {
+            walk_outline(doc, Some(first), level + 1, page_index, visited, out);
+        }
+        cur = dict.get(b"Next").ok().and_then(|o| o.as_reference().ok());
+    }
+}
+
+/// Serialized document outline: u32 count, then per entry
+/// `u16 level, i32 pageIndex, u16 titleLen, [utf8]`.
+fn list_outline(handle: i64) -> Option<Vec<u8>> {
+    let reg = registry().lock().unwrap();
+    let doc = reg.get(&handle)?;
+    let outlines_id = doc
+        .catalog()
+        .ok()
+        .and_then(|c| c.get(b"Outlines").ok())
+        .and_then(|o| o.as_reference().ok())?;
+    let pages = doc.get_pages();
+    let mut page_index = HashMap::new();
+    for (i, (_, id)) in pages.iter().enumerate() {
+        page_index.insert(*id, i as i32);
+    }
+    let first = doc
+        .get_dictionary(outlines_id)
+        .ok()
+        .and_then(|d| d.get(b"First").ok())
+        .and_then(|o| o.as_reference().ok());
+    let mut items = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    walk_outline(doc, first, 0, &page_index, &mut visited, &mut items);
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    for (level, page, title) in items {
+        buf.extend_from_slice(&level.to_le_bytes());
+        buf.extend_from_slice(&page.to_le_bytes());
+        let b = title.as_bytes();
+        let len = b.len().min(u16::MAX as usize);
+        buf.extend_from_slice(&(len as u16).to_le_bytes());
+        buf.extend_from_slice(&b[..len]);
+    }
+    Some(buf)
+}
+
 fn cubic_bezier(
     p0: (f64, f64),
     p1: (f64, f64),
@@ -1892,6 +2042,11 @@ fn emit_stroke(prims: &mut Vec<Prim>, subpaths: &[Vec<(f64, f64)>], gs: &Graphic
 /// Emit a text primitive for `bytes` at the current text matrix (unless the
 /// render mode is invisible/clip-only) and return the horizontal advance in
 /// user-space units so the caller can step the text matrix.
+/// Emit one text primitive per glyph, each positioned at its exact device-space
+/// origin computed from the PDF glyph widths + text state. Drawing glyph-by-glyph
+/// (rather than one run) keeps kerned/justified text aligned even though a
+/// substitute system font renders the glyph shapes. Returns the total advance in
+/// text space so the caller can step the text matrix.
 fn show_string(
     prims: &mut Vec<Prim>,
     gs: &GraphicsState,
@@ -1899,44 +2054,221 @@ fn show_string(
     text_matrix: &Mat,
     bytes: &[u8],
 ) -> f64 {
-    let fi = fonts.get(&gs.font_key);
     let tfs = gs.font_size;
-    let advance = match fi {
-        Some(fi) => fi.advance(bytes, tfs, gs.char_spacing, gs.word_spacing, gs.h_scale),
-        // No font metrics: rough monospace-ish estimate keeps runs from stacking.
-        None => bytes.len() as f64 * 0.5 * tfs * gs.h_scale,
-    };
-
-    // Modes 3 (invisible) and 7 (clip only) are not painted.
-    if gs.render_mode == 3 || gs.render_mode == 7 || bytes.is_empty() {
-        return advance;
-    }
-
+    let th = gs.h_scale;
     let trm = mat_mul(text_matrix, &gs.ctm);
-    // Origin includes text rise along the text-space y-axis.
-    let (x, y) = transform(&trm, 0.0, gs.rise);
     let y_scale = (trm[2] * trm[2] + trm[3] * trm[3]).sqrt();
     let size = (tfs * y_scale) as f32;
+    // Modes 3 (invisible) and 7 (clip only) advance the pen but paint nothing.
+    let drawable = gs.render_mode != 3 && gs.render_mode != 7;
 
-    let text = match fi {
-        Some(fi) => fi.decode(bytes),
-        None => bytes.iter().filter_map(|&b| char::from_u32(b as u32)).collect(),
+    let fi = match fonts.get(&gs.font_key) {
+        Some(fi) => fi,
+        None => {
+            // No font metrics: emit the run at the origin and estimate advance.
+            if drawable && !bytes.is_empty() {
+                let (x, y) = transform(&trm, 0.0, gs.rise);
+                let text: String =
+                    bytes.iter().filter_map(|&b| char::from_u32(b as u32)).collect();
+                if !text.is_empty() {
+                    prims.push(Prim::Text {
+                        x: x as f32,
+                        y: y as f32,
+                        size,
+                        argb: gs.fill,
+                        text,
+                    });
+                }
+            }
+            return bytes.len() as f64 * 0.5 * tfs * th;
+        }
     };
-    if !text.is_empty() {
-        prims.push(Prim::Text {
-            x: x as f32,
-            y: y as f32,
-            size,
-            argb: gs.fill,
-            text,
-        });
-    }
-    advance
+
+    let mut pen = 0.0_f64;
+    fi.for_each_code(bytes, |code, is_space| {
+        if drawable {
+            let (x, y) = transform(&trm, pen, gs.rise);
+            let mut s = String::new();
+            fi.push_code(code, &mut s);
+            if !s.is_empty() {
+                prims.push(Prim::Text {
+                    x: x as f32,
+                    y: y as f32,
+                    size,
+                    argb: gs.fill,
+                    text: s,
+                });
+            }
+        }
+        let mut tx = fi.width(code) * tfs + gs.char_spacing;
+        if is_space {
+            tx += gs.word_spacing;
+        }
+        pen += tx * th;
+    });
+    pen
 }
 
 // ---------------------------------------------------------------------------
 // Image XObjects
 // ---------------------------------------------------------------------------
+
+/// JPEG2000 (`JPXDecode`) decoding via the pure-Rust `openjp2` port of OpenJPEG.
+mod jp2 {
+    use openjp2::openjpeg::*;
+    use std::ffi::c_void;
+
+    struct Slice<'a> {
+        off: usize,
+        buf: &'a [u8],
+    }
+    impl<'a> Slice<'a> {
+        fn seek(&mut self, n: usize) -> usize {
+            self.off = self.buf.len().min(n);
+            self.off
+        }
+        fn consume(&mut self, n: usize) -> usize {
+            self.off = self.buf.len().min(self.off.saturating_add(n));
+            self.off
+        }
+    }
+    extern "C" fn free_fn(p: *mut c_void) {
+        drop(unsafe { Box::from_raw(p as *mut Slice) })
+    }
+    extern "C" fn read_fn(pb: *mut c_void, nb: usize, p: *mut c_void) -> usize {
+        if pb.is_null() || nb == 0 {
+            return usize::MAX;
+        }
+        let s = unsafe { &mut *(p as *mut Slice) };
+        let remaining = s.buf.len() - s.off;
+        if remaining == 0 {
+            return usize::MAX;
+        }
+        let n = remaining.min(nb);
+        let out = unsafe { std::slice::from_raw_parts_mut(pb as *mut u8, n) };
+        out.copy_from_slice(&s.buf[s.off..s.off + n]);
+        s.off += n;
+        n
+    }
+    extern "C" fn skip_fn(nb: i64, p: *mut c_void) -> i64 {
+        let s = unsafe { &mut *(p as *mut Slice) };
+        s.consume(nb.max(0) as usize) as i64
+    }
+    extern "C" fn seek_fn(nb: i64, p: *mut c_void) -> i32 {
+        let s = unsafe { &mut *(p as *mut Slice) };
+        let want = nb.max(0) as usize;
+        if s.seek(want) == want {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Decode JP2/J2K bytes to `(width, height, RGBA8888)`, or `None`.
+    pub fn decode(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+        // JP2 signature box vs raw codestream.
+        let fmt = if bytes.len() > 4 && &bytes[4..8] == b"jP  " {
+            OPJ_CODEC_JP2
+        } else {
+            OPJ_CODEC_J2K
+        };
+        unsafe { decode_with(bytes, fmt).or_else(|| decode_with(bytes, OPJ_CODEC_JP2)) }
+    }
+
+    unsafe fn decode_with(bytes: &[u8], fmt: OPJ_CODEC_FORMAT) -> Option<(u32, u32, Vec<u8>)> {
+        let data = Box::new(Slice { off: 0, buf: bytes });
+        let stream = opj_stream_default_create(1);
+        if stream.is_null() {
+            return None;
+        }
+        let p = Box::into_raw(data) as *mut c_void;
+        opj_stream_set_read_function(stream, Some(read_fn));
+        opj_stream_set_skip_function(stream, Some(skip_fn));
+        opj_stream_set_seek_function(stream, Some(seek_fn));
+        opj_stream_set_user_data_length(stream, bytes.len() as u64);
+        opj_stream_set_user_data(stream, p, Some(free_fn));
+
+        let codec = opj_create_decompress(fmt);
+        if codec.is_null() {
+            opj_stream_destroy(stream);
+            return None;
+        }
+        let mut params = opj_dparameters_t::default();
+        opj_set_default_decoder_parameters(&mut params);
+        let mut out = None;
+        if opj_setup_decoder(codec, &mut params) != 0 {
+            let mut image = std::ptr::null_mut() as *mut opj_image_t;
+            if opj_read_header(stream, codec, &mut image) != 0
+                && opj_decode(codec, stream, image) != 0
+                && opj_end_decompress(codec, stream) != 0
+                && !image.is_null()
+            {
+                out = image_to_rgba(&*image);
+            }
+            if !image.is_null() {
+                opj_image_destroy(image);
+            }
+        }
+        opj_destroy_codec(codec);
+        opj_stream_destroy(stream);
+        out
+    }
+
+    unsafe fn image_to_rgba(img: &opj_image_t) -> Option<(u32, u32, Vec<u8>)> {
+        let w = (img.x1 - img.x0) as usize;
+        let h = (img.y1 - img.y0) as usize;
+        if w == 0 || h == 0 || w > 20000 || h > 20000 || img.numcomps == 0 {
+            return None;
+        }
+        let comps = std::slice::from_raw_parts(img.comps, img.numcomps as usize);
+        let n = img.numcomps as usize;
+        // Sample a component's value at (x,y) scaled to 8-bit.
+        let sample = |c: &opj_image_comp_t, x: usize, y: usize| -> u8 {
+            let cw = c.w as usize;
+            let ch = c.h as usize;
+            if cw == 0 || ch == 0 || c.data.is_null() {
+                return 0;
+            }
+            let sx = (x * cw / w).min(cw - 1);
+            let sy = (y * ch / h).min(ch - 1);
+            let mut v = *c.data.add(sy * cw + sx);
+            if c.sgnd != 0 {
+                v += 1 << (c.prec - 1);
+            }
+            let prec = c.prec as i32;
+            let v = if prec > 8 {
+                v >> (prec - 8)
+            } else if prec < 8 {
+                v << (8 - prec)
+            } else {
+                v
+            };
+            v.clamp(0, 255) as u8
+        };
+
+        let mut rgba = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = (y * w + x) * 4;
+                let (r, g, b) = if n >= 3 {
+                    (
+                        sample(&comps[0], x, y),
+                        sample(&comps[1], x, y),
+                        sample(&comps[2], x, y),
+                    )
+                } else {
+                    let v = sample(&comps[0], x, y);
+                    (v, v, v)
+                };
+                rgba[idx] = r;
+                rgba[idx + 1] = g;
+                rgba[idx + 2] = b;
+                rgba[idx + 3] = 255;
+            }
+        }
+        Some((w as u32, h as u32, rgba))
+    }
+}
 
 struct ImageData {
     w: u32,
@@ -2070,7 +2402,18 @@ fn extract_image(doc: &Document, stream: &lopdf::Stream, fill_argb: u32) -> Opti
     let is_dct = filters.iter().any(|f| f == "DCTDecode" || f == "DCT");
     let is_jpx = filters.iter().any(|f| f == "JPXDecode");
     if is_jpx {
-        return None; // JPEG2000 not supported.
+        // JPEG2000: decode with openjp2 to RGBA, then apply any soft mask.
+        if let Some((jw, jh, mut rgba)) = jp2::decode(&stream.content) {
+            let smask = read_smask(doc, dict, jw, jh);
+            apply_smask(&mut rgba, &smask);
+            return Some(ImageData {
+                w: jw,
+                h: jh,
+                format: 0,
+                data: rgba,
+            });
+        }
+        return None;
     }
     if is_dct {
         // Hand the raw JPEG bytes to Android's BitmapFactory.
@@ -3409,6 +3752,16 @@ mod jni_bindings {
     ) -> jbyteArray {
         bytes_or_null(&env, save_document(handle as i64))
     }
+
+    /// `PdfNative.listOutline(long) -> byte[]`. Serialized document outline.
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_listOutline<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+    ) -> jbyteArray {
+        bytes_or_null(&env, list_outline(handle as i64))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3492,12 +3845,16 @@ mod tests {
             .iter()
             .filter(|p| matches!(p, Prim::Text { .. }))
             .collect();
-        assert_eq!(texts.len(), 1, "expected one text run");
+        // Per-glyph emission: "Hi" -> two glyph primitives.
+        assert_eq!(texts.len(), 2, "expected two glyph runs for \"Hi\"");
         if let Prim::Text { x, y, size, text, .. } = texts[0] {
-            assert_eq!(text, "Hi");
+            assert_eq!(text, "H");
             assert_eq!(*x, 72.0);
             assert_eq!(*y, 700.0);
             assert_eq!(*size, 12.0);
+        }
+        if let Prim::Text { text, .. } = texts[1] {
+            assert_eq!(text, "i");
         }
     }
 
@@ -3528,7 +3885,7 @@ mod tests {
         tm = mat_mul(&translate(adv1, 0.0), &tm);
         let _adv2 = show_string(&mut prims, &gs, &fonts, &tm, b"AB");
 
-        // Advance = 2 glyphs * 0.5 * 10 = 10 user-space units.
+        // Per-glyph emission: run "AB" -> 2 prims; advance = 2*0.5*10 = 10.
         assert!((adv1 - 10.0).abs() < 1e-6, "advance was {adv1}");
         let xs: Vec<f32> = prims
             .iter()
@@ -3537,9 +3894,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(xs.len(), 2);
-        assert_eq!(xs[0], 0.0);
-        assert!((xs[1] - 10.0).abs() < 1e-4, "second run x was {}", xs[1]);
+        assert_eq!(xs.len(), 4, "expected 4 glyphs across 2 runs");
+        assert_eq!(xs[0], 0.0); // first 'A'
+        assert_eq!(xs[1], 5.0); // 'B' advanced by 0.5*10
+        assert!((xs[2] - 10.0).abs() < 1e-4, "second run 'A' x was {}", xs[2]);
     }
 
     /// Invisible text (render mode 3) advances the cursor but emits no glyphs.
