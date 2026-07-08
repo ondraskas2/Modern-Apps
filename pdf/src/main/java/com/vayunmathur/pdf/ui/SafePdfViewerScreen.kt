@@ -15,8 +15,10 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.BottomAppBar
@@ -867,31 +870,36 @@ private fun EditToolbar(
     onDelete: () -> Unit,
 ) {
     BottomAppBar {
-        toolButton("Sel", tool == EditTool.SELECT) { onTool(EditTool.SELECT) }
-        toolButton("Text", tool == EditTool.TEXT) { onTool(EditTool.TEXT) }
-        toolButton("HL", tool == EditTool.HIGHLIGHT) { onTool(EditTool.HIGHLIGHT) }
-        toolButton("Draw", tool == EditTool.DRAW) { onTool(EditTool.DRAW) }
-        toolButton("Rect", tool == EditTool.RECT) { onTool(EditTool.RECT) }
-        toolButton("Img", tool == EditTool.IMAGE) { onTool(EditTool.IMAGE) }
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            toolButton("Sel", tool == EditTool.SELECT) { onTool(EditTool.SELECT) }
+            toolButton("Text", tool == EditTool.TEXT) { onTool(EditTool.TEXT) }
+            toolButton("HL", tool == EditTool.HIGHLIGHT) { onTool(EditTool.HIGHLIGHT) }
+            toolButton("Draw", tool == EditTool.DRAW) { onTool(EditTool.DRAW) }
+            toolButton("Rect", tool == EditTool.RECT) { onTool(EditTool.RECT) }
+            toolButton("Img", tool == EditTool.IMAGE) { onTool(EditTool.IMAGE) }
 
-        for (c in listOf(Color.Red, Color.Yellow, Color.Blue, Color.Black)) {
-            Box(
-                Modifier
-                    .padding(3.dp)
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(c)
-                    .pointerInput(c) { detectTapGestures { onColor(c) } },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (c == color) {
-                    Box(Modifier.size(10.dp).clip(CircleShape).background(Color.White))
+            for (c in listOf(Color.Red, Color.Yellow, Color.Blue, Color.Black)) {
+                Box(
+                    Modifier
+                        .padding(3.dp)
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(c)
+                        .pointerInput(c) { detectTapGestures { onColor(c) } },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (c == color) {
+                        Box(Modifier.size(10.dp).clip(CircleShape).background(Color.White))
+                    }
                 }
             }
-        }
 
-        if (canDelete) {
-            IconButton(onDelete) { IconDelete() }
+            if (canDelete) {
+                IconButton(onDelete) { IconDelete() }
+            }
         }
     }
 }
