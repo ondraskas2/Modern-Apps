@@ -128,6 +128,20 @@ object SafePdfParser {
         return String(b, Charsets.UTF_8)
     }
 
+    /** Decode the outline buffer from `listOutline`. */
+    fun parseOutline(bytes: ByteArray): List<SafeOutlineItem> {
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buf.int
+        val out = ArrayList<SafeOutlineItem>(count.coerceAtLeast(0))
+        repeat(count) {
+            val level = buf.short.toInt() and 0xFFFF
+            val page = buf.int
+            val title = readString(buf)
+            out.add(SafeOutlineItem(level, page, title))
+        }
+        return out
+    }
+
     private fun readPoints(buf: ByteBuffer): List<Offset> {
         val n = buf.short.toInt() and 0xFFFF
         val points = ArrayList<Offset>(n)

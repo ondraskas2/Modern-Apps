@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -23,19 +24,24 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -69,10 +75,12 @@ import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.ui.IconCheck
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconMenu
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconSearch
 import com.vayunmathur.library.ui.IconShare
+import com.vayunmathur.pdf.util.SafeOutlineItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -104,8 +112,6 @@ private enum class EditTool { SELECT, TEXT, HIGHLIGHT, DRAW, RECT, IMAGE }
 fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
-    BackHandler { onBack() }
 
     val loadState by produceState<LoadState>(LoadState.Loading, uri) {
         value = SafePdfDocument.open(context, uri)
@@ -154,6 +160,20 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
 
     LaunchedEffect(matchIndex, matches) {
         matches.getOrNull(matchIndex)?.let { listState.animateScrollToItem(it.first) }
+    }
+
+    // Outline (bookmarks) + navigation drawer.
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val outline by produceState(emptyList<SafeOutlineItem>(), document) {
+        value = document?.outline() ?: emptyList()
+    }
+
+    BackHandler {
+        when {
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            searching -> { searching = false; query = "" }
+            else -> onBack()
+        }
     }
 
     // Text-entry dialog target: (pageIndex, pagePoint) for a new text box, or an
@@ -209,6 +229,42 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
         context.startActivity(Intent.createChooser(intent, context.getString(R.string.share_pdf)))
     }
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
+        drawerContent = {
+            ModalDrawerSheet(Modifier.fillMaxWidth(0.82f)) {
+                Text(
+                    "Outline",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+                HorizontalDivider()
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(outline) { entry ->
+                        Text(
+                            text = entry.title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        if (entry.page >= 0) listState.animateScrollToItem(entry.page)
+                                        drawerState.close()
+                                    }
+                                }
+                                .padding(
+                                    start = (16 + entry.level * 14).dp,
+                                    end = 16.dp,
+                                    top = 10.dp,
+                                    bottom = 10.dp,
+                                ),
+                        )
+                    }
+                }
+            }
+        },
+    ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -229,6 +285,8 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                 navigationIcon = {
                     if (searching) {
                         IconNavigation { searching = false; query = "" }
+                    } else if (outline.isNotEmpty()) {
+                        IconButton({ scope.launch { drawerState.open() } }) { IconMenu() }
                     } else {
                         IconNavigation { onBack() }
                     }
@@ -316,6 +374,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                 }
             }
         }
+    }
     }
 
     // New-text dialog.

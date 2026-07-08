@@ -76,3 +76,10 @@ data class SafeFormField(
     val value: String,
     val checked: Boolean,
 )
+
+/** One entry in the document outline (bookmarks). */
+data class SafeOutlineItem(
+    val level: Int,
+    val page: Int,
+    val title: String,
+)

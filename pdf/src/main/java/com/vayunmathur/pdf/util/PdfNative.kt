@@ -88,4 +88,7 @@ object PdfNative {
 
     /** Serialize the modified document to PDF bytes, or null on failure. */
     external fun saveDocument(handle: Long): ByteArray?
+
+    /** Serialized document outline (bookmarks), or null. */
+    external fun listOutline(handle: Long): ByteArray?
 }

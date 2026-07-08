@@ -111,6 +111,11 @@ class SafePdfDocument private constructor(
     /** Serialize the (possibly edited) document to PDF bytes. */
     suspend fun save(): ByteArray? = withContext(Dispatchers.IO) { PdfNative.saveDocument(handle) }
 
+    /** The document outline (bookmarks), empty if none. */
+    suspend fun outline(): List<SafeOutlineItem> = withContext(Dispatchers.IO) {
+        PdfNative.listOutline(handle)?.let { SafePdfParser.parseOutline(it) } ?: emptyList()
+    }
+
     companion object {
         /**
          * Open [uri] as a safe PDF, or return `null` when the native lib is
