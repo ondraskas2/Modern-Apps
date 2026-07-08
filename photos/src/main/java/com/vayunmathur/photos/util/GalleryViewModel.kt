@@ -278,8 +278,8 @@ class GalleryViewModel(
         /**
          * Minimum cosine similarity for a photo to count as a semantic match.
          * Single most-important tunable knob. SigLIP2 is sigmoid-trained and
-         * 768-d, so its cosine distribution differs from the old MobileCLIP-S0
-         * (512-d) space — **retune this against real photos** after the move to
+         * 768-d, so its cosine distribution differs from the previous 512-d
+         * embedding space — **retune this against real photos** after the move to
          * OpenAssistant. Higher = stricter/fewer, lower = looser/more; results
          * are ranked and capped so the best matches still surface first.
          */

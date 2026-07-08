@@ -26,9 +26,8 @@ import androidx.work.ListenableWorker.Result as WorkResult
 import com.vayunmathur.library.util.DataStoreUtils
 import com.vayunmathur.library.util.buildDatabase
 import com.vayunmathur.library.ocr.OcrEngine
-import com.vayunmathur.sdk.openassistant.AssistantNotInstalledException
+import com.vayunmathur.sdk.openassistant.EmbeddingImageFailedException
 import com.vayunmathur.sdk.openassistant.EmbeddingModelDownloadingException
-import com.vayunmathur.sdk.openassistant.EmbeddingUnsupportedException
 import com.vayunmathur.sdk.openassistant.OpenAssistant
 import com.vayunmathur.photos.data.Person
 import com.vayunmathur.photos.data.Photo
@@ -38,7 +37,9 @@ import com.vayunmathur.photos.data.PhotoDatabase
 import com.vayunmathur.photos.data.VideoData
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -476,7 +477,8 @@ suspend fun runClipIndexing(database: PhotoDatabase, context: Context) = corouti
     }
 
     // If the embedder version OR the OA-provided model id changed, old embeddings
-    // are incompatible (e.g. 512-d MobileCLIP → 768-d SigLIP2): clear them and
+    // are incompatible (e.g. the previous 512-d space → 768-d SigLIP2): clear
+    // them and
     // re-embed every photo. Photo rows themselves (OCR text, faces) are untouched.
     val modelId = try {
         ClipEmbedder.embeddingInfo(context).modelId
@@ -501,26 +503,35 @@ suspend fun runClipIndexing(database: PhotoDatabase, context: Context) = corouti
     for (photo in photos) {
         ensureActive()
 
+        val t0 = System.currentTimeMillis()
         val embedding = try {
             // OpenAssistant decodes the URI, so photos no longer decodes a bitmap.
             ClipEmbedder.imageEmbedding(context, photo.uri.toUri())
-        } catch (e: EmbeddingModelDownloadingException) {
-            // Models went unavailable mid-run: stop and retry later WITHOUT
-            // marking these photos scanned.
-            Log.i("ClipWorker", "Embedding models downloading; pausing indexing")
+        } catch (e: EmbeddingImageFailedException) {
+            // Provider is healthy but this one image couldn't be embedded (e.g.
+            // decode failed): mark it scanned with no vector so we skip it rather
+            // than blocking the queue on it forever.
+            Log.w("ClipWorker", "Skipping un-embeddable photo ${photo.id}: ${e.message}")
+            photoDao.upsertAll(listOf(photo.copy(clipEmbedding = null, clipScanned = true)))
+            delay(CLIP_INTER_ITEM_DELAY_MS)
+            continue
+        } catch (e: TimeoutCancellationException) {
+            // OpenAssistant didn't respond in time — treat as a transient outage:
+            // pause WITHOUT marking scanned so these photos retry later.
+            Log.w("ClipWorker", "Embedding request timed out; pausing indexing")
             return@coroutineScope
-        } catch (e: AssistantNotInstalledException) {
-            return@coroutineScope
-        } catch (e: EmbeddingUnsupportedException) {
-            return@coroutineScope
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e("ClipWorker", "Error embedding photo ${photo.id}", e)
-            null
+            // Any other failure (not installed / too old / models downloading /
+            // service unreachable / load failure) is systemic: stop the run
+            // WITHOUT marking scanned so these photos retry once OA is healthy.
+            Log.w("ClipWorker", "Embedding unavailable; pausing indexing", e)
+            return@coroutineScope
         }
 
-        val bytes = embedding?.let { ClipEmbedder.floatsToBytes(it) }
-        // Store result and mark scanned regardless of per-image outcome (mirrors OCR).
-        photoDao.upsertAll(listOf(photo.copy(clipEmbedding = bytes, clipScanned = true)))
+        Log.d("ClipWorker", "Embedded photo ${photo.id} (${embedding.size}d) in ${System.currentTimeMillis() - t0}ms")
+        photoDao.upsertAll(listOf(photo.copy(clipEmbedding = ClipEmbedder.floatsToBytes(embedding), clipScanned = true)))
 
         // Short pause between images keeps sustained CPU/battery use low.
         delay(CLIP_INTER_ITEM_DELAY_MS)

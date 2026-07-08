@@ -54,8 +54,8 @@ interface PhotoDao {
     @Query("SELECT * FROM Photo WHERE clipScanned = 0 AND isTrashed = 0 AND duration IS NULL")
     suspend fun getUnscannedForClip(): List<Photo>
 
-    /** Photos already embedded by MobileCLIP (numerator of the progress bar). */
-    @Query("SELECT count(*) FROM Photo WHERE clipScanned = 1 AND isTrashed = 0 AND duration IS NULL")
+    /** Photos with a stored embedding, i.e. actually indexed (progress numerator). */
+    @Query("SELECT count(*) FROM Photo WHERE clipEmbedding IS NOT NULL AND isTrashed = 0 AND duration IS NULL")
     fun getClipCountFlow(): Flow<Int>
 
     /** Photos that count toward CLIP embedding (denominator of the progress bar). */
@@ -158,9 +158,9 @@ val MIGRATION_8_9 = Migration(8, 9) {
 }
 
 val MIGRATION_9_10 = Migration(9, 10) {
-    // Add on-device MobileCLIP semantic search: store each photo's L2-normalised
-    // image embedding (BLOB) plus a clipScanned flag that mirrors ocrScanned so
-    // the CLIP worker only embeds new photos. OCR text and faces are untouched.
+    // Add semantic-search columns: store each photo's L2-normalised image
+    // embedding (BLOB) plus a clipScanned flag that mirrors ocrScanned so the
+    // worker only embeds new photos. OCR text and faces are untouched.
     // SQL mirrors Room's generated schema exactly so schema validation passes.
     it.execSQL("ALTER TABLE Photo ADD COLUMN clipEmbedding BLOB")
     it.execSQL("ALTER TABLE Photo ADD COLUMN clipScanned INTEGER NOT NULL DEFAULT 0")

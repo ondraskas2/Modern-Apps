@@ -8,17 +8,17 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.Detection
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facedetector.FaceDetector
-import org.tensorflow.lite.Interpreter
-import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
+import java.nio.FloatBuffer
 import kotlin.math.sqrt
 
 /**
@@ -33,10 +33,12 @@ import kotlin.math.sqrt
  *     canonical position inside a [INPUT_SIZE]x[INPUT_SIZE] crop. Aligning faces
  *     to a canonical pose is what makes same-person matching reliable.
  *  3. Embedding — a dedicated FACE-recognition model ([EMBEDDER_ASSET],
- *     MobileFaceNet) runs on the aligned crop via a LiteRT (formerly TensorFlow
- *     Lite) [Interpreter], so we control preprocessing. LiteRT 1.x keeps the
- *     drop-in `org.tensorflow.lite.Interpreter` API. Pixels are normalised as
- *     (px - 127.5) / 128.
+ *     **EdgeFace**) runs on the aligned crop via an ONNX Runtime [OrtSession]
+ *     (`com.microsoft.onnxruntime`, MIT — no LiteRT/TensorFlow-Lite dependency
+ *     is needed here). EdgeFace is an
+ *     ArcFace-trained transformer-CNN hybrid; the shipped export is INT8
+ *     weight-quantized (a few MB). Pixels are packed **NCHW** planar and
+ *     normalised as (px - 127.5) / 127.5, the ArcFace convention.
  *  4. Matching — embeddings are L2-normalised and compared with cosine
  *     similarity to cluster faces of the same person (see [CLUSTER_THRESHOLD]).
  *
@@ -45,17 +47,17 @@ import kotlin.math.sqrt
  *  - [DETECTOR_ASSET] — MediaPipe BlazeFace short-range (Apache-2.0):
  *    https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
  *
- *  - [EMBEDDER_ASSET] — a **MobileFaceNet** face-recognition embedder in plain
- *    TFLite format. Expected input: [INPUT_SIZE]x[INPUT_SIZE] RGB, normalised
- *    (px - 127.5) / 128; output: a 128/192/512-d float embedding (the output
- *    dimension is read from the model, so any of these works). The code
- *    L2-normalises the output itself.
+ *  - [EMBEDDER_ASSET] — an **EdgeFace** face-recognition embedder in ONNX
+ *    format. Expected input: NCHW `[1,3,`[INPUT_SIZE]`,`[INPUT_SIZE]`]` RGB,
+ *    normalised (px - 127.5) / 127.5; output: a 512-d float embedding (the
+ *    dimension is read from the model at run time). The code L2-normalises the
+ *    output itself.
  *
- *    Ship a PERMISSIVELY-LICENSED (Apache-2.0 / MIT) MobileFaceNet `.tflite`
- *    only. This build does NOT bundle one (we removed the old general-purpose
- *    MobileNetV3 embedder because it is not discriminative for face identity and
- *    we must not silently fall back to it). Drop a verified MobileFaceNet file at
- *    `photos/src/main/assets/mobilefacenet.tflite`. If the input size differs
+ *    Generate it with `scripts/photos/prepare_models.py`, which fetches the
+ *    EdgeFace weights, exports to ONNX and applies INT8 dynamic quantization,
+ *    writing `photos/src/main/assets/edgeface.onnx`. NOTE: EdgeFace ships under a
+ *    **non-commercial** research licence — this project uses it deliberately;
+ *    swap the asset if you need a permissive licence. If the input size differs
  *    from 112, update [INPUT_SIZE]; if the normalisation differs, update [embed].
  *    When you change the model, bump [EMBEDDER_VERSION] so existing clusters are
  *    rebuilt with the new embeddings.
@@ -65,34 +67,36 @@ import kotlin.math.sqrt
  */
 object FaceRecognizer {
     const val DETECTOR_ASSET = "face_detector.tflite"
-    const val EMBEDDER_ASSET = "mobilefacenet.tflite"
+    const val EMBEDDER_ASSET = "edgeface.onnx"
 
-    /** Square input side (px) the embedder expects. MobileFaceNet is 112. */
+    /** Square input side (px) the embedder expects. EdgeFace/ArcFace is 112. */
     const val INPUT_SIZE = 112
 
     /**
      * Bump this whenever the embedder model (or preprocessing) changes. The face
      * worker compares it against a stored value and, on mismatch, clears existing
      * clusters and re-scans so photos are re-grouped with the new embeddings.
-     * (v1 = old MobileNetV3 general embedder; v2 = MobileFaceNet + alignment.)
+     * (v1 = old MobileNetV3 general embedder; v2 = MobileFaceNet + alignment;
+     * v3 = EdgeFace INT8 on ONNX Runtime.)
      */
-    const val EMBEDDER_VERSION = 2
+    const val EMBEDDER_VERSION = 3
 
     /**
      * Minimum cosine similarity for a face to join an existing cluster instead of
-     * starting a new one. Single tunable knob. For MobileFaceNet, same-person
-     * cosine is typically ~0.4–0.6 (very different from a general image
-     * embedder), so 0.5 is a sensible default: higher = stricter/more clusters,
-     * lower = looser/fewer clusters.
+     * starting a new one. Single tunable knob. EdgeFace is ArcFace-trained, so
+     * its cosine distribution is more spread out than MobileFaceNet's ~0.4–0.6:
+     * same-person pairs sit higher and impostors lower, so a stricter floor is
+     * appropriate. 0.55 is the starting point — validate on sample faces and
+     * adjust: higher = stricter/more clusters, lower = looser/fewer clusters.
      */
-    const val CLUSTER_THRESHOLD = 0.5f
+    const val CLUSTER_THRESHOLD = 0.55f
 
     /**
      * Cosine similarity above which two whole clusters are merged in the
      * second-pass cleanup (reduces duplicate person-groups). Kept a bit stricter
      * than [CLUSTER_THRESHOLD] because it compares averaged centroids.
      */
-    const val MERGE_THRESHOLD = 0.6f
+    const val MERGE_THRESHOLD = 0.65f
 
     private const val TAG = "FaceRecognizer"
 
@@ -116,9 +120,11 @@ object FaceRecognizer {
         val bottom: Float,
     )
 
+    private val env: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
+    private val lock = Any()
+
     @Volatile private var detector: FaceDetector? = null
-    @Volatile private var embedder: Interpreter? = null
-    @Volatile private var embeddingDim: Int = 0
+    @Volatile private var embedder: OrtSession? = null
     @Volatile private var initFailed = false
 
     /** True only if both model assets are present in the APK. */
@@ -146,29 +152,29 @@ object FaceRecognizer {
                     .setMinDetectionConfidence(0.5f)
                     .build(),
             )
-            val interpreter = Interpreter(
-                loadModelFile(app, EMBEDDER_ASSET),
-                Interpreter.Options().apply { setNumThreads(2) },
-            )
-            // Output shape is [1, D]; read D so any 128/192/512-d model works.
-            embeddingDim = interpreter.getOutputTensor(0).shape().last()
-            embedder = interpreter
+            val modelBytes = readAsset(app, EMBEDDER_ASSET)
+                ?: throw IllegalStateException("Missing $EMBEDDER_ASSET")
+            val opts = OrtSession.SessionOptions().apply {
+                // Single-threaded keeps sustained CPU/battery use low.
+                setIntraOpNumThreads(1)
+                setInterOpNumThreads(1)
+            }
+            embedder = env.createSession(modelBytes, opts)
             true
         } catch (e: Throwable) {
-            Log.e(TAG, "Face models unavailable — drop $DETECTOR_ASSET and a MobileFaceNet $EMBEDDER_ASSET into photos assets (see FaceRecognizer docs).", e)
+            Log.e(TAG, "Face models unavailable — drop $DETECTOR_ASSET and an EdgeFace $EMBEDDER_ASSET into photos assets (see FaceRecognizer docs).", e)
             detector = null
+            try { embedder?.close() } catch (_: Exception) {}
             embedder = null
             initFailed = true
             false
         }
     }
 
-    private fun loadModelFile(context: Context, asset: String): MappedByteBuffer {
-        context.assets.openFd(asset).use { fd ->
-            FileInputStream(fd.fileDescriptor).use { input ->
-                return input.channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
-            }
-        }
+    private fun readAsset(context: Context, name: String): ByteArray? = try {
+        context.assets.open(name).use { it.readBytes() }
+    } catch (_: Exception) {
+        null
     }
 
     /** Detect every face in [bitmap] and return one [DetectedFace] per face. */
@@ -251,23 +257,37 @@ object FaceRecognizer {
         }
     }
 
-    /** Run the embedder on an [INPUT_SIZE] aligned crop, returning the raw vector. */
-    private fun embed(interpreter: Interpreter, face: Bitmap): FloatArray {
-        val input = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4).order(ByteOrder.nativeOrder())
-        val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
+    /**
+     * Run the embedder on an [INPUT_SIZE] aligned crop, returning the raw vector.
+     * EdgeFace/ArcFace expects an NCHW planar `[1,3,H,W]` float tensor with pixels
+     * normalised (px - 127.5) / 127.5.
+     */
+    private fun embed(session: OrtSession, face: Bitmap): FloatArray {
+        val area = INPUT_SIZE * INPUT_SIZE
+        val pixels = IntArray(area)
         face.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
-        for (pixel in pixels) {
-            val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
-            input.putFloat((r - 127.5f) / 128f)
-            input.putFloat((g - 127.5f) / 128f)
-            input.putFloat((b - 127.5f) / 128f)
+        val input = FloatArray(3 * area)
+        for (i in 0 until area) {
+            val p = pixels[i]
+            input[i] = (((p shr 16) and 0xFF) - 127.5f) / 127.5f          // R plane
+            input[area + i] = (((p shr 8) and 0xFF) - 127.5f) / 127.5f     // G plane
+            input[2 * area + i] = ((p and 0xFF) - 127.5f) / 127.5f         // B plane
         }
-        input.rewind()
-        val output = Array(1) { FloatArray(embeddingDim) }
-        interpreter.run(input, output)
-        return output[0]
+        synchronized(lock) {
+            val inputName = session.inputNames.iterator().next()
+            OnnxTensor.createTensor(
+                env,
+                FloatBuffer.wrap(input),
+                longArrayOf(1, 3, INPUT_SIZE.toLong(), INPUT_SIZE.toLong()),
+            ).use { tensor ->
+                session.run(mapOf(inputName to tensor)).use { result ->
+                    val out = result.get(0) as OnnxTensor
+                    val vec = FloatArray(out.info.shape.last().toInt())
+                    out.floatBuffer.get(vec)
+                    return vec
+                }
+            }
+        }
     }
 
     /** Expand the detector box by a small margin and clamp it to the image. */

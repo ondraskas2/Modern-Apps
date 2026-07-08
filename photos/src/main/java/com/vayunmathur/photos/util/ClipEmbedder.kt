@@ -32,8 +32,8 @@ object ClipEmbedder {
 
     /**
      * Bump whenever the embedding space changes so [ClipWorker] clears every
-     * stored vector and re-indexes. Bumped from 1 (512-d on-device MobileCLIP)
-     * to 2 for the move to OpenAssistant's 768-d SigLIP2 space.
+     * stored vector and re-indexes. Bumped to 2 for the move to OpenAssistant's
+     * 768-d SigLIP2 embedding space.
      */
     const val EMBEDDER_VERSION = 2
 

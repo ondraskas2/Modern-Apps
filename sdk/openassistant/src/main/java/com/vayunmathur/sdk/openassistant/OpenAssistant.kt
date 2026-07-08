@@ -1,5 +1,6 @@
 package com.vayunmathur.sdk.openassistant
 
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -198,7 +199,13 @@ class OpenAssistant(private val context: Context, private val timeoutMs: Long = 
                     }
                     else -> {
                         val error = data?.getString("error") ?: "Embedding failed"
-                        cont.resumeWithException(AssistantException(error))
+                        // per_item = the provider is up but this specific request
+                        // couldn't be embedded → caller skips just this item.
+                        if (data?.getBoolean("per_item") == true) {
+                            cont.resumeWithException(EmbeddingImageFailedException(error))
+                        } else {
+                            cont.resumeWithException(AssistantException(error))
+                        }
                     }
                 }
             }
@@ -208,9 +215,12 @@ class OpenAssistant(private val context: Context, private val timeoutMs: Long = 
                 putExtra("embed_mode", mode)
                 if (text != null) putExtra("user_text", text)
                 if (uri != null) {
-                    // Single content:// URI in an ArrayList<Uri>, granted read so
-                    // the exported service can openInputStream it (copyUriToFile).
+                    // Single content:// URI in an ArrayList<Uri> for the service to
+                    // read, AND in ClipData so FLAG_GRANT_READ_URI_PERMISSION
+                    // actually grants access — the grant flag applies to the
+                    // intent's data/ClipData, NOT to URIs buried in extras.
                     putParcelableArrayListExtra("image_uris", arrayListOf(uri))
+                    clipData = ClipData.newRawUri("image_uris", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 putExtra("RECEIVER", receiver as ResultReceiver)
