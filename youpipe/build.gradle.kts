@@ -26,4 +26,6 @@ dependencies {
     implementation(libs.androidx.compose.runtime.livedata)
 
     implementation(project(":library:network"))
+
+    testImplementation(libs.junit)
 }

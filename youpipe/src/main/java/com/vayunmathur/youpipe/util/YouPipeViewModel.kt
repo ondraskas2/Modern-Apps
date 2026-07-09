@@ -35,6 +35,8 @@ import com.vayunmathur.youpipe.ui.getVideoCodecName
 import com.vayunmathur.youpipe.ui.getAudioCodecName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -201,70 +203,105 @@ class YouPipeViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _recommendationsLoading.value = true
             try {
-                val cached = cachedRelatedVideoDao.getAll()
                 val history = historyVideos.value
-                val subs = subscriptions.value
-                val subNames = subs.map { it.name.lowercase() }.toSet()
-
-                val historyMap = history.associateBy { it.id }
-                val authorFreq = mutableMapOf<String, Int>()
-                history.forEach { h ->
-                    val key = h.videoItem.author.lowercase()
-                    authorFreq[key] = (authorFreq[key] ?: 0) + 1
-                }
-
-                val sourceTimestamps = history.associate { it.id to it.timestamp }
+                val subNames = subscriptions.value.map { it.name.lowercase() }.toSet()
                 val now = Clock.System.now()
 
-                data class ScoredVideo(val video: VideoInfo, val score: Double)
+                val profile = buildInterestProfile(history, now)
+                val candidates = gatherCandidates(profile)
+                val ranked = rankRecommendations(candidates, history, subNames, now)
 
-                val scored = mutableMapOf<Long, ScoredVideo>()
-
-                for (item in cached) {
-                    val v = item.videoItem
-                    if (v.author.lowercase() in subNames) continue
-                    val h = historyMap[v.videoID]
-                    if (h != null && v.duration > 0 && h.progress.toDouble() / (v.duration * 1000) >= 0.9) continue
-
-                    val wc = minOf((authorFreq[v.author.lowercase()] ?: 0) * 2, 10).toDouble()
-                    val sourceTs = sourceTimestamps[item.sourceVideoID]
-                    val wr = if (sourceTs != null) {
-                        val hoursAgo = (now - sourceTs).inWholeHours.toDouble()
-                        maxOf(5.0 - hoursAgo / 24.0, 0.0)
-                    } else 0.0
-                    val uploadAgeDays = (now - v.uploadDate).inWholeDays.toDouble()
-                    val d = kotlin.math.exp(-0.03 * uploadAgeDays)
-                    val score = (wc + wr) * d
-
-                    val existing = scored[v.videoID]
-                    if (existing == null || score > existing.score) {
-                        scored[v.videoID] = ScoredVideo(v, score)
-                    }
-                }
-
-                val sorted = scored.values.sortedByDescending { it.score }
-
-                val diverse = mutableListOf<VideoInfo>()
-                var consecutiveAuthor = ""
-                var consecutiveCount = 0
-                for (sv in sorted) {
-                    val author = sv.video.author.lowercase()
-                    if (author == consecutiveAuthor) {
-                        consecutiveCount++
-                        if (consecutiveCount > 3) continue
-                    } else {
-                        consecutiveAuthor = author
-                        consecutiveCount = 1
-                    }
-                    diverse.add(sv.video)
-                }
-
-                _recommendations.value = diverse
-                fetchDeArrowForVideos(diverse.map { it.videoID })
+                _recommendations.value = ranked
+                fetchDeArrowForVideos(ranked.map { it.videoID })
             } catch (e: Exception) {
                 Log.e(TAG, "Recommendation error", e)
             }
             _recommendationsLoading.value = false
+        }
+    }
+
+    /**
+     * Pulls candidates from all sources in parallel and merges them. Each source
+     * is isolated in its own try/catch so one failing network call never blanks
+     * the feed.
+     */
+    private suspend fun gatherCandidates(profile: InterestProfile): List<Candidate> = coroutineScope {
+        val history = historyVideos.value
+        val subs = subscriptions.value
+        val sourceTimestamps = history.associate { it.id to it.timestamp }
+
+        val relatedDeferred = async(Dispatchers.IO) {
+            try {
+                cachedRelatedVideoDao.getAll().map { item ->
+                    Candidate(item.videoItem, RecSource.RELATED, sourceTimestamps[item.sourceVideoID])
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Related candidates error", e); emptyList()
+            }
+        }
+
+        val trendingDeferred = async(Dispatchers.IO) {
+            try {
+                getTrendingVideos().map { Candidate(it, RecSource.TRENDING) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Trending candidates error", e); emptyList()
+            }
+        }
+
+        val subscriptionCandidates = subscriptionVideos.value.map {
+            Candidate(
+                VideoInfo(it.name, it.id, it.duration, it.views, it.uploadDate, it.thumbnailURL, it.author),
+                RecSource.SUBSCRIPTION,
+            )
+        }
+
+        val topChannelDeferred = async(Dispatchers.IO) {
+            try {
+                profile.authorWeights.entries
+                    .sortedByDescending { it.value }
+                    .take(MAX_TOP_CHANNELS)
+                    .flatMap { (author, _) ->
+                        val channelId = resolveChannelId(author, subs) ?: return@flatMap emptyList()
+                        getChannelVideos(channelId)
+                            .take(TOP_CHANNEL_VIDEOS)
+                            .map { Candidate(it, RecSource.TOP_CHANNEL) }
+                            .toList()
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Top-channel candidates error", e); emptyList()
+            }
+        }
+
+        val searchDeferred = async(Dispatchers.IO) {
+            try {
+                profile.keywordWeights.entries
+                    .sortedByDescending { it.value }
+                    .take(MAX_SEARCH_KEYWORDS)
+                    .flatMap { (keyword, _) ->
+                        searchVideos(keyword).map { Candidate(it, RecSource.SEARCH) }
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Search candidates error", e); emptyList()
+            }
+        }
+
+        relatedDeferred.await() + trendingDeferred.await() + subscriptionCandidates +
+            topChannelDeferred.await() + searchDeferred.await()
+    }
+
+    /**
+     * Resolves an author name to a YouTube channel id, preferring a matching
+     * subscription and falling back to a bounded channel search.
+     */
+    private suspend fun resolveChannelId(authorName: String, subs: List<Subscription>): String? {
+        subs.firstOrNull { it.name.equals(authorName, ignoreCase = true) }?.let { return it.channelID }
+        return try {
+            val ex = ServiceList.YouTube.getSearchExtractor(authorName)
+            ex.fetchPage()
+            ex.initialPage.items.filterIsInstance<ChannelInfoItem>()
+                .firstOrNull()?.let { channelURLtoID(it.url) }
+        } catch (e: Exception) {
+            null
         }
     }
 
@@ -816,6 +853,10 @@ class YouPipeViewModel(
 
     companion object {
         private const val TAG = "YouPipeViewModel"
+
+        private const val MAX_TOP_CHANNELS = 5
+        private const val TOP_CHANNEL_VIDEOS = 5
+        private const val MAX_SEARCH_KEYWORDS = 2
 
         val ALL_SPONSOR_CATEGORIES = setOf(
             "sponsor", "selfpromo", "interaction", "intro", "outro",

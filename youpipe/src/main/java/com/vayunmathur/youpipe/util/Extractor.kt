@@ -100,6 +100,20 @@ fun getChannelVideos(channelId: String): Sequence<VideoInfo> = sequence {
     }
 }
 
+/** First page of the YouTube Trending kiosk, mapped to [VideoInfo]. */
+suspend fun getTrendingVideos(): List<VideoInfo> = coroutineScope {
+    val ex = ServiceList.YouTube.kioskList.defaultKioskExtractor
+    ex.fetchPage()
+    ex.initialPage.items.filterIsInstance<StreamInfoItem>().mapNotNull { it.toVideoInfo() }
+}
+
+/** First page of video results for [query], mapped to [VideoInfo]. */
+suspend fun searchVideos(query: String): List<VideoInfo> = coroutineScope {
+    val ex = ServiceList.YouTube.getSearchExtractor(query)
+    ex.fetchPage()
+    ex.initialPage.items.filterIsInstance<StreamInfoItem>().mapNotNull { it.toVideoInfo() }
+}
+
 suspend fun getChannelInfo(channelId: String): ChannelInfo = getChannelInfoFromURL(channelIDtoURL(channelId))
 
 suspend fun getChannelInfoFromURL(url: String): ChannelInfo = coroutineScope {
