@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,7 +62,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.rememberReorderableLazyGridState
 
 /**
  * "Cut and glue": compose a new PDF by appending whole PDFs or images, then
@@ -119,8 +122,8 @@ fun CutGlueScreen(onBack: () -> Unit) {
         }
     }
 
-    val listState = rememberLazyListState()
-    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+    val gridState = rememberLazyGridState()
+    val reorderState = rememberReorderableLazyGridState(gridState) { from, to ->
         if (from.index < pageKeys.size && to.index < pageKeys.size) {
             val k = pageKeys.removeAt(from.index)
             pageKeys.add(to.index, k)
@@ -172,9 +175,11 @@ fun CutGlueScreen(onBack: () -> Unit) {
                     modifier = Modifier.align(Alignment.Center),
                 )
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(12.dp),
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    state = gridState,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxSize().padding(8.dp),
                 ) {
                     items(pageKeys, key = { it }) { key ->
                         val index = pageKeys.indexOf(key)

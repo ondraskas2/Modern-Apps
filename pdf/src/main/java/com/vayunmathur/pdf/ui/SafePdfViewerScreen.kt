@@ -313,11 +313,19 @@ private fun ShapeKind.label(): String {
 private data class PolyDraft(val page: Int, val points: List<Offset>, val bezier: Boolean)
 
 /**
- * A reversible edit: an annotation was [added] (undo detaches it) or removed
- * (undo re-attaches it). Backed by native detach/reattach so the object
- * survives for redo.
+ * A reversible edit. ADDED (undo detaches), REMOVED (undo re-attaches), or MOVED
+ * (undo restores [oldRect], redo restores [newRect]). Rects are page-space
+ * [x0,y0,x1,y1].
  */
-private data class EditAction(val page: Int, val annotId: Long, val added: Boolean)
+private enum class EditKind { ADDED, REMOVED, MOVED }
+
+private data class EditAction(
+    val page: Int,
+    val annotId: Long,
+    val kind: EditKind,
+    val oldRect: List<Float>? = null,
+    val newRect: List<Float>? = null,
+)
 
 /**
  * Clamp the zoom [pan] (screen-pixel translation) so the content, scaled by
@@ -417,13 +425,14 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     var opacity by remember { mutableFloatStateOf(1f) }
     var strokeWidth by remember { mutableFloatStateOf(2f) }
     var showStyle by remember { mutableStateOf(false) }
-    // Undo/redo of annotation add/remove (backed by native detach/reattach).
+    // Undo/redo of annotation add/remove/move (backed by native ops).
     val undoStack = remember { mutableStateListOf<EditAction>() }
     val redoStack = remember { mutableStateListOf<EditAction>() }
+    // Set by non-undoable edits (forms, flatten, redactions) so Save still shows.
+    var nonUndoDirty by remember { mutableStateOf(false) }
     // Jump-to-page dialog.
     var showJump by remember { mutableStateOf(false) }
-    // Page-manager overlay + dynamic page count / global refresh for page ops.
-    var showPages by remember { mutableStateOf(false) }
+    // Global refresh version for document-wide ops (flatten, redactions).
     var showOverflow by remember { mutableStateOf(false) }
     var selectText by remember { mutableStateOf(false) }
     var reflow by remember { mutableStateOf(false) }
@@ -441,7 +450,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     // Register a freshly created annotation for undo.
     val registerCreated: (Int, Long) -> Unit = { page, id ->
         if (id != 0L) {
-            undoStack.add(EditAction(page, id, true))
+            undoStack.add(EditAction(page, id, EditKind.ADDED))
             redoStack.clear()
         }
     }
@@ -450,8 +459,13 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
         val doc = document
         if (a != null && doc != null) {
             scope.launch {
-                if (a.added) doc.detachAnnotation(a.page, a.annotId)
-                else doc.reattachAnnotation(a.page, a.annotId)
+                when (a.kind) {
+                    EditKind.ADDED -> doc.detachAnnotation(a.page, a.annotId)
+                    EditKind.REMOVED -> doc.reattachAnnotation(a.page, a.annotId)
+                    EditKind.MOVED -> a.oldRect?.let {
+                        doc.moveAnnotation(a.page, a.annotId, it[0], it[1], it[2], it[3])
+                    }
+                }
                 redoStack.add(a); selected = null; markEdited(a.page)
             }
         }
@@ -461,11 +475,21 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
         val doc = document
         if (a != null && doc != null) {
             scope.launch {
-                if (a.added) doc.reattachAnnotation(a.page, a.annotId)
-                else doc.detachAnnotation(a.page, a.annotId)
+                when (a.kind) {
+                    EditKind.ADDED -> doc.reattachAnnotation(a.page, a.annotId)
+                    EditKind.REMOVED -> doc.detachAnnotation(a.page, a.annotId)
+                    EditKind.MOVED -> a.newRect?.let {
+                        doc.moveAnnotation(a.page, a.annotId, it[0], it[1], it[2], it[3])
+                    }
+                }
                 undoStack.add(a); selected = null; markEdited(a.page)
             }
         }
+    }
+    // Record an annotation move for undo/redo.
+    val registerMoved: (Int, Long, List<Float>, List<Float>) -> Unit = { page, id, oldR, newR ->
+        undoStack.add(EditAction(page, id, EditKind.MOVED, oldR, newR))
+        redoStack.clear()
     }
 
     // Search state.
@@ -768,8 +792,6 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             placeholder = { Text(stringResource(R.string.search_label)) },
                             singleLine = true,
                         )
-                    } else {
-                        Text(stringResource(R.string.safe_pdf_viewer_title))
                     }
                 },
                 navigationIcon = {
@@ -801,9 +823,6 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             IconButton({ showJump = true }) {
                                 Icon(painterResource(R.drawable.ic_jump_to_page), contentDescription = "Jump to page")
                             }
-                            IconButton({ showPages = true }) {
-                                Icon(painterResource(R.drawable.ic_pages), contentDescription = "Manage pages")
-                            }
                             IconButton({ selectText = !selectText }) {
                                 Icon(
                                     painterResource(R.drawable.ic_select_text),
@@ -814,30 +833,9 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             }
                             Box {
                                 IconButton({ showOverflow = true }) {
-                                    Icon(painterResource(R.drawable.ic_overflow), contentDescription = "More")
+                                    Icon(painterResource(R.drawable.ic_lock), contentDescription = "Security & document")
                                 }
                                 DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text("Print") },
-                                        onClick = {
-                                            showOverflow = false
-                                            val doc = document
-                                            if (doc != null) scope.launch {
-                                                val bytes = doc.save()
-                                                if (bytes != null) printPdfBytes(
-                                                    context, uri.lastPathSegment ?: "document", bytes,
-                                                )
-                                            }
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Export page as PNG") },
-                                        onClick = { showOverflow = false; pngExportLauncher.launch("page.png") },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Export text") },
-                                        onClick = { showOverflow = false; textExportLauncher.launch("document.txt") },
-                                    )
                                     DropdownMenuItem(
                                         text = { Text("Encrypt with password\u2026") },
                                         onClick = { showOverflow = false; showEncrypt = true },
@@ -852,7 +850,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                             showOverflow = false
                                             val doc = document
                                             if (doc != null) scope.launch {
-                                                doc.flatten(); pageMgrVersion++; dirty = true
+                                                doc.flatten(); pageMgrVersion++; nonUndoDirty = true
                                             }
                                         },
                                     )
@@ -862,7 +860,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                             showOverflow = false
                                             val doc = document
                                             if (doc != null) scope.launch {
-                                                doc.applyRedactions(); pageMgrVersion++; dirty = true
+                                                doc.applyRedactions(); pageMgrVersion++; nonUndoDirty = true
                                             }
                                         },
                                     )
@@ -891,7 +889,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                         }) {
                             if (editMode) IconVisible() else IconEdit()
                         }
-                        if (dirty) {
+                        if (undoStack.isNotEmpty() || nonUndoDirty) {
                             Box {
                                 IconButton({ showSaveMenu = true }) { IconSave() }
                                 DropdownMenu(
@@ -942,7 +940,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             scope.launch {
                                 // Detach (not delete) so it can be undone.
                                 doc.detachAnnotation(sel.first, sel.second)
-                                undoStack.add(EditAction(sel.first, sel.second, false))
+                                undoStack.add(EditAction(sel.first, sel.second, EditKind.REMOVED))
                                 redoStack.clear()
                                 selected = null
                                 markEdited(sel.first)
@@ -1026,6 +1024,8 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             onSelect = { annotId -> selected = annotId?.let { index to it } },
                             onEdited = { markEdited(index) },
                             onCreated = { id -> registerCreated(index, id) },
+                            onMoved = { id, oldR, newR -> registerMoved(index, id, oldR, newR) },
+                            onFormEdited = { markEdited(index); nonUndoDirty = true },
                             onLinkPage = { p -> scope.launch { listState.animateScrollToItem(p.coerceIn(0, (pageCount - 1).coerceAtLeast(0))) } },
                             textSession = textSession?.takeIf { it.page == index },
                             onStartText = { s -> commitText(textSession); textSession = s },
@@ -1101,26 +1101,6 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
             strokeWidth = strokeWidth,
             onWidth = { strokeWidth = it },
             onDismiss = { showStyle = false },
-        )
-    }
-
-    if (showPages && document != null) {
-        val doc = document
-        PageManagerSheet(
-            document = doc!!,
-            initialCount = pageCount,
-            version = pageMgrVersion,
-            onMove = { from, to -> scope.launch { doc.movePage(from, to); pageMgrVersion++ } },
-            onDelete = { idx ->
-                scope.launch {
-                    doc.removePage(idx)
-                    pageCount = doc.livePageCount()
-                    pageMgrVersion++
-                }
-            },
-            onRotate = { idx, delta -> scope.launch { doc.rotatePage(idx, delta); pageMgrVersion++ } },
-            onExtract = { idx -> pendingExtract = idx; extractLauncher.launch("page-${idx + 1}.pdf") },
-            onClose = { showPages = false },
         )
     }
 
@@ -1203,6 +1183,8 @@ private fun SafePdfPageItem(
     onSelect: (Long?) -> Unit,
     onEdited: () -> Unit,
     onCreated: (Long) -> Unit,
+    onMoved: (Long, List<Float>, List<Float>) -> Unit,
+    onFormEdited: () -> Unit,
     textSession: TextSession?,
     onStartText: (TextSession) -> Unit,
     onTextChange: (TextFieldValue) -> Unit,
@@ -1299,6 +1281,7 @@ private fun SafePdfPageItem(
                 onSelect = onSelect,
                 onEdited = onEdited,
                 onCreated = onCreated,
+                onMoved = onMoved,
                 onStartText = onStartText,
                 onRequestImage = onRequestImage,
                 onRequestNote = onRequestNote,
@@ -1313,7 +1296,7 @@ private fun SafePdfPageItem(
                 document = document,
                 index = index,
                 scope = scope,
-                onEdited = onEdited,
+                onEdited = onFormEdited,
             )
 
             // Inline text editing: a live text field drawn on the page.
@@ -1555,6 +1538,7 @@ private fun EditOverlay(
     onSelect: (Long?) -> Unit,
     onEdited: () -> Unit,
     onCreated: (Long) -> Unit,
+    onMoved: (Long, List<Float>, List<Float>) -> Unit,
     onStartText: (TextSession) -> Unit,
     onRequestImage: (Offset) -> Unit,
     onRequestNote: (Offset) -> Unit,
@@ -1752,11 +1736,14 @@ private fun EditOverlay(
                         if (id != null && a != null) {
                             val dx = moveDelta.x / scale
                             val dy = -moveDelta.y / scale
-                            scope.launch {
-                                document.moveAnnotation(
-                                    index, id, a.x0 + dx, a.y0 + dy, a.x1 + dx, a.y1 + dy
-                                )
-                                onEdited()
+                            if (dx != 0f || dy != 0f) {
+                                val oldR = listOf(a.x0, a.y0, a.x1, a.y1)
+                                val newR = listOf(a.x0 + dx, a.y0 + dy, a.x1 + dx, a.y1 + dy)
+                                scope.launch {
+                                    document.moveAnnotation(index, id, newR[0], newR[1], newR[2], newR[3])
+                                    onMoved(id, oldR, newR)
+                                    onEdited()
+                                }
                             }
                         }
                     }
