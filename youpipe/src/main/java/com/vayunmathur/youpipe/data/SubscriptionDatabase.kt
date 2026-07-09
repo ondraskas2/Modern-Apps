@@ -47,6 +47,55 @@ val MIGRATION_2_3 = Migration(2, 3) {
     """.trimIndent())
 }
 
+val MIGRATION_3_4 = Migration(3, 4) {
+    it.execSQL("""
+        CREATE TABLE IF NOT EXISTS `RecommendationImpression` (
+            `videoID` INTEGER NOT NULL,
+            `channelKey` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `shownCount` INTEGER NOT NULL,
+            `firstShownAt` INTEGER NOT NULL,
+            `lastShownAt` INTEGER NOT NULL,
+            PRIMARY KEY(`videoID`)
+        )
+    """.trimIndent())
+    it.execSQL("""
+        CREATE TABLE IF NOT EXISTS `RecommendationPreferences` (
+            `id` INTEGER NOT NULL,
+            `preset` TEXT NOT NULL,
+            `discoveryFamiliar` REAL NOT NULL,
+            `freshEvergreen` REAL NOT NULL,
+            `focusedDiverse` REAL NOT NULL,
+            `sourceRelated` INTEGER NOT NULL,
+            `sourceTrending` INTEGER NOT NULL,
+            `sourceSubscription` INTEGER NOT NULL,
+            `sourceTopChannel` INTEGER NOT NULL,
+            `sourceSearch` INTEGER NOT NULL,
+            `hideShorts` INTEGER NOT NULL,
+            `hideLive` INTEGER NOT NULL,
+            `minDurationSec` INTEGER NOT NULL,
+            `maxDurationSec` INTEGER NOT NULL,
+            PRIMARY KEY(`id`)
+        )
+    """.trimIndent())
+    it.execSQL("""
+        CREATE TABLE IF NOT EXISTS `ChannelPreference` (
+            `channelKey` TEXT NOT NULL,
+            `multiplier` REAL NOT NULL,
+            `blocked` INTEGER NOT NULL,
+            `pinned` INTEGER NOT NULL,
+            PRIMARY KEY(`channelKey`)
+        )
+    """.trimIndent())
+    it.execSQL("""
+        CREATE TABLE IF NOT EXISTS `KeywordPreference` (
+            `keyword` TEXT NOT NULL,
+            `muted` INTEGER NOT NULL,
+            PRIMARY KEY(`keyword`)
+        )
+    """.trimIndent())
+}
+
 @Dao
 interface HistoryVideoDao {
     @Query("SELECT * FROM HistoryVideo")
@@ -54,6 +103,9 @@ interface HistoryVideoDao {
 
     @Query("SELECT * FROM HistoryVideo WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<HistoryVideo?>
+
+    @Query("SELECT * FROM HistoryVideo")
+    suspend fun getAll(): List<HistoryVideo>
 
     @Upsert
     suspend fun upsert(value: HistoryVideo): Long
@@ -103,12 +155,15 @@ interface SubscriptionVideoDao {
     @Query("SELECT * FROM SubscriptionVideo WHERE id = :id")
     fun getByIdFlow(id: Long): Flow<SubscriptionVideo?>
 
+    @Query("SELECT * FROM SubscriptionVideo")
+    suspend fun getAll(): List<SubscriptionVideo>
+
     @Upsert
     suspend fun upsertAll(values: List<SubscriptionVideo>)
 }
 
 @TypeConverters(DefaultConverters::class)
-@Database(entities = [Subscription::class, SubscriptionVideo::class, HistoryVideo::class, SubscriptionCategory::class, DownloadedVideo::class, CachedRelatedVideo::class], version = 3)
+@Database(entities = [Subscription::class, SubscriptionVideo::class, HistoryVideo::class, SubscriptionCategory::class, DownloadedVideo::class, CachedRelatedVideo::class, RecommendationImpression::class, RecommendationPreferences::class, ChannelPreference::class, KeywordPreference::class], version = 4)
 abstract class SubscriptionDatabase : RoomDatabase() {
     abstract fun subscriptionDao(): SubscriptionDao
     abstract fun subscriptionVideoDao(): SubscriptionVideoDao
@@ -116,8 +171,12 @@ abstract class SubscriptionDatabase : RoomDatabase() {
     abstract fun subscriptionCategoryDao(): SubscriptionCategoryDao
     abstract fun downloadedVideoDao(): DownloadedVideoDao
     abstract fun cachedRelatedVideoDao(): CachedRelatedVideoDao
+    abstract fun recommendationImpressionDao(): RecommendationImpressionDao
+    abstract fun recommendationPreferencesDao(): RecommendationPreferencesDao
+    abstract fun channelPreferenceDao(): ChannelPreferenceDao
+    abstract fun keywordPreferenceDao(): KeywordPreferenceDao
 
     companion object : com.vayunmathur.library.util.DatabaseMigrations {
-        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3)
+        override val migrations: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
     }
 }
