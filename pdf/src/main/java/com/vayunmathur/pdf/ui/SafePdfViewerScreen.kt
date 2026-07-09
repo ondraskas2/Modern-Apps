@@ -352,13 +352,48 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val loadState by produceState<LoadState>(LoadState.Loading, uri) {
-        value = SafePdfDocument.open(context, uri)
-            ?.let { LoadState.Loaded(it) }
-            ?: LoadState.Error
+    // Password handling for encrypted PDFs.
+    var password by remember(uri) { mutableStateOf<String?>(null) }
+    var needsPassword by remember(uri) { mutableStateOf(false) }
+    var pwError by remember(uri) { mutableStateOf(false) }
+
+    val loadState by produceState<LoadState>(LoadState.Loading, uri, password) {
+        value = LoadState.Loading
+        val doc = SafePdfDocument.open(context, uri, password)
+        value = if (doc != null) {
+            needsPassword = false
+            LoadState.Loaded(doc)
+        } else {
+            when (SafePdfDocument.passwordState(context, uri)) {
+                1 -> { needsPassword = true; pwError = password != null; LoadState.Loading }
+                else -> LoadState.Error
+            }
+        }
     }
     val document = (loadState as? LoadState.Loaded)?.document
     DisposableEffect(document) { onDispose { document?.close() } }
+
+    if (needsPassword) {
+        var pwInput by remember { mutableStateOf("") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { onBack() },
+            title = { Text("Password required") },
+            text = {
+                Column {
+                    if (pwError) Text("Incorrect password", color = MaterialTheme.colorScheme.error)
+                    TextField(
+                        value = pwInput,
+                        onValueChange = { pwInput = it },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        placeholder = { Text("Password") },
+                    )
+                }
+            },
+            confirmButton = { TextButton({ needsPassword = false; password = pwInput }) { Text("Open") } },
+            dismissButton = { TextButton({ onBack() }) { Text("Cancel") } },
+        )
+    }
 
     // Prebuild the search index in the background so the first query is instant.
     LaunchedEffect(document) { document?.prewarmSearch() }
@@ -603,6 +638,22 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
         }
     }
 
+    var showEncrypt by remember { mutableStateOf(false) }
+    var pendingEncryptPw by remember { mutableStateOf<String?>(null) }
+    val encryptLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { outUri ->
+        val doc = document
+        val pw = pendingEncryptPw
+        pendingEncryptPw = null
+        if (outUri != null && doc != null && pw != null) scope.launch {
+            val bytes = doc.saveEncrypted(pw, "")
+            if (bytes != null) withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(outUri)?.use { it.write(bytes) } }
+            }
+        }
+    }
+
     val imageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { imgUri ->
@@ -762,6 +813,10 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                     DropdownMenuItem(
                                         text = { Text("Export text") },
                                         onClick = { showOverflow = false; textExportLauncher.launch("document.txt") },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Encrypt with password\u2026") },
+                                        onClick = { showOverflow = false; showEncrypt = true },
                                     )
                                 }
                             }
@@ -1009,6 +1064,30 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
             onRotate = { idx, delta -> scope.launch { doc.rotatePage(idx, delta); pageMgrVersion++ } },
             onExtract = { idx -> pendingExtract = idx; extractLauncher.launch("page-${idx + 1}.pdf") },
             onClose = { showPages = false },
+        )
+    }
+
+    if (showEncrypt) {
+        var pw by remember { mutableStateOf("") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showEncrypt = false },
+            title = { Text("Encrypt with password") },
+            text = {
+                TextField(
+                    value = pw,
+                    onValueChange = { pw = it },
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    placeholder = { Text("Password") },
+                )
+            },
+            confirmButton = {
+                TextButton({
+                    showEncrypt = false
+                    if (pw.isNotEmpty()) { pendingEncryptPw = pw; encryptLauncher.launch("encrypted.pdf") }
+                }) { Text("Save encrypted") }
+            },
+            dismissButton = { TextButton({ showEncrypt = false }) { Text("Cancel") } },
         )
     }
 

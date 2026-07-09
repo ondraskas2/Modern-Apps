@@ -21,6 +21,8 @@ use std::sync::{Mutex, OnceLock};
 use lopdf::content::Content;
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream};
 
+mod crypto;
+
 // ---------------------------------------------------------------------------
 // Document registry
 // ---------------------------------------------------------------------------
@@ -43,19 +45,200 @@ fn next_handle() -> i64 {
 }
 
 /// Parse `bytes` into a document and store it, returning a non-zero handle.
-/// Returns 0 on parse failure or if the document is encrypted (v1 shows a
-/// clean error rather than attempting decryption).
-fn open_document(bytes: &[u8]) -> i64 {
-    let doc = match Document::load_mem(bytes) {
+/// Encrypted documents are decrypted in place (with `password`, empty allowed);
+/// returns 0 on parse failure, wrong password, or unsupported (AES) encryption.
+fn open_document_pw(bytes: &[u8], password: &[u8]) -> i64 {
+    let mut doc = match Document::load_mem(bytes) {
         Ok(d) => d,
         Err(_) => return 0,
     };
     if doc.trailer.get(b"Encrypt").is_ok() {
-        return 0;
+        if decrypt_in_place(&mut doc, password) != DecryptStatus::Ok {
+            return 0;
+        }
     }
     let handle = next_handle();
     registry().lock().unwrap().insert(handle, doc);
     handle
+}
+
+fn open_document(bytes: &[u8]) -> i64 {
+    open_document_pw(bytes, b"")
+}
+
+/// Whether `bytes` is a standard-encrypted PDF that needs a (non-empty) password
+/// the empty password does not satisfy. Returns: 0 no, 1 needs password, 2
+/// unsupported encryption (e.g. AES).
+fn pdf_password_state(bytes: &[u8]) -> i32 {
+    let mut doc = match Document::load_mem(bytes) {
+        Ok(d) => d,
+        Err(_) => return 0,
+    };
+    if doc.trailer.get(b"Encrypt").is_err() {
+        return 0;
+    }
+    match decrypt_in_place(&mut doc, b"") {
+        DecryptStatus::Ok => 0,
+        DecryptStatus::NeedPassword => 1,
+        DecryptStatus::Unsupported => 2,
+    }
+}
+
+#[derive(PartialEq)]
+enum DecryptStatus {
+    Ok,
+    NeedPassword,
+    Unsupported,
+}
+
+/// Apply RC4 to every string and stream inside `obj` (symmetric).
+fn crypt_object(obj: &mut Object, okey: &[u8]) {
+    match obj {
+        Object::String(s, _) => *s = crypto::rc4(okey, s),
+        Object::Array(a) => {
+            for o in a.iter_mut() {
+                crypt_object(o, okey);
+            }
+        }
+        Object::Dictionary(d) => {
+            let keys: Vec<Vec<u8>> = d.iter().map(|(k, _)| k.clone()).collect();
+            for k in keys {
+                if let Ok(v) = d.get_mut(&k) {
+                    crypt_object(v, okey);
+                }
+            }
+        }
+        Object::Stream(st) => {
+            let keys: Vec<Vec<u8>> = st.dict.iter().map(|(k, _)| k.clone()).collect();
+            for k in keys {
+                if let Ok(v) = st.dict.get_mut(&k) {
+                    crypt_object(v, okey);
+                }
+            }
+            st.content = crypto::rc4(okey, &st.content);
+        }
+        _ => {}
+    }
+}
+
+/// First `/ID` element bytes from the trailer, or empty.
+fn trailer_id0(doc: &Document) -> Vec<u8> {
+    if let Ok(Object::Array(a)) = doc.trailer.get(b"ID") {
+        if let Some(Object::String(s, _)) = a.first() {
+            return s.clone();
+        }
+    }
+    Vec::new()
+}
+
+/// Decrypt a standard-RC4-encrypted document in place with `password`.
+fn decrypt_in_place(doc: &mut Document, password: &[u8]) -> DecryptStatus {
+    let enc_id = match doc.trailer.get(b"Encrypt").and_then(|o| o.as_reference()) {
+        Ok(id) => id,
+        Err(_) => return DecryptStatus::Unsupported,
+    };
+    let (o, u, p, v, r, length) = {
+        let enc = match doc.get_dictionary(enc_id) {
+            Ok(d) => d,
+            Err(_) => return DecryptStatus::Unsupported,
+        };
+        let filter = enc.get(b"Filter").ok().and_then(|o| o.as_name().ok());
+        if filter != Some(b"Standard".as_ref()) {
+            return DecryptStatus::Unsupported;
+        }
+        let v = enc.get(b"V").ok().and_then(num).unwrap_or(0.0) as i64;
+        let r = enc.get(b"R").ok().and_then(num).unwrap_or(0.0) as i64;
+        if v >= 4 || r >= 5 {
+            return DecryptStatus::Unsupported; // AES / newer handlers
+        }
+        let o = enc.get(b"O").ok().and_then(|o| o.as_str().ok()).map(|s| s.to_vec()).unwrap_or_default();
+        let u = enc.get(b"U").ok().and_then(|o| o.as_str().ok()).map(|s| s.to_vec()).unwrap_or_default();
+        let p = enc.get(b"P").ok().and_then(num).unwrap_or(0.0) as i32;
+        let length = enc.get(b"Length").ok().and_then(num).unwrap_or(40.0) as usize;
+        (o, u, p, v, r, length)
+    };
+    let _ = v;
+    let n = (length / 8).clamp(5, 16);
+    let id0 = trailer_id0(doc);
+    let key = match crypto::authenticate(password, &o, &u, p, &id0, n, r as u8) {
+        Some(k) => k,
+        None => return DecryptStatus::NeedPassword,
+    };
+
+    let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    for id in ids {
+        if id == enc_id {
+            continue;
+        }
+        let okey = crypto::object_key(&key, id.0, id.1, n);
+        if let Some(obj) = doc.objects.get_mut(&id) {
+            crypt_object(obj, &okey);
+        }
+    }
+    doc.trailer.remove(b"Encrypt");
+    DecryptStatus::Ok
+}
+
+/// Serialize `handle` encrypted with the given passwords (RC4-128, R3).
+fn save_encrypted(handle: i64, user_pw: &[u8], owner_pw: &[u8]) -> Option<Vec<u8>> {
+    let bytes = save_document(handle)?;
+    let mut doc = Document::load_mem(&bytes).ok()?;
+    let n = 16usize;
+    let rev = 3u8;
+    let p: i32 = -4; // allow all operations
+    // Ensure an /ID exists.
+    let id0 = {
+        let existing = trailer_id0(&doc);
+        if existing.is_empty() {
+            let h = {
+                use md5::{Digest, Md5};
+                let mut m = Md5::new();
+                m.update(&bytes);
+                let d: [u8; 16] = m.finalize().into();
+                d.to_vec()
+            };
+            doc.trailer.set(
+                "ID",
+                Object::Array(vec![
+                    Object::String(h.clone(), lopdf::StringFormat::Hexadecimal),
+                    Object::String(h.clone(), lopdf::StringFormat::Hexadecimal),
+                ]),
+            );
+            h
+        } else {
+            existing
+        }
+    };
+    let owner = if owner_pw.is_empty() { user_pw } else { owner_pw };
+    let o = crypto::compute_o(owner, user_pw, n, rev);
+    let key = crypto::compute_key(user_pw, &o, p, &id0, n, rev);
+    let u = crypto::compute_u(&key, &id0, rev);
+
+    let mut enc = Dictionary::new();
+    enc.set("Filter", name_obj("Standard"));
+    enc.set("V", Object::Integer(2));
+    enc.set("R", Object::Integer(3));
+    enc.set("Length", Object::Integer(128));
+    enc.set("P", Object::Integer(p as i64));
+    enc.set("O", Object::String(o, lopdf::StringFormat::Literal));
+    enc.set("U", Object::String(u, lopdf::StringFormat::Literal));
+    let enc_id = doc.add_object(enc);
+
+    let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+    for id in ids {
+        if id == enc_id {
+            continue;
+        }
+        let okey = crypto::object_key(&key, id.0, id.1, n);
+        if let Some(obj) = doc.objects.get_mut(&id) {
+            crypt_object(obj, &okey);
+        }
+    }
+    doc.trailer.set("Encrypt", Object::Reference(enc_id));
+
+    let mut out = Vec::new();
+    doc.save_to(&mut out).ok()?;
+    Some(out)
 }
 
 fn page_count(handle: i64) -> i32 {
@@ -4473,6 +4656,50 @@ mod jni_bindings {
         open_document(&bytes) as jlong
     }
 
+    /// `PdfNative.openDocumentWithPassword(byte[], String) -> long`.
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_openDocumentWithPassword<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        data: JByteArray<'local>,
+        password: JString<'local>,
+    ) -> jlong {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return 0,
+        };
+        let pw = jstr(&mut env, &password);
+        open_document_pw(&bytes, pw.as_bytes()) as jlong
+    }
+
+    /// `PdfNative.pdfPasswordState(byte[]) -> int` (0 none, 1 needs pw, 2 unsupported).
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_pdfPasswordState<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        data: JByteArray<'local>,
+    ) -> jint {
+        let bytes = match env.convert_byte_array(&data) {
+            Ok(b) => b,
+            Err(_) => return 0,
+        };
+        pdf_password_state(&bytes)
+    }
+
+    /// `PdfNative.saveEncrypted(long, String, String) -> byte[]`.
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_saveEncrypted<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        user_pw: JString<'local>,
+        owner_pw: JString<'local>,
+    ) -> jbyteArray {
+        let u = jstr(&mut env, &user_pw);
+        let o = jstr(&mut env, &owner_pw);
+        bytes_or_null(&env, save_encrypted(handle as i64, u.as_bytes(), o.as_bytes()))
+    }
+
     /// `PdfNative.getPageCount(long) -> int`.
     #[no_mangle]
     pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_getPageCount<'local>(
@@ -5287,7 +5514,7 @@ mod edit_render_tests {
         let bytes = one_page_pdf();
         let handle = open_document(&bytes);
         assert_ne!(handle, 0);
-        let id = add_square(handle, 0, [100.0, 100.0, 300.0, 250.0], 0xFFFF0000, 2.0);
+        let id = add_square(handle, 0, [100.0, 100.0, 300.0, 250.0], 0xFFFF0000, 2.0, false);
         assert!(id.is_some() && id != Some(0), "add_square failed: {id:?}");
 
         let buf = render_page(handle, 0).expect("render");

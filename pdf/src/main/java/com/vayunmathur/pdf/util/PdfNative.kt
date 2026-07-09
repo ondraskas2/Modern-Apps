@@ -27,6 +27,15 @@ object PdfNative {
      */
     external fun openDocument(data: ByteArray): Long
 
+    /** Open [data], decrypting with [password] (may be empty). 0 on wrong pw/failure. */
+    external fun openDocumentWithPassword(data: ByteArray, password: String): Long
+
+    /** Encryption state of [data]: 0 none, 1 needs password, 2 unsupported (AES). */
+    external fun pdfPasswordState(data: ByteArray): Int
+
+    /** Serialize [handle] encrypted with the given passwords (RC4-128), or null. */
+    external fun saveEncrypted(handle: Long, userPw: String, ownerPw: String): ByteArray?
+
     /** Number of pages in the document behind [handle], or 0 if unknown. */
     external fun getPageCount(handle: Long): Int
 

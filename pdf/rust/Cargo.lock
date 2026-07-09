@@ -630,6 +630,7 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "lopdf",
+ "md-5",
  "openjp2",
 ]
 

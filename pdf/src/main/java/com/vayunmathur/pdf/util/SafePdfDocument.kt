@@ -205,22 +205,39 @@ class SafePdfDocument private constructor(
         PdfNative.buildSearchIndex(handle)
     }
 
+    /** Serialize this document encrypted with the given passwords, or null. */
+    suspend fun saveEncrypted(userPw: String, ownerPw: String): ByteArray? =
+        withContext(Dispatchers.IO) { PdfNative.saveEncrypted(handle, userPw, ownerPw) }
+
     companion object {
         /**
          * Open [uri] as a safe PDF, or return `null` when the native lib is
-         * unavailable, the bytes can't be read, or parsing fails (e.g. the PDF
-         * is encrypted). Runs entirely off the main thread.
+         * unavailable, the bytes can't be read, or parsing fails. Encrypted PDFs
+         * are opened with [password] (empty by default). Runs off the main thread.
          */
-        suspend fun open(context: Context, uri: Uri): SafePdfDocument? =
+        suspend fun open(context: Context, uri: Uri, password: String? = null): SafePdfDocument? =
             withContext(Dispatchers.IO) {
                 if (!PdfNative.isAvailable) return@withContext null
                 val bytes = runCatching {
                     context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 }.getOrNull() ?: return@withContext null
 
-                val handle = PdfNative.openDocument(bytes)
+                val handle = if (password == null) {
+                    PdfNative.openDocument(bytes)
+                } else {
+                    PdfNative.openDocumentWithPassword(bytes, password)
+                }
                 if (handle == 0L) return@withContext null
                 SafePdfDocument(handle, PdfNative.getPageCount(handle))
+            }
+
+        /** Encryption state of [uri]: 0 none, 1 needs password, 2 unsupported. */
+        suspend fun passwordState(context: Context, uri: Uri): Int =
+            withContext(Dispatchers.IO) {
+                val bytes = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull() ?: return@withContext 0
+                PdfNative.pdfPasswordState(bytes)
             }
     }
 }
