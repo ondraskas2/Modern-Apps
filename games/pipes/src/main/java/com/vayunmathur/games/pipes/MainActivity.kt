@@ -8,9 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -275,35 +277,39 @@ fun GameScreen(backStack: NavBackStack<Route>, viewModel: PipesViewModel, packIn
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically
+            val infoBoxes = @Composable {
+                val currentLevelStats = pack.levels.getOrNull(levelIndex)?.id?.let { levelStats[it] }
+                PuzzleInfoBox(
+                    levelIndex = levelIndex,
+                    onLevelChange = { newIndex ->
+                        val bounded = newIndex.coerceIn(0, pack.levels.lastIndex)
+                        backStack.setLast(Route.Game(packIndex, bounded))
+                    },
+                    isCompleted = currentLevelStats != null,
+                    maxLevelIndex = pack.levels.lastIndex
+                )
+                MovesInfoBox(
+                    moves = if (isReady) viewModel.getCurrentMoves() else 0,
+                    bestScore = currentLevelStats?.bestScore,
+                    optimalMoves = currentLevelData.optimalMoves
+                )
+            }
+            val actionButtons = @Composable {
+                val hasHistory = isReady && uiState.history.isNotEmpty()
+                Button(
+                    onClick = { viewModel.onUndo() },
+                    enabled = hasHistory && !isLevelWon
                 ) {
-                    val currentLevelStats = pack.levels.getOrNull(levelIndex)?.id?.let { levelStats[it] }
-                    PuzzleInfoBox(
-                        levelIndex = levelIndex,
-                        onLevelChange = { newIndex ->
-                            val bounded = newIndex.coerceIn(0, pack.levels.lastIndex)
-                            backStack.setLast(Route.Game(packIndex, bounded))
-                        },
-                        isCompleted = currentLevelStats != null,
-                        maxLevelIndex = pack.levels.lastIndex
-                    )
-                    MovesInfoBox(
-                        moves = if (isReady) viewModel.getCurrentMoves() else 0,
-                        bestScore = currentLevelStats?.bestScore,
-                        optimalMoves = currentLevelData.optimalMoves
-                    )
+                    Text(stringResource(R.string.undo))
                 }
+                Button(
+                    onClick = { viewModel.onRestart() },
+                    enabled = hasHistory && !isLevelWon
+                ) {
+                    Text(stringResource(R.string.restart))
+                }
+            }
+            val board = @Composable { boardModifier: Modifier ->
                 GameBoard(
                     levelData = currentLevelData,
                     gameState = if (isReady) uiState.gameState else com.vayunmathur.games.pipes.util.PipesGameState(),
@@ -313,30 +319,67 @@ fun GameScreen(backStack: NavBackStack<Route>, viewModel: PipesViewModel, packIn
                     onExtendPath = viewModel::extendPath,
                     onCommitDraw = viewModel::commitDraw,
                     isLevelWon = isLevelWon,
-                    colorblind = colorblind
+                    colorblind = colorblind,
+                    modifier = boardModifier
                 )
+            }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val hasHistory = isReady && uiState.history.isNotEmpty()
-                    Button(
-                        onClick = { viewModel.onUndo() },
-                        enabled = hasHistory && !isLevelWon
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp)
+            ) {
+                if (maxWidth > maxHeight) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(stringResource(R.string.undo))
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            board(Modifier.fillMaxSize())
+                        }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            infoBoxes()
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                actionButtons()
+                            }
+                        }
                     }
-                    Button(
-                        onClick = { viewModel.onRestart() },
-                        enabled = hasHistory && !isLevelWon
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(stringResource(R.string.restart))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            infoBoxes()
+                        }
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            board(Modifier.fillMaxSize())
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            actionButtons()
+                        }
                     }
                 }
-
-
             }
         }
     }

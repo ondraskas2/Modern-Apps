@@ -1,15 +1,15 @@
 package com.vayunmathur.games.pipes.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.unit.dp
 import com.vayunmathur.games.pipes.data.CellPos
 import com.vayunmathur.games.pipes.data.LevelData
 import com.vayunmathur.games.pipes.util.PipesGameState
@@ -27,8 +27,8 @@ fun GameBoard(
     colorblind: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val screenWidth = LocalWindowInfo.current.containerDpSize.width
-    val boardSize = screenWidth - 32.dp
+    BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
+    val boardSize = minOf(maxWidth, maxHeight)
     val maxDim = maxOf(levelData.rows, levelData.cols)
     val cellSizeDp = boardSize / maxDim
 
@@ -65,7 +65,7 @@ fun GameBoard(
     }
 
     Canvas(
-        modifier = modifier
+        modifier = Modifier
             .size(boardSize)
             .pointerInput(levelData, isLevelWon) {
                 if (isLevelWon) return@pointerInput
@@ -122,6 +122,7 @@ fun GameBoard(
                 if (colorblind) drawColorLabel(rect, ep.colorIndex)
             }
         }
+    }
     }
 }
 
