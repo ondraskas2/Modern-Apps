@@ -170,6 +170,12 @@ object PdfNative {
     /** Flatten annotations into page content (removes them); true on success. */
     external fun flattenDocument(handle: Long): Boolean
 
+    /** Add a redaction annotation (marked black box) over the rect; returns id. */
+    external fun addRedaction(handle: Long, page: Int, x0: Float, y0: Float, x1: Float, y1: Float): Long
+
+    /** Permanently remove content under redaction annotations; true if any applied. */
+    external fun applyRedactions(handle: Long): Boolean
+
     /** Serialized document outline (bookmarks), or null. */
     external fun listOutline(handle: Long): ByteArray?
 

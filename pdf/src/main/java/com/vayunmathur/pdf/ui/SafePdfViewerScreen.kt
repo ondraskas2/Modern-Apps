@@ -857,6 +857,16 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                         },
                                     )
                                     DropdownMenuItem(
+                                        text = { Text("Apply redactions") },
+                                        onClick = {
+                                            showOverflow = false
+                                            val doc = document
+                                            if (doc != null) scope.launch {
+                                                doc.applyRedactions(); pageMgrVersion++; dirty = true
+                                            }
+                                        },
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Save compressed\u2026") },
                                         onClick = {
                                             showOverflow = false
@@ -1651,8 +1661,8 @@ private fun EditOverlay(
                         val a = toPage(Offset(minOf(s.x, e.x), minOf(s.y, e.y)))
                         val b = toPage(Offset(maxOf(s.x, e.x), maxOf(s.y, e.y)))
                         scope.launch {
-                            // Opaque black filled rectangle (visual redaction).
-                            val id = document.addRect(index, a.x, a.y, b.x, b.y, 0xFF000000.toInt(), 0f, fill = true)
+                            // Marked redaction box; "Apply redactions" removes the content beneath.
+                            val id = document.addRedaction(index, a.x, a.y, b.x, b.y)
                             onCreated(id); onEdited()
                         }
                     }

@@ -175,6 +175,18 @@ class SafePdfDocument private constructor(
     /** Flatten annotations into page content (makes overlays permanent). */
     suspend fun flatten(): Boolean = withContext(Dispatchers.IO) { PdfNative.flattenDocument(handle) }
 
+    /** Add a redaction annotation over the rect; returns id (0 on failure). */
+    suspend fun addRedaction(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addRedaction(handle, index, x0, y0, x1, y1).also { invalidate(index) }
+    }
+
+    /** Permanently remove content under redaction annotations. */
+    suspend fun applyRedactions(): Boolean = withContext(Dispatchers.IO) {
+        PdfNative.applyRedactions(handle).also { cache.clear() }
+    }
+
     /** Current page count from native (reflects add/remove during editing). */
     fun livePageCount(): Int = PdfNative.getPageCount(handle)
 

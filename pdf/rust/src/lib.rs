@@ -2073,6 +2073,27 @@ fn add_callout(
     add_annotation_object(doc, page_index, annot)
 }
 
+/// Add a redaction annotation: an opaque black filled rectangle marked so that
+/// `apply_redactions` can permanently remove the content beneath it.
+fn add_redaction(handle: i64, page_index: i32, rect: [f64; 4]) -> Option<i64> {
+    let mut reg = registry().lock().unwrap();
+    let doc = reg.get_mut(&handle)?;
+    let r = page_rect(doc, page_index, rect);
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    let content = format!("q 0 0 0 rg 0 0 {w} {h} re f Q").into_bytes();
+    let ap_id = make_appearance(doc, w, h, content, Dictionary::new());
+    let mut annot = Dictionary::new();
+    annot.set("Type", name_obj("Annot"));
+    annot.set("Subtype", name_obj("Square"));
+    annot.set("IC", Object::Array(vec![0.into(), 0.into(), 0.into()]));
+    annot.set("PdfRedact", Object::Boolean(true));
+    let mut bs = Dictionary::new();
+    bs.set("W", Object::Real(0.0));
+    annot.set("BS", Object::Dictionary(bs));
+    set_appearance(&mut annot, r, ap_id);
+    add_annotation_object(doc, page_index, annot)
+}
+
 fn add_square(
     handle: i64,
     page_index: i32,
@@ -3105,6 +3126,172 @@ fn flatten_document(handle: i64) -> bool {
         }
     }
     true
+}
+
+/// Approximate per-string text length for advance estimation (byte count).
+fn approx_text_len(op: &lopdf::content::Operation) -> f64 {
+    if op.operator == "TJ" {
+        if let Some(Object::Array(a)) = op.operands.first() {
+            return a
+                .iter()
+                .map(|o| if let Object::String(s, _) = o { s.len() as f64 } else { 0.0 })
+                .sum();
+        }
+        return 0.0;
+    }
+    op.operands
+        .iter()
+        .rev()
+        .find_map(|o| if let Object::String(s, _) = o { Some(s.len() as f64) } else { None })
+        .unwrap_or(0.0)
+}
+
+/// Rewrite a page's operator list, dropping text-show operators whose origin
+/// falls within any redaction `rects` (page space). Heuristic advance tracking.
+fn redact_operations(
+    ops: Vec<lopdf::content::Operation>,
+    rects: &[[f64; 4]],
+) -> Vec<lopdf::content::Operation> {
+    let mut out: Vec<lopdf::content::Operation> = Vec::with_capacity(ops.len());
+    let mut ctm_stack: Vec<Mat> = Vec::new();
+    let mut ctm = IDENTITY;
+    let mut tm = IDENTITY;
+    let mut lm = IDENTITY;
+    let mut font_size = 0.0f64;
+    let mut leading = 0.0f64;
+    let mut char_spacing = 0.0f64;
+    let mut h_scale = 1.0f64;
+    let n = |o: Option<&Object>| o.and_then(num).unwrap_or(0.0);
+    for op in ops {
+        let operands = &op.operands;
+        match op.operator.as_str() {
+            "q" => ctm_stack.push(ctm),
+            "Q" => {
+                if let Some(m) = ctm_stack.pop() {
+                    ctm = m;
+                }
+            }
+            "cm" if operands.len() >= 6 => {
+                let m = [
+                    n(operands.first()), n(operands.get(1)), n(operands.get(2)),
+                    n(operands.get(3)), n(operands.get(4)), n(operands.get(5)),
+                ];
+                ctm = mat_mul(&m, &ctm);
+            }
+            "BT" => {
+                tm = IDENTITY;
+                lm = IDENTITY;
+            }
+            "Tf" if operands.len() >= 2 => font_size = n(operands.get(1)),
+            "TL" => leading = n(operands.first()),
+            "Tc" => char_spacing = n(operands.first()),
+            "Tz" => h_scale = n(operands.first()) / 100.0,
+            "Tm" if operands.len() >= 6 => {
+                let m = [
+                    n(operands.first()), n(operands.get(1)), n(operands.get(2)),
+                    n(operands.get(3)), n(operands.get(4)), n(operands.get(5)),
+                ];
+                tm = m;
+                lm = m;
+            }
+            "Td" if operands.len() >= 2 => {
+                lm = mat_mul(&translate(n(operands.first()), n(operands.get(1))), &lm);
+                tm = lm;
+            }
+            "TD" if operands.len() >= 2 => {
+                leading = -n(operands.get(1));
+                lm = mat_mul(&translate(n(operands.first()), n(operands.get(1))), &lm);
+                tm = lm;
+            }
+            "T*" => {
+                lm = mat_mul(&translate(0.0, -leading), &lm);
+                tm = lm;
+            }
+            "Tj" | "'" | "\"" | "TJ" => {
+                if op.operator == "'" || op.operator == "\"" {
+                    lm = mat_mul(&translate(0.0, -leading), &lm);
+                    tm = lm;
+                }
+                let trm = mat_mul(&tm, &ctm);
+                let (x, y) = (trm[4], trm[5]);
+                let hit = rects.iter().any(|r| {
+                    x >= r[0] - 1.0 && x <= r[2] + 1.0 && y >= r[1] - 2.0 && y <= r[3] + font_size + 2.0
+                });
+                let len = approx_text_len(&op);
+                let adv = len * font_size * 0.5 * h_scale + len * char_spacing;
+                if !hit {
+                    out.push(op);
+                }
+                tm = mat_mul(&translate(adv, 0.0), &tm);
+                continue;
+            }
+            _ => {}
+        }
+        out.push(op);
+    }
+    out
+}
+
+/// Permanently remove content under redaction annotations, cover with black, and
+/// delete the annotations. Returns whether any redaction was applied.
+fn apply_redactions(handle: i64) -> bool {
+    let mut reg = registry().lock().unwrap();
+    let doc = match reg.get_mut(&handle) {
+        Some(d) => d,
+        None => return false,
+    };
+    let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+    let mut applied = false;
+    for page_id in page_ids {
+        let annot_ids: Vec<ObjectId> = match doc
+            .get_dictionary(page_id)
+            .ok()
+            .and_then(|d| d.get(b"Annots").ok())
+            .and_then(|o| deref(doc, o))
+        {
+            Some(Object::Array(a)) => a.iter().filter_map(|o| o.as_reference().ok()).collect(),
+            _ => continue,
+        };
+        let mut rects: Vec<[f64; 4]> = Vec::new();
+        let mut redact_ids: Vec<ObjectId> = Vec::new();
+        for aid in &annot_ids {
+            if let Ok(dict) = doc.get_dictionary(*aid) {
+                if matches!(dict.get(b"PdfRedact"), Ok(Object::Boolean(true))) {
+                    if let Some(r) = dict.get(b"Rect").ok().and_then(|o| read_rect(doc, o)) {
+                        rects.push(normalize_rect(r));
+                        redact_ids.push(*aid);
+                    }
+                }
+            }
+        }
+        if rects.is_empty() {
+            continue;
+        }
+        let content = match doc.get_and_decode_page_content(page_id) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let new_ops = redact_operations(content.operations, &rects);
+        let mut bytes = lopdf::content::Content { operations: new_ops }.encode().unwrap_or_default();
+        let mut cover = String::new();
+        for r in &rects {
+            cover.push_str(&format!(
+                " q 0 0 0 rg {:.2} {:.2} {:.2} {:.2} re f Q",
+                r[0], r[1], r[2] - r[0], r[3] - r[1]
+            ));
+        }
+        bytes.extend_from_slice(cover.as_bytes());
+        let cid = doc.add_object(Stream::new(dictionary! {}, bytes));
+        if let Ok(p) = doc.get_dictionary_mut(page_id) {
+            p.set("Contents", Object::Reference(cid));
+        }
+        for rid in redact_ids {
+            remove_annot_ref(doc, page_id, rid);
+            doc.objects.remove(&rid);
+        }
+        applied = true;
+    }
+    applied
 }
 
 fn save_document(handle: i64) -> Option<Vec<u8>> {
@@ -5527,6 +5714,31 @@ mod jni_bindings {
         handle: jlong,
     ) -> jboolean {
         flatten_document(handle as i64) as jboolean
+    }
+
+    /// `PdfNative.applyRedactions(long) -> boolean`.
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_applyRedactions<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+    ) -> jboolean {
+        apply_redactions(handle as i64) as jboolean
+    }
+
+    /// `PdfNative.addRedaction(long, int, f,f,f,f) -> long`.
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_addRedaction<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        page: jint,
+        x0: jfloat,
+        y0: jfloat,
+        x1: jfloat,
+        y1: jfloat,
+    ) -> jlong {
+        add_redaction(handle as i64, page, [x0 as f64, y0 as f64, x1 as f64, y1 as f64]).unwrap_or(0)
     }
 
     /// `PdfNative.extractText(long) -> String` (null on failure).
