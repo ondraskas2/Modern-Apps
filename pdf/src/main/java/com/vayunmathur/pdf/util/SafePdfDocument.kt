@@ -65,8 +65,25 @@ class SafePdfDocument private constructor(
 
     suspend fun addRect(
         index: Int, x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float,
+        fill: Boolean,
     ): Long = withContext(Dispatchers.IO) {
-        PdfNative.addRectAnnotation(handle, index, x0, y0, x1, y1, argb, lineWidth)
+        PdfNative.addRectAnnotation(handle, index, x0, y0, x1, y1, argb, lineWidth, fill)
+            .also { invalidate(index) }
+    }
+
+    suspend fun addOval(
+        index: Int, x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float,
+        fill: Boolean,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addCircleAnnotation(handle, index, x0, y0, x1, y1, argb, lineWidth, fill)
+            .also { invalidate(index) }
+    }
+
+    /** [pts] are flat page-space x,y pairs. [closed] fills/closes the path. */
+    suspend fun addPoly(
+        index: Int, pts: FloatArray, argb: Int, lineWidth: Float, fill: Boolean, closed: Boolean,
+    ): Long = withContext(Dispatchers.IO) {
+        PdfNative.addPolyAnnotation(handle, index, argb, lineWidth, fill, closed, pts)
             .also { invalidate(index) }
     }
 

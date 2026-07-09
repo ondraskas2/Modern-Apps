@@ -1284,6 +1284,7 @@ fn add_square(
     rect: [f64; 4],
     argb: u32,
     line_width: f64,
+    fill: bool,
 ) -> Option<i64> {
     let mut reg = registry().lock().unwrap();
     let doc = reg.get_mut(&handle)?;
@@ -1291,13 +1292,17 @@ fn add_square(
     let (w, h) = (r[2] - r[0], r[3] - r[1]);
     let (cr, cg, cb) = argb_rgb(argb);
     let lw = line_width.max(0.5);
-    let content = format!(
-        "q {lw} w {cr:.3} {cg:.3} {cb:.3} RG {x} {y} {rw} {rh} re S Q",
-        x = lw / 2.0,
-        y = lw / 2.0,
-        rw = w - lw,
-        rh = h - lw,
-    )
+    let content = if fill {
+        format!("q {cr:.3} {cg:.3} {cb:.3} rg 0 0 {w} {h} re f Q")
+    } else {
+        format!(
+            "q {lw} w {cr:.3} {cg:.3} {cb:.3} RG {x} {y} {rw} {rh} re S Q",
+            x = lw / 2.0,
+            y = lw / 2.0,
+            rw = w - lw,
+            rh = h - lw,
+        )
+    }
     .into_bytes();
     let ap_id = make_appearance(doc, w, h, content, Dictionary::new());
 
@@ -1305,10 +1310,168 @@ fn add_square(
     annot.set("Type", name_obj("Annot"));
     annot.set("Subtype", name_obj("Square"));
     annot.set("C", Object::Array(vec![cr.into(), cg.into(), cb.into()]));
-    let mut bs = Dictionary::new();
-    bs.set("W", Object::Real(lw as f32));
-    annot.set("BS", Object::Dictionary(bs));
+    set_shape_border(&mut annot, argb, lw, fill);
     set_appearance(&mut annot, r, ap_id);
+    add_annotation_object(doc, page_index, annot)
+}
+
+/// Add a Circle (ellipse) annotation inscribed in [rect], stroked or filled.
+fn add_circle(
+    handle: i64,
+    page_index: i32,
+    rect: [f64; 4],
+    argb: u32,
+    line_width: f64,
+    fill: bool,
+) -> Option<i64> {
+    let mut reg = registry().lock().unwrap();
+    let doc = reg.get_mut(&handle)?;
+    let r = normalize_rect(rect);
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    let (cr, cg, cb) = argb_rgb(argb);
+    let lw = line_width.max(0.5);
+
+    // Ellipse inscribed in the BBox (inset by half the line width when stroking),
+    // approximated by four cubic Bézier arcs.
+    let inset = if fill { 0.0 } else { lw / 2.0 };
+    let cx = w / 2.0;
+    let cy = h / 2.0;
+    let rx = (w / 2.0 - inset).max(0.0);
+    let ry = (h / 2.0 - inset).max(0.0);
+    let k = 0.552_284_75_f64; // 4/3 * (sqrt(2) - 1)
+    let ox = rx * k;
+    let oy = ry * k;
+
+    let mut c = String::from("q ");
+    if fill {
+        c.push_str(&format!("{cr:.3} {cg:.3} {cb:.3} rg "));
+    } else {
+        c.push_str(&format!("{lw} w {cr:.3} {cg:.3} {cb:.3} RG "));
+    }
+    c.push_str(&format!("{:.2} {:.2} m ", cx + rx, cy));
+    c.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c ",
+        cx + rx, cy + oy, cx + ox, cy + ry, cx, cy + ry,
+    ));
+    c.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c ",
+        cx - ox, cy + ry, cx - rx, cy + oy, cx - rx, cy,
+    ));
+    c.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c ",
+        cx - rx, cy - oy, cx - ox, cy - ry, cx, cy - ry,
+    ));
+    c.push_str(&format!(
+        "{:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c ",
+        cx + ox, cy - ry, cx + rx, cy - oy, cx + rx, cy,
+    ));
+    c.push_str(if fill { "f Q" } else { "S Q" });
+    let ap_id = make_appearance(doc, w, h, c.into_bytes(), Dictionary::new());
+
+    let mut annot = Dictionary::new();
+    annot.set("Type", name_obj("Annot"));
+    annot.set("Subtype", name_obj("Circle"));
+    annot.set("C", Object::Array(vec![cr.into(), cg.into(), cb.into()]));
+    set_shape_border(&mut annot, argb, lw, fill);
+    set_appearance(&mut annot, r, ap_id);
+    add_annotation_object(doc, page_index, annot)
+}
+
+/// Set `/BS` (border) and, for filled shapes, `/IC` (interior color) on a
+/// Square/Circle annotation. Filled shapes carry a zero-width border.
+fn set_shape_border(annot: &mut Dictionary, argb: u32, line_width: f64, fill: bool) {
+    let (cr, cg, cb) = argb_rgb(argb);
+    let mut bs = Dictionary::new();
+    if fill {
+        annot.set("IC", Object::Array(vec![cr.into(), cg.into(), cb.into()]));
+        bs.set("W", Object::Real(0.0));
+    } else {
+        bs.set("W", Object::Real(line_width as f32));
+    }
+    annot.set("BS", Object::Dictionary(bs));
+}
+
+/// Add a Polygon (when `closed`) or PolyLine (open) annotation from flat
+/// page-space x,y `points`. Closed polygons may be filled; open polylines are
+/// always stroked. Used for triangles, stars, arrows, lines, polylines and
+/// flattened Bézier curves.
+fn add_poly(
+    handle: i64,
+    page_index: i32,
+    points: &[f32],
+    argb: u32,
+    line_width: f64,
+    fill: bool,
+    closed: bool,
+) -> Option<i64> {
+    if points.len() < 4 {
+        return None;
+    }
+    let mut reg = registry().lock().unwrap();
+    let doc = reg.get_mut(&handle)?;
+    let (cr, cg, cb) = argb_rgb(argb);
+    let lw = line_width.max(0.5);
+    let do_fill = fill && closed;
+
+    let mut minx = f64::INFINITY;
+    let mut miny = f64::INFINITY;
+    let mut maxx = f64::NEG_INFINITY;
+    let mut maxy = f64::NEG_INFINITY;
+    let mut i = 0;
+    while i + 1 < points.len() {
+        let (x, y) = (points[i] as f64, points[i + 1] as f64);
+        minx = minx.min(x);
+        miny = miny.min(y);
+        maxx = maxx.max(x);
+        maxy = maxy.max(y);
+        i += 2;
+    }
+    let pad = lw + 2.0;
+    let rect = [minx - pad, miny - pad, maxx + pad, maxy + pad];
+    let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+
+    let mut c = String::from("q ");
+    if do_fill {
+        c.push_str(&format!("{cr:.3} {cg:.3} {cb:.3} rg "));
+    } else {
+        c.push_str(&format!("{lw} w {cr:.3} {cg:.3} {cb:.3} RG "));
+    }
+    let mut verts = Vec::new();
+    let mut j = 0;
+    let mut first = true;
+    while j + 1 < points.len() {
+        let px = points[j] as f64;
+        let py = points[j + 1] as f64;
+        verts.push(px.into());
+        verts.push(py.into());
+        let (lx, ly) = (px - rect[0], py - rect[1]);
+        if first {
+            c.push_str(&format!("{lx:.2} {ly:.2} m "));
+            first = false;
+        } else {
+            c.push_str(&format!("{lx:.2} {ly:.2} l "));
+        }
+        j += 2;
+    }
+    if closed {
+        c.push_str(if do_fill { "h f Q" } else { "h S Q" });
+    } else {
+        c.push_str("S Q");
+    }
+    let ap_id = make_appearance(doc, w, h, c.into_bytes(), Dictionary::new());
+
+    let mut annot = Dictionary::new();
+    annot.set("Type", name_obj("Annot"));
+    annot.set("Subtype", name_obj(if closed { "Polygon" } else { "PolyLine" }));
+    annot.set("Vertices", Object::Array(verts));
+    annot.set("C", Object::Array(vec![cr.into(), cg.into(), cb.into()]));
+    if do_fill {
+        annot.set("IC", Object::Array(vec![cr.into(), cg.into(), cb.into()]));
+    }
+    let mut bs = Dictionary::new();
+    bs.set("W", Object::Real(if do_fill { 0.0 } else { lw as f32 }));
+    annot.set("BS", Object::Dictionary(bs));
+    set_appearance(&mut annot, normalize_rect(rect), ap_id);
     add_annotation_object(doc, page_index, annot)
 }
 
@@ -1547,6 +1710,9 @@ fn subtype_code(subtype: &[u8]) -> u8 {
         b"Widget" => 6,
         b"Text" => 7,
         b"Line" => 8,
+        b"Circle" => 9,
+        b"Polygon" => 10,
+        b"PolyLine" => 11,
         _ => 0,
     }
 }
@@ -3740,6 +3906,7 @@ mod jni_bindings {
         y1: jfloat,
         argb: jint,
         line_width: jfloat,
+        fill: jboolean,
     ) -> jlong {
         add_square(
             handle as i64,
@@ -3747,6 +3914,64 @@ mod jni_bindings {
             [x0 as f64, y0 as f64, x1 as f64, y1 as f64],
             argb as u32,
             line_width as f64,
+            fill != 0,
+        )
+        .unwrap_or(0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_addCircleAnnotation<'local>(
+        _env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        page: jint,
+        x0: jfloat,
+        y0: jfloat,
+        x1: jfloat,
+        y1: jfloat,
+        argb: jint,
+        line_width: jfloat,
+        fill: jboolean,
+    ) -> jlong {
+        add_circle(
+            handle as i64,
+            page,
+            [x0 as f64, y0 as f64, x1 as f64, y1 as f64],
+            argb as u32,
+            line_width as f64,
+            fill != 0,
+        )
+        .unwrap_or(0)
+    }
+
+    /// `PdfNative.addPolyAnnotation(long, int, int argb, float width, bool fill, bool closed, float[] pts)`.
+    #[allow(clippy::too_many_arguments)]
+    #[no_mangle]
+    pub extern "system" fn Java_com_vayunmathur_pdf_util_PdfNative_addPolyAnnotation<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        page: jint,
+        argb: jint,
+        line_width: jfloat,
+        fill: jboolean,
+        closed: jboolean,
+        pts: JFloatArray<'local>,
+    ) -> jlong {
+        let len = env.get_array_length(&pts).unwrap_or(0) as usize;
+        let mut buf = vec![0f32; len];
+        if env.get_float_array_region(&pts, 0, &mut buf).is_err() {
+            return 0;
+        }
+        add_poly(
+            handle as i64,
+            page,
+            &buf,
+            argb as u32,
+            line_width as f64,
+            fill != 0,
+            closed != 0,
         )
         .unwrap_or(0)
     }

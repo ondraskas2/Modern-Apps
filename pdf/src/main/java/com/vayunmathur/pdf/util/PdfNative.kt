@@ -60,7 +60,19 @@ object PdfNative {
 
     external fun addRectAnnotation(
         handle: Long, page: Int,
-        x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float,
+        x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float, fill: Boolean,
+    ): Long
+
+    external fun addCircleAnnotation(
+        handle: Long, page: Int,
+        x0: Float, y0: Float, x1: Float, y1: Float, argb: Int, lineWidth: Float, fill: Boolean,
+    ): Long
+
+    /** [pts] are flat page-space x,y pairs. [closed] draws a Polygon (fillable),
+     * otherwise a PolyLine (stroked). */
+    external fun addPolyAnnotation(
+        handle: Long, page: Int, argb: Int, lineWidth: Float, fill: Boolean, closed: Boolean,
+        pts: FloatArray,
     ): Long
 
     /** [pts] are flat page-space x,y pairs of one ink stroke. */

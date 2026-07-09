@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +19,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,8 +48,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
@@ -57,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -82,6 +85,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -90,7 +94,10 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import com.vayunmathur.library.ui.IconDelete
+import com.vayunmathur.library.ui.IconCheck
+import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconMenu
 import com.vayunmathur.library.ui.IconNavigation
@@ -117,7 +124,170 @@ private sealed interface LoadState {
 }
 
 /** Editing tools. */
-private enum class EditTool { SELECT, TEXT, HIGHLIGHT, DRAW, RECT, IMAGE }
+private enum class EditTool { SELECT, TEXT, HIGHLIGHT, DRAW, SHAPE, LINE, POLYLINE, BEZIER, IMAGE }
+
+/** Closed-shape variants for the [EditTool.SHAPE] tool (dragged bounding box). */
+private enum class ShapeKind {
+    RECT_OUTLINE, RECT_FILL,
+    ROUNDRECT_OUTLINE, ROUNDRECT_FILL,
+    OVAL_OUTLINE, OVAL_FILL,
+    TRIANGLE_OUTLINE, TRIANGLE_FILL,
+    DIAMOND_OUTLINE, DIAMOND_FILL,
+    PENTAGON_OUTLINE, PENTAGON_FILL,
+    HEXAGON_OUTLINE, HEXAGON_FILL,
+    STAR_OUTLINE, STAR_FILL,
+    ARROW_OUTLINE, ARROW_FILL,
+}
+
+private enum class ShapeGeom { RECT, OVAL, POLYGON }
+
+private val ShapeKind.isFill: Boolean get() = name.endsWith("_FILL")
+
+private val ShapeKind.geom: ShapeGeom
+    get() = when (this) {
+        ShapeKind.RECT_OUTLINE, ShapeKind.RECT_FILL -> ShapeGeom.RECT
+        ShapeKind.OVAL_OUTLINE, ShapeKind.OVAL_FILL -> ShapeGeom.OVAL
+        else -> ShapeGeom.POLYGON
+    }
+
+/**
+ * Vertices for [ShapeGeom.POLYGON] shapes in the unit square (x,y in 0..1,
+ * y-down), to be scaled into the dragged bounding box. Empty for rect/oval.
+ */
+private fun ShapeKind.unitPolygon(): List<Offset> = when (this) {
+    ShapeKind.TRIANGLE_OUTLINE, ShapeKind.TRIANGLE_FILL ->
+        listOf(Offset(0.5f, 0f), Offset(1f, 1f), Offset(0f, 1f))
+    ShapeKind.DIAMOND_OUTLINE, ShapeKind.DIAMOND_FILL ->
+        listOf(Offset(0.5f, 0f), Offset(1f, 0.5f), Offset(0.5f, 1f), Offset(0f, 0.5f))
+    ShapeKind.PENTAGON_OUTLINE, ShapeKind.PENTAGON_FILL -> regularPolygonUnit(5)
+    ShapeKind.HEXAGON_OUTLINE, ShapeKind.HEXAGON_FILL -> regularPolygonUnit(6)
+    ShapeKind.STAR_OUTLINE, ShapeKind.STAR_FILL -> starUnit(5, 0.5f, 0.22f)
+    ShapeKind.ARROW_OUTLINE, ShapeKind.ARROW_FILL -> listOf(
+        Offset(0f, 0.3f), Offset(0.6f, 0.3f), Offset(0.6f, 0.08f), Offset(1f, 0.5f),
+        Offset(0.6f, 0.92f), Offset(0.6f, 0.7f), Offset(0f, 0.7f),
+    )
+    ShapeKind.ROUNDRECT_OUTLINE, ShapeKind.ROUNDRECT_FILL -> roundRectUnit(0.2f, 5)
+    else -> emptyList()
+}
+
+/** [n]-gon inscribed in the unit square, first vertex at top, y-down. */
+private fun regularPolygonUnit(n: Int): List<Offset> = (0 until n).map { k ->
+    val a = -Math.PI / 2 + 2 * Math.PI * k / n
+    Offset(0.5f + 0.5f * kotlin.math.cos(a).toFloat(), 0.5f + 0.5f * kotlin.math.sin(a).toFloat())
+}
+
+/** [points]-pointed star with [outer]/[inner] radii, first point at top, y-down. */
+private fun starUnit(points: Int, outer: Float, inner: Float): List<Offset> =
+    (0 until points * 2).map { k ->
+        val r = if (k % 2 == 0) outer else inner
+        val a = -Math.PI / 2 + Math.PI * k / points
+        Offset(0.5f + r * kotlin.math.cos(a).toFloat(), 0.5f + r * kotlin.math.sin(a).toFloat())
+    }
+
+/** Rounded rectangle perimeter as a polygon, corner [radius] in unit space with
+ * [seg] segments per corner. */
+private fun roundRectUnit(radius: Float, seg: Int): List<Offset> {
+    val r = radius.coerceIn(0f, 0.5f)
+    val pts = mutableListOf<Offset>()
+    // Corner centers, and arc start angles (clockwise, y-down).
+    val corners = listOf(
+        Triple(1f - r, r, -Math.PI / 2),      // top-right
+        Triple(1f - r, 1f - r, 0.0),          // bottom-right
+        Triple(r, 1f - r, Math.PI / 2),       // bottom-left
+        Triple(r, r, Math.PI),                // top-left
+    )
+    for ((cx, cy, start) in corners) {
+        for (i in 0..seg) {
+            val a = start + (Math.PI / 2) * i / seg
+            pts += Offset(cx + r * kotlin.math.cos(a).toFloat(), cy + r * kotlin.math.sin(a).toFloat())
+        }
+    }
+    return pts
+}
+
+/** Map a unit-square point into the screen-space bounding box [rect]. */
+private fun mapUnit(u: Offset, rect: Rect): Offset =
+    Offset(rect.left + u.x * rect.width, rect.top + u.y * rect.height)
+
+/**
+ * Smooth an open sequence of [points] into a flattened curve passing through
+ * them (Catmull-Rom → cubic Bézier, sampled), for the Bézier tool.
+ */
+private fun flattenSmooth(points: List<Offset>): List<Offset> {
+    if (points.size < 3) return points
+    val out = mutableListOf(points.first())
+    val steps = 16
+    for (i in 0 until points.size - 1) {
+        val p0 = points[if (i == 0) 0 else i - 1]
+        val p1 = points[i]
+        val p2 = points[i + 1]
+        val p3 = points[if (i + 2 <= points.size - 1) i + 2 else points.size - 1]
+        val c1 = Offset(p1.x + (p2.x - p0.x) / 6f, p1.y + (p2.y - p0.y) / 6f)
+        val c2 = Offset(p2.x - (p3.x - p1.x) / 6f, p2.y - (p3.y - p1.y) / 6f)
+        for (s in 1..steps) {
+            val t = s.toFloat() / steps
+            val mt = 1f - t
+            val x = mt * mt * mt * p1.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p2.x
+            val y = mt * mt * mt * p1.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p2.y
+            out += Offset(x, y)
+        }
+    }
+    return out
+}
+
+@DrawableRes
+private fun ShapeKind.icon(): Int = when (this) {
+    ShapeKind.RECT_OUTLINE -> R.drawable.ic_tool_rect
+    ShapeKind.RECT_FILL -> R.drawable.ic_shape_rect_fill
+    ShapeKind.ROUNDRECT_OUTLINE -> R.drawable.ic_shape_roundrect_outline
+    ShapeKind.ROUNDRECT_FILL -> R.drawable.ic_shape_roundrect_fill
+    ShapeKind.OVAL_OUTLINE -> R.drawable.ic_shape_oval_outline
+    ShapeKind.OVAL_FILL -> R.drawable.ic_shape_oval_fill
+    ShapeKind.TRIANGLE_OUTLINE -> R.drawable.ic_shape_triangle_outline
+    ShapeKind.TRIANGLE_FILL -> R.drawable.ic_shape_triangle_fill
+    ShapeKind.DIAMOND_OUTLINE -> R.drawable.ic_shape_diamond_outline
+    ShapeKind.DIAMOND_FILL -> R.drawable.ic_shape_diamond_fill
+    ShapeKind.PENTAGON_OUTLINE -> R.drawable.ic_shape_pentagon_outline
+    ShapeKind.PENTAGON_FILL -> R.drawable.ic_shape_pentagon_fill
+    ShapeKind.HEXAGON_OUTLINE -> R.drawable.ic_shape_hexagon_outline
+    ShapeKind.HEXAGON_FILL -> R.drawable.ic_shape_hexagon_fill
+    ShapeKind.STAR_OUTLINE -> R.drawable.ic_shape_star_outline
+    ShapeKind.STAR_FILL -> R.drawable.ic_shape_star_fill
+    ShapeKind.ARROW_OUTLINE -> R.drawable.ic_shape_arrow_outline
+    ShapeKind.ARROW_FILL -> R.drawable.ic_shape_arrow_fill
+}
+
+private fun ShapeKind.label(): String {
+    val base = when (geom) {
+        ShapeGeom.RECT -> if (this == ShapeKind.ROUNDRECT_OUTLINE || this == ShapeKind.ROUNDRECT_FILL) "Rounded rectangle" else "Rectangle"
+        ShapeGeom.OVAL -> "Ellipse"
+        ShapeGeom.POLYGON -> when (this) {
+            ShapeKind.ROUNDRECT_OUTLINE, ShapeKind.ROUNDRECT_FILL -> "Rounded rectangle"
+            ShapeKind.TRIANGLE_OUTLINE, ShapeKind.TRIANGLE_FILL -> "Triangle"
+            ShapeKind.DIAMOND_OUTLINE, ShapeKind.DIAMOND_FILL -> "Diamond"
+            ShapeKind.PENTAGON_OUTLINE, ShapeKind.PENTAGON_FILL -> "Pentagon"
+            ShapeKind.HEXAGON_OUTLINE, ShapeKind.HEXAGON_FILL -> "Hexagon"
+            ShapeKind.STAR_OUTLINE, ShapeKind.STAR_FILL -> "Star"
+            ShapeKind.ARROW_OUTLINE, ShapeKind.ARROW_FILL -> "Arrow"
+            else -> "Shape"
+        }
+    }
+    return if (isFill) "$base (filled)" else base
+}
+
+/** In-progress polyline / Bézier being built by tapping points. */
+private data class PolyDraft(val page: Int, val points: List<Offset>, val bezier: Boolean)
+
+/**
+ * Clamp the zoom [pan] (screen-pixel translation) so the content, scaled by
+ * [zoom] around its center, can't be dragged past the viewport ([size]) edges.
+ * At zoom 1 the range is zero, so the page stays put.
+ */
+private fun clampPan(pan: Offset, zoom: Float, size: IntSize): Offset {
+    val maxX = (size.width * (zoom - 1f) / 2f).coerceAtLeast(0f)
+    val maxY = (size.height * (zoom - 1f) / 2f).coerceAtLeast(0f)
+    return Offset(pan.x.coerceIn(-maxX, maxX), pan.y.coerceIn(-maxY, maxY))
+}
 
 /**
  * An in-progress inline text edit. [origin] is the top of the text box in page
@@ -160,12 +330,19 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     // Set once any edit is made; keeps the Save control visible thereafter.
     var dirty by remember { mutableStateOf(false) }
     var tool by remember { mutableStateOf(EditTool.SELECT) }
+    var shape by remember { mutableStateOf(ShapeKind.RECT_OUTLINE) }
+    // In-progress polyline/Bézier (built by tapping points; committed via the check button).
+    var polyDraft by remember { mutableStateOf<PolyDraft?>(null) }
     var color by remember { mutableStateOf(Color.Red) }
-    // Bumped after any edit to force affected pages to re-render.
-    var version by remember { mutableIntStateOf(0) }
+    // Per-page render version: bumping one page's entry re-renders ONLY that page,
+    // so an edit doesn't force every visible page to re-decode.
+    val pageVersions = remember { mutableStateMapOf<Int, Int>() }
     var selected by remember { mutableStateOf<Pair<Int, Long>?>(null) }
-    // Re-render affected pages and record that an edit was made.
-    val markEdited = { version++; dirty = true }
+    // Re-render the edited page and record that an edit was made.
+    val markEdited: (Int) -> Unit = { page ->
+        pageVersions[page] = (pageVersions[page] ?: 0) + 1
+        dirty = true
+    }
 
     // Search state.
     val listState = rememberLazyListState()
@@ -199,11 +376,15 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     }
 
     // Pinch-to-zoom + pan (two-finger); single-finger still scrolls.
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
         zoom = (zoom * zoomChange).coerceIn(1f, 6f)
-        pan = if (zoom > 1f) pan + panChange else Offset.Zero
+        // panChange arrives in the layer's (scaled) coordinate space, so scale it
+        // back up to screen pixels; then clamp so content can't drift past the
+        // viewport edges.
+        pan = if (zoom > 1f) clampPan(pan + panChange * zoom, zoom, viewportSize) else Offset.Zero
     }
 
     val searchFocus = remember { FocusRequester() }
@@ -239,8 +420,25 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                 )
                 else -> return@launch
             }
-            markEdited()
+            markEdited(s.page)
         }
+    }
+
+    // Finish the in-progress polyline/Bézier: flatten (Bézier) and store as an
+    // open PolyLine annotation. Needs >= 2 points; otherwise just discards.
+    val commitPoly: () -> Unit = {
+        val d = polyDraft
+        val doc = document
+        if (d != null && doc != null && d.points.size >= 2) {
+            val pts = if (d.bezier) flattenSmooth(d.points) else d.points
+            val flat = FloatArray(pts.size * 2)
+            pts.forEachIndexed { i, p -> flat[i * 2] = p.x; flat[i * 2 + 1] = p.y }
+            scope.launch {
+                doc.addPoly(d.page, flat, color.toArgb(), 1.5f, fill = false, closed = false)
+                markEdited(d.page)
+            }
+        }
+        polyDraft = null
     }
 
     val saveLauncher = rememberLauncherForActivityResult(
@@ -275,7 +473,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                 doc.addImageStamp(
                     index, pt.x, pt.y - h, pt.x + w, pt.y, jpeg.width, jpeg.height, jpeg.bytes
                 )
-                markEdited()
+                markEdited(index)
             }
         }
     }
@@ -390,6 +588,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                         }
                         IconButton({
                             commitText(textSession); textSession = null
+                            commitPoly()
                             editMode = !editMode; selected = null
                         }) {
                             if (editMode) IconVisible() else IconEdit()
@@ -425,7 +624,13 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
             if (editMode) {
                 EditToolbar(
                     tool = tool,
-                    onTool = { tool = it; selected = null },
+                    onTool = {
+                        // Leaving the multi-point tools finalizes any in-progress draft.
+                        if (it != EditTool.POLYLINE && it != EditTool.BEZIER) commitPoly()
+                        tool = it; selected = null
+                    },
+                    shape = shape,
+                    onShape = { shape = it; tool = EditTool.SHAPE; selected = null; commitPoly() },
                     color = color,
                     onColor = { color = it },
                     canDelete = selected != null,
@@ -436,15 +641,34 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             scope.launch {
                                 doc.deleteAnnotation(sel.first, sel.second)
                                 selected = null
-                                markEdited()
+                                markEdited(sel.first)
                             }
                         }
                     },
                 )
             }
         },
+        floatingActionButton = {
+            val draft = polyDraft
+            if (editMode && draft != null) {
+                Column {
+                    SmallFloatingActionButton(onClick = { polyDraft = null }) {
+                        IconClose()
+                    }
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
+                    androidx.compose.material3.FloatingActionButton(
+                        onClick = { commitPoly() },
+                    ) { IconCheck() }
+                }
+            }
+        },
     ) { innerPadding ->
-        Box(Modifier.padding(innerPadding).fillMaxSize()) {
+        Box(
+            Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .onSizeChanged { viewportSize = it }
+        ) {
             when (val state = loadState) {
                 LoadState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 LoadState.Error -> Text(
@@ -461,7 +685,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                             translationX = pan.x
                             translationY = pan.y
                         }
-                        .transformable(transformState, enabled = !editMode),
+                        .transformable(transformState, enabled = !editMode || tool == EditTool.SELECT),
                     state = listState,
                 ) {
                     items((0 until state.document.pageCount).toList()) { index ->
@@ -471,21 +695,31 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                         SafePdfPageItem(
                             document = state.document,
                             index = index,
-                            version = version,
+                            version = pageVersions[index] ?: 0,
                             editMode = editMode,
                             tool = tool,
+                            shape = shape,
                             color = color,
                             selected = selected?.takeIf { it.first == index }?.second,
                             highlights = pageHighlights,
                             currentHighlight = currentHighlight,
                             scope = scope,
                             onSelect = { annotId -> selected = annotId?.let { index to it } },
-                            onEdited = markEdited,
+                            onEdited = { markEdited(index) },
                             textSession = textSession?.takeIf { it.page == index },
                             onStartText = { s -> commitText(textSession); textSession = s },
                             onTextChange = { v -> textSession = textSession?.copy(value = v) },
                             onCommitText = { commitText(textSession); textSession = null },
                             onRequestImage = { pt -> imageTarget = index to pt; imageLauncher.launch("image/*") },
+                            polyDraft = polyDraft?.takeIf { it.page == index },
+                            onAddPolyPoint = { pt ->
+                                val d = polyDraft
+                                polyDraft = when {
+                                    d == null -> PolyDraft(index, listOf(pt), tool == EditTool.BEZIER)
+                                    d.page == index -> d.copy(points = d.points + pt)
+                                    else -> d // ignore taps on other pages while drafting
+                                }
+                            },
                         )
                     }
                 }
@@ -502,6 +736,7 @@ private fun SafePdfPageItem(
     version: Int,
     editMode: Boolean,
     tool: EditTool,
+    shape: ShapeKind,
     color: Color,
     selected: Long?,
     highlights: List<Rect>,
@@ -514,6 +749,8 @@ private fun SafePdfPageItem(
     onTextChange: (TextFieldValue) -> Unit,
     onCommitText: () -> Unit,
     onRequestImage: (Offset) -> Unit,
+    polyDraft: PolyDraft?,
+    onAddPolyPoint: (Offset) -> Unit,
 ) {
     val page by produceState<SafePdfPage?>(null, document, index, version) {
         value = document.renderPage(index)
@@ -548,7 +785,9 @@ private fun SafePdfPageItem(
 
         fun toPage(o: Offset) = Offset(o.x / scale, (ch - o.y) / scale)
 
-        Canvas(Modifier.fillMaxSize()) { drawSafePage(current) }
+        // Render the (static) page into its own graphics layer so that overlay
+        // redraws while drawing/dragging don't replay every page primitive.
+        Canvas(Modifier.fillMaxSize().graphicsLayer { clip = true }) { drawSafePage(current) }
 
         if (highlights.isNotEmpty()) {
             Canvas(Modifier.fillMaxSize()) {
@@ -569,6 +808,7 @@ private fun SafePdfPageItem(
                 annotations = annotations,
                 selected = selected,
                 tool = tool,
+                shape = shape,
                 color = color,
                 cw = cw,
                 ch = ch,
@@ -581,6 +821,8 @@ private fun SafePdfPageItem(
                 onEdited = onEdited,
                 onStartText = onStartText,
                 onRequestImage = onRequestImage,
+                polyDraft = polyDraft,
+                onAddPolyPoint = onAddPolyPoint,
             )
             FormFieldOverlay(
                 fields = formFields,
@@ -625,6 +867,7 @@ private fun EditOverlay(
     annotations: List<SafeAnnotation>,
     selected: Long?,
     tool: EditTool,
+    shape: ShapeKind,
     color: Color,
     cw: Float,
     ch: Float,
@@ -637,6 +880,8 @@ private fun EditOverlay(
     onEdited: () -> Unit,
     onStartText: (TextSession) -> Unit,
     onRequestImage: (Offset) -> Unit,
+    polyDraft: PolyDraft?,
+    onAddPolyPoint: (Offset) -> Unit,
 ) {
     // In-progress drag shape in screen space.
     var dragStart by remember { mutableStateOf<Offset?>(null) }
@@ -654,8 +899,12 @@ private fun EditOverlay(
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             val start = down.position
+            // With Select, only capture the gesture when it starts on an annotation
+            // (a move). On empty space we leave it unconsumed so the list scrolls.
+            val selectMove = tool == EditTool.SELECT && annotAt(start) != null
             val blockScroll =
-                tool == EditTool.HIGHLIGHT || tool == EditTool.RECT || tool == EditTool.DRAW
+                tool == EditTool.HIGHLIGHT || tool == EditTool.SHAPE || tool == EditTool.LINE ||
+                    tool == EditTool.DRAW || selectMove
             if (blockScroll) {
                 down.consume()
                 dragStart = start
@@ -673,14 +922,16 @@ private fun EditOverlay(
                 val pos = change.position
                 if (!dragging && (pos - start).getDistance() > viewConfiguration.touchSlop) {
                     dragging = true
-                    if (tool == EditTool.SELECT) onSelect(annotAt(start)?.id)
+                    if (selectMove) onSelect(annotAt(start)?.id)
                 }
                 if (dragging) {
-                    change.consume()
+                    // Don't consume Select drags on empty space, so they scroll.
+                    val consume = tool != EditTool.SELECT || selectMove
+                    if (consume) change.consume()
                     when (tool) {
-                        EditTool.HIGHLIGHT, EditTool.RECT -> dragCurrent = pos
+                        EditTool.HIGHLIGHT, EditTool.SHAPE, EditTool.LINE -> dragCurrent = pos
                         EditTool.DRAW -> { dragCurrent = pos; inkPoints = inkPoints + pos }
-                        EditTool.SELECT -> moveDelta += (pos - lastPos)
+                        EditTool.SELECT -> if (selectMove) moveDelta += (pos - lastPos)
                         else -> {}
                     }
                 }
@@ -703,6 +954,7 @@ private fun EditOverlay(
                         )
                     }
                     EditTool.IMAGE -> onRequestImage(toPage(start))
+                    EditTool.POLYLINE, EditTool.BEZIER -> onAddPolyPoint(toPage(start))
                     EditTool.SELECT -> {
                         val hit = annotAt(start)
                         if (hit != null && hit.id == selected && hit.subtype == 1) {
@@ -733,10 +985,39 @@ private fun EditOverlay(
                             document.addHighlight(index, a.x, a.y, b.x, b.y, color.toArgb()); onEdited()
                         }
                     }
-                    EditTool.RECT -> if (s != null && e != null) {
+                    EditTool.SHAPE -> if (s != null && e != null) {
+                        val rect = Rect(minOf(s.x, e.x), minOf(s.y, e.y), maxOf(s.x, e.x), maxOf(s.y, e.y))
+                        val lineWidth = if (shape.isFill) 0f else 1.5f
+                        when (shape.geom) {
+                            ShapeGeom.RECT -> {
+                                val a = toPage(Offset(rect.left, rect.top)); val b = toPage(Offset(rect.right, rect.bottom))
+                                scope.launch {
+                                    document.addRect(index, a.x, a.y, b.x, b.y, color.toArgb(), lineWidth, shape.isFill); onEdited()
+                                }
+                            }
+                            ShapeGeom.OVAL -> {
+                                val a = toPage(Offset(rect.left, rect.top)); val b = toPage(Offset(rect.right, rect.bottom))
+                                scope.launch {
+                                    document.addOval(index, a.x, a.y, b.x, b.y, color.toArgb(), lineWidth, shape.isFill); onEdited()
+                                }
+                            }
+                            ShapeGeom.POLYGON -> {
+                                val unit = shape.unitPolygon()
+                                val flat = FloatArray(unit.size * 2)
+                                unit.forEachIndexed { i, u ->
+                                    val pp = toPage(mapUnit(u, rect)); flat[i * 2] = pp.x; flat[i * 2 + 1] = pp.y
+                                }
+                                scope.launch {
+                                    document.addPoly(index, flat, color.toArgb(), lineWidth, shape.isFill, closed = true); onEdited()
+                                }
+                            }
+                        }
+                    }
+                    EditTool.LINE -> if (s != null && e != null) {
                         val a = toPage(s); val b = toPage(e)
                         scope.launch {
-                            document.addRect(index, a.x, a.y, b.x, b.y, color.toArgb(), 1.5f); onEdited()
+                            document.addPoly(index, floatArrayOf(a.x, a.y, b.x, b.y), color.toArgb(), 1.5f, fill = false, closed = false)
+                            onEdited()
                         }
                     }
                     EditTool.DRAW -> {
@@ -749,7 +1030,7 @@ private fun EditOverlay(
                             scope.launch { document.addInk(index, color.toArgb(), 2f, flat); onEdited() }
                         }
                     }
-                    EditTool.SELECT -> {
+                    EditTool.SELECT -> if (selectMove) {
                         val id = selected
                         val a = annotations.firstOrNull { it.id == id }
                         if (id != null && a != null) {
@@ -789,13 +1070,49 @@ private fun EditOverlay(
         // In-progress shapes.
         val s = dragStart
         val e = dragCurrent
-        if (s != null && e != null && (tool == EditTool.HIGHLIGHT || tool == EditTool.RECT)) {
+        if (s != null && e != null && tool == EditTool.HIGHLIGHT) {
             drawRect(
-                color = color.copy(alpha = if (tool == EditTool.HIGHLIGHT) 0.35f else 1f),
+                color = color.copy(alpha = 0.35f),
                 topLeft = Offset(minOf(s.x, e.x), minOf(s.y, e.y)),
-                size = androidx.compose.ui.geometry.Size(kotlin.math.abs(e.x - s.x), kotlin.math.abs(e.y - s.y)),
-                style = if (tool == EditTool.HIGHLIGHT) Fill else Stroke(width = 2f),
+                size = Size(kotlin.math.abs(e.x - s.x), kotlin.math.abs(e.y - s.y)),
+                style = Fill,
             )
+        }
+        if (s != null && e != null && tool == EditTool.SHAPE) {
+            val rect = Rect(minOf(s.x, e.x), minOf(s.y, e.y), maxOf(s.x, e.x), maxOf(s.y, e.y))
+            val topLeft = Offset(rect.left, rect.top)
+            val sz = Size(rect.width, rect.height)
+            val style = if (shape.isFill) Fill else Stroke(width = 2f)
+            when (shape.geom) {
+                ShapeGeom.RECT -> drawRect(color = color, topLeft = topLeft, size = sz, style = style)
+                ShapeGeom.OVAL -> drawOval(color = color, topLeft = topLeft, size = sz, style = style)
+                ShapeGeom.POLYGON -> {
+                    val pts = shape.unitPolygon().map { mapUnit(it, rect) }
+                    if (pts.size >= 2) {
+                        val path = Path().apply {
+                            moveTo(pts[0].x, pts[0].y)
+                            pts.drop(1).forEach { lineTo(it.x, it.y) }
+                            close()
+                        }
+                        drawPath(path, color, style = style)
+                    }
+                }
+            }
+        }
+        if (s != null && e != null && tool == EditTool.LINE) {
+            drawLine(color, s, e, strokeWidth = 2f)
+        }
+        // In-progress polyline / Bézier: draw placed points and connecting path.
+        if (polyDraft != null && polyDraft.points.isNotEmpty()) {
+            val screenPts = polyDraft.points.map { Offset(it.x * scale, ch - it.y * scale) }
+            val path = Path().apply {
+                moveTo(screenPts[0].x, screenPts[0].y)
+                screenPts.drop(1).forEach { lineTo(it.x, it.y) }
+            }
+            drawPath(path, color, style = Stroke(width = 2f))
+            for (p in screenPts) {
+                drawCircle(color = color, radius = 5f, center = p)
+            }
         }
         if (tool == EditTool.DRAW && inkPoints.size >= 2) {
             val path = Path().apply {
@@ -864,6 +1181,8 @@ private fun FormFieldOverlay(
 private fun EditToolbar(
     tool: EditTool,
     onTool: (EditTool) -> Unit,
+    shape: ShapeKind,
+    onShape: (ShapeKind) -> Unit,
     color: Color,
     onColor: (Color) -> Unit,
     canDelete: Boolean,
@@ -874,12 +1193,13 @@ private fun EditToolbar(
             Modifier.horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            toolButton("Sel", tool == EditTool.SELECT) { onTool(EditTool.SELECT) }
-            toolButton("Text", tool == EditTool.TEXT) { onTool(EditTool.TEXT) }
-            toolButton("HL", tool == EditTool.HIGHLIGHT) { onTool(EditTool.HIGHLIGHT) }
-            toolButton("Draw", tool == EditTool.DRAW) { onTool(EditTool.DRAW) }
-            toolButton("Rect", tool == EditTool.RECT) { onTool(EditTool.RECT) }
-            toolButton("Img", tool == EditTool.IMAGE) { onTool(EditTool.IMAGE) }
+            toolButton(R.drawable.ic_tool_select, "Select", tool == EditTool.SELECT) { onTool(EditTool.SELECT) }
+            toolButton(R.drawable.ic_tool_text, "Text", tool == EditTool.TEXT) { onTool(EditTool.TEXT) }
+            toolButton(R.drawable.ic_tool_highlight, "Highlight", tool == EditTool.HIGHLIGHT) { onTool(EditTool.HIGHLIGHT) }
+            toolButton(R.drawable.ic_tool_draw, "Draw", tool == EditTool.DRAW) { onTool(EditTool.DRAW) }
+            shapeMenuButton(shape = shape, active = tool == EditTool.SHAPE, onShape = onShape)
+            linesMenuButton(tool = tool, onTool = onTool)
+            toolButton(R.drawable.ic_tool_image, "Image", tool == EditTool.IMAGE) { onTool(EditTool.IMAGE) }
 
             for (c in listOf(Color.Red, Color.Yellow, Color.Blue, Color.Black)) {
                 Box(
@@ -904,12 +1224,98 @@ private fun EditToolbar(
     }
 }
 
+/** A single toolbar button whose icon reflects the selected [shape]; tapping it
+ * opens a dropdown to pick a rectangle/ellipse (outline or filled). */
 @Composable
-private fun toolButton(label: String, selected: Boolean, onClick: () -> Unit) {
-    TextButton(onClick, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
-        Text(
-            label,
-            color = if (selected) MaterialTheme.colorScheme.primary
+private fun shapeMenuButton(
+    shape: ShapeKind,
+    active: Boolean,
+    onShape: (ShapeKind) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton({ expanded = true }) {
+            Icon(
+                painterResource(shape.icon()),
+                contentDescription = "Shapes",
+                tint = if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            for (kind in ShapeKind.entries) {
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Icon(
+                            painterResource(kind.icon()),
+                            contentDescription = null,
+                            tint = if (active && kind == shape) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    text = { Text(kind.label()) },
+                    onClick = { expanded = false; onShape(kind) },
+                )
+            }
+        }
+    }
+}
+
+/** Dropdown for the line tools (straight line, polyline, Bézier). The button
+ * icon reflects the active line tool. */
+@Composable
+private fun linesMenuButton(
+    tool: EditTool,
+    onTool: (EditTool) -> Unit,
+) {
+    val lineTools = listOf(
+        Triple(EditTool.LINE, R.drawable.ic_tool_line, "Line"),
+        Triple(EditTool.POLYLINE, R.drawable.ic_tool_polyline, "Polyline"),
+        Triple(EditTool.BEZIER, R.drawable.ic_tool_bezier, "Bézier curve"),
+    )
+    val active = tool == EditTool.LINE || tool == EditTool.POLYLINE || tool == EditTool.BEZIER
+    val currentIcon = lineTools.firstOrNull { it.first == tool }?.second ?: R.drawable.ic_tool_line
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton({ expanded = true }) {
+            Icon(
+                painterResource(currentIcon),
+                contentDescription = "Lines",
+                tint = if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            for ((t, icon, label) in lineTools) {
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Icon(
+                            painterResource(icon),
+                            contentDescription = null,
+                            tint = if (tool == t) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    text = { Text(label) },
+                    onClick = { expanded = false; onTool(t) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun toolButton(
+    @DrawableRes icon: Int,
+    contentDescription: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick) {
+        Icon(
+            painterResource(icon),
+            contentDescription = contentDescription,
+            tint = if (selected) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
