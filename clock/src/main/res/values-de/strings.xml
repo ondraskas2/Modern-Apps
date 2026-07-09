@@ -39,4 +39,7 @@
     <string name="grant_notifications_permission">Erlaube Benachrichtigungen</string>
     <string name="time_am">morgens</string>
     <string name="time_pm">abends</string>
+    <string name="channel_completed_timers_description">Alarm wenn Timer abläuft</string>
+    <string name="analog_clock_widget_label">Analoge Uhr</string>
+    <string name="analog_clock_widget_description">Material You Analog Uhr - tippe um Uhr zu öffnen</string>
 </resources>
