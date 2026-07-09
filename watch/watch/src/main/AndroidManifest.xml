@@ -42,6 +42,7 @@
             android:required="false" />
 
         <activity
+            android:configChanges="mcc|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|layoutDirection|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/AppTheme">

@@ -432,8 +432,7 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     var nonUndoDirty by remember { mutableStateOf(false) }
     // Jump-to-page dialog.
     var showJump by remember { mutableStateOf(false) }
-    // Global refresh version for document-wide ops (flatten, redactions).
-    var showOverflow by remember { mutableStateOf(false) }
+    // Global refresh version for document-wide ops (redactions).
     var selectText by remember { mutableStateOf(false) }
     var reflow by remember { mutableStateOf(false) }
     var pageCount by remember(document) { mutableIntStateOf(document?.pageCount ?: 0) }
@@ -835,30 +834,8 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Box {
-                                IconButton({ showOverflow = true }) {
-                                    Icon(painterResource(R.drawable.ic_lock), contentDescription = "Security & document")
-                                }
-                                DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text("Encrypt with password\u2026") },
-                                        onClick = { showOverflow = false; showEncrypt = true },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Reading mode (reflow)") },
-                                        onClick = { showOverflow = false; reflow = true },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Flatten annotations") },
-                                        onClick = {
-                                            showOverflow = false
-                                            val doc = document
-                                            if (doc != null) scope.launch {
-                                                doc.flatten(); pageMgrVersion++; nonUndoDirty = true
-                                            }
-                                        },
-                                    )
-                                }
+                            IconButton({ showEncrypt = true }) {
+                                Icon(painterResource(R.drawable.ic_lock), contentDescription = "Encrypt with password")
                             }
                         }
                         if (editMode) {
@@ -1099,10 +1076,6 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
             onWidth = { strokeWidth = it },
             onDismiss = { showStyle = false },
         )
-    }
-
-    if (reflow && document != null) {
-        ReflowReader(document = document!!, onClose = { reflow = false })
     }
 
     if (showEncrypt) {
