@@ -1546,6 +1546,40 @@ private fun FormFieldOverlay(
                     )
                 }
             }
+            2 -> { // choice / dropdown (editable combo): edit the value inline
+                var text by remember(field.id, field.value) { mutableStateOf(field.value) }
+                BasicTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier
+                        .padding(start = leftDp, top = topDp)
+                        .size(wDp, hDp)
+                        .background(Color(0x3300B0FF)),
+                    singleLine = true,
+                )
+                DisposableEffect(field.id) {
+                    onDispose {
+                        if (text != field.value) {
+                            scope.launch { document.setTextField(index, field.id, text); onEdited() }
+                        }
+                    }
+                }
+            }
+            3 -> { // signature / other: show a tappable placeholder
+                Box(
+                    Modifier
+                        .padding(start = leftDp, top = topDp)
+                        .size(wDp, hDp)
+                        .background(Color(0x22000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Sign",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
