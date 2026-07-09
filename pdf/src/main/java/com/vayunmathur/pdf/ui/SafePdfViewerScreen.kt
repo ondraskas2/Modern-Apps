@@ -434,7 +434,6 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
     var showJump by remember { mutableStateOf(false) }
     // Global refresh version for document-wide ops (redactions).
     var selectText by remember { mutableStateOf(false) }
-    var reflow by remember { mutableStateOf(false) }
     var pageCount by remember(document) { mutableIntStateOf(document?.pageCount ?: 0) }
     var pageMgrVersion by remember { mutableIntStateOf(0) }
     // Per-page render version: bumping one page's entry re-renders ONLY that page,
@@ -1291,52 +1290,6 @@ private fun SafePdfPageItem(
                     ),
                     cursorBrush = SolidColor(Color(textSession.color)),
                 )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ReflowReader(document: SafePdfDocument, onClose: () -> Unit) {
-    androidx.activity.compose.BackHandler { onClose() }
-    var fontSize by remember { mutableFloatStateOf(18f) }
-    val text by produceState<String?>(null, document) { value = document.extractText() ?: "" }
-    androidx.compose.material3.Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
-    ) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("Reading mode") },
-                    navigationIcon = { IconNavigation { onClose() } },
-                    actions = {
-                        IconButton({ fontSize = (fontSize - 2f).coerceAtLeast(10f) }) { Text("A", style = MaterialTheme.typography.labelSmall) }
-                        IconButton({ fontSize = (fontSize + 2f).coerceAtMost(40f) }) { Text("A", style = MaterialTheme.typography.titleLarge) }
-                    },
-                )
-            },
-        ) { padding ->
-            val content = text
-            if (content == null) {
-                Box(Modifier.padding(padding).fillMaxSize()) {
-                    CircularProgressIndicator(Modifier.align(Alignment.Center))
-                }
-            } else {
-                androidx.compose.foundation.text.selection.SelectionContainer(
-                    Modifier.padding(padding).fillMaxSize(),
-                ) {
-                    Text(
-                        text = content.ifBlank { "No selectable text found." },
-                        modifier = Modifier
-                            .verticalScroll(rememberScrollState())
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        fontSize = fontSize.sp,
-                        lineHeight = (fontSize * 1.5f).sp,
-                    )
-                }
             }
         }
     }
