@@ -74,7 +74,7 @@ class InferenceService : Service() {
 
     /** Guards the on-demand SigLIP2 model download so we start it at most once. */
     @Volatile private var downloadJob: Job? = null
-    
+
     private var engine: Engine? = null
     private var currentConversation: com.google.ai.edge.litertlm.Conversation? = null
     private var currentConversationId: Long = -1L
@@ -200,13 +200,13 @@ class InferenceService : Service() {
         try {
             Log.d("InferenceService", "Executing Intent Inference")
             ensureEngineInitialized()
-            
+
             currentConversation?.close()
             currentConversation = null
-            delay(100) 
+            delay(100)
 
             setupIntentConversation(job.schema)
-            
+
             withTimeout(45000) {
                 runIntentInferenceLoop(job.userText, job.imagePaths, job.schema, job.receiver)
             }
@@ -369,16 +369,16 @@ class InferenceService : Service() {
         val systemPrompt = """
             You are a highly specialized data extraction engine.
             Your sole purpose is to analyze the provided images/text and output a SINGLE valid JSON object that adheres STRICTLY to the provided JSON schema.
-            
+
             EXTREMELY IMPORTANT:
             1. DO NOT respond with any conversational text.
             2. DO NOT include any preamble, explanation, or postscript.
             3. Output ONLY the raw JSON object.
             4. Ensure all keys and values are properly quoted.
-            
+
             SCHEMA:
             $schema
-            
+
             Start extraction immediately.
             """.trimIndent()
 
@@ -401,18 +401,18 @@ class InferenceService : Service() {
         val initialContents = mutableListOf<Content>()
         imagePaths.forEach { path -> initialContents.add(Content.ImageFile(path)) }
         if (userText.isNotBlank()) { initialContents.add(Content.Text(userText)) }
-        
+
         val nextMessage = com.google.ai.edge.litertlm.Message.user(Contents.of(initialContents))
 
         var fullResponseText = ""
         Log.d("InferenceService", "Sending intent inference request (Streaming mode for safe interruption)")
-        
+
         val stream = conv.sendMessageAsync(nextMessage)
-        
+
         stream.collect { chunk ->
             val chunkText = chunk.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
             fullResponseText += chunkText
-            
+
             // Try to extract JSON and check if it matches schema
             val jsonCandidate = tryExtractLargestJson(fullResponseText)
             if (jsonCandidate != null) {
@@ -490,10 +490,10 @@ class InferenceService : Service() {
             modelPath = modelFile.absolutePath,
             backend = Backend.GPU(),
             visionBackend = Backend.GPU(),
-            audioBackend = Backend.CPU(), 
+            audioBackend = Backend.CPU(),
             cacheDir = applicationContext.cacheDir.absolutePath,
         )
-        
+
         val newEngine = Engine(config)
         withContext(Dispatchers.IO) {
             newEngine.initialize()
@@ -505,12 +505,12 @@ class InferenceService : Service() {
         val systemPrompt = """
             You are a helpful Android assistant.
             On the first request the user sends to you, you MUST define a title for the conversation. You may optionally change the title if the topic of conversation changes sufficiently.
-            
+
             TOOL USE GUIDELINES:
             - Only use a tool when the user's request clearly and directly relates to that tool's purpose. Do NOT guess or speculatively call tools on short or ambiguous prompts.
             - If the user asks a general knowledge question (e.g. "what is...", "how does...", "tell me about..."), answer from your own knowledge. Do not invoke app tools unless the user explicitly asks to interact with an app.
             - If a tool call fails because the required app is not installed, do NOT stop. Continue helping the user by answering from your own knowledge or suggesting alternatives.
-            
+
             MEMORY:
             You have a memory feature. Use it aggressively to provide a personalized and consistent experience:
             - Whenever the user shares ANY information that might conceivably be useful in future conversations (e.g., their name, preferences, family details, interests, opinions, routines, or important facts), use 'add_to_memory' to store it immediately.
@@ -537,13 +537,13 @@ class InferenceService : Service() {
     }
 
     private suspend fun runInferenceLoop(
-        conversationId: Long, 
-        userText: String, 
-        imagePaths: Array<String>, 
+        conversationId: Long,
+        userText: String,
+        imagePaths: Array<String>,
         audioPath: String?
     ) {
         val conv = currentConversation ?: return
-        
+
         val aiMsgId = upsertMessageToDb(Message(
             conversationId = conversationId,
             text = "...",
