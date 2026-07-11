@@ -45,4 +45,5 @@
     <string name="dialog_create_playlist">Utwórz listę odtwarzania</string>
     <string name="dialog_create">Utwórz</string>
     <string name="playlist_name_hint">Nazwa listy odtwarzania</string>
+    <string name="show_lyrics_on_lock_screen">Pokaż tekst na ekranie blokady</string>
 </resources>
