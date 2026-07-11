@@ -45,4 +45,5 @@
     <string name="dialog_create_playlist">Crea playlist</string>
     <string name="dialog_create">Crea</string>
     <string name="playlist_name_hint">Nome playlist</string>
+    <string name="show_lyrics_on_lock_screen">Mostra testi sulla schermata di blocco</string>
 </resources>
