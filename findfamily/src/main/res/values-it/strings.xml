@@ -44,7 +44,7 @@
     <string name="time_in_days">in %1$d giorni</string>
     <string name="change_connected_contact">Cambia il contatto connesso</string>
     <string name="history_button">Cronologia</string>
-    <string name="hide_button">Nascondi</string>
+    <string name="hide_button">In diretta</string>
     <string name="waypoint_name_blank_error">Il nome non può essere vuoto</string>
     <string name="waypoint_range_error">L\'intervallo deve essere un numero</string>
     <string name="waypoint_range_suffix">metri</string>
@@ -98,4 +98,13 @@
     <string name="permission_upgrade_dialog_confirm">Concedi posizione esatta</string>
     <string name="permission_upgrade_dialog_dismiss">Non ora</string>
     <string name="share_your_location">Condividi la tua posizione con questa persona</string>
+    <string name="history_title">Cronologia: %1$s</string>
+    <string name="history_show_content_desc">Visualizza la cronologia delle posizioni</string>
+    <string name="history_hide_content_desc">Torna alla posizione in diretta</string>
+    <string name="history_step_minus_5m">-5m</string>
+    <string name="history_step_minus_1m">-1m</string>
+    <string name="history_step_minus_10s">-10s</string>
+    <string name="history_step_plus_10s">+10s</string>
+    <string name="history_step_plus_1m">+1m</string>
+    <string name="history_step_plus_5m">+5m</string>
 </resources>
