@@ -57,7 +57,7 @@
     <string name="time_in_days">%1$d 天后</string>
     <string name="change_connected_contact">更改已连接的联系人</string>
     <string name="history_button">历史记录</string>
-    <string name="hide_button">隐藏</string>
+    <string name="hide_button">实时</string>
     <string name="waypoint_name_blank_error">名称不能为空</string>
     <string name="waypoint_range_error">范围必须为数字</string>
     <string name="waypoint_range_suffix">米</string>
@@ -91,11 +91,20 @@
     <string name="uwb_status_unsupported">此设备不支持附近查找（UWB）。</string>
     <string name="uwb_status_failed">附近查找（UWB）失败。</string>
     <string name="uwb_direction_unavailable_hint">请移动您的手机以寻找方向信号</string>
-    <string name="permission_approximate_only_explanation">FindFamily 仅支持确切（精确）位置。您目前仅授予了大致位置，请升级到确切位置以继续。</string>
+    <string name="permission_approximate_only_explanation">FindFamily 仅支持确切（精确）位置。您目前仅授予了大致位置 — 请升级到确切位置以继续。</string>
     <string name="permission_reopen_upgrade_prompt">升级到确切位置</string>
     <string name="permission_upgrade_dialog_title">需要确切位置</string>
     <string name="permission_upgrade_dialog_message">FindFamily 需要确切（精确）位置才能分享您的准确位置。请允许确切位置。</string>
     <string name="permission_upgrade_dialog_confirm">允许确切位置</string>
     <string name="permission_upgrade_dialog_dismiss">以后再说</string>
     <string name="share_your_location">与此人分享您的位置</string>
+    <string name="history_title">历史记录：%1$s</string>
+    <string name="history_show_content_desc">查看位置历史记录</string>
+    <string name="history_hide_content_desc">返回实时位置</string>
+    <string name="history_step_minus_5m">-5分钟</string>
+    <string name="history_step_minus_1m">-1分钟</string>
+    <string name="history_step_minus_10s">-10秒</string>
+    <string name="history_step_plus_10s">+10秒</string>
+    <string name="history_step_plus_1m">+1分钟</string>
+    <string name="history_step_plus_5m">+5分钟</string>
 </resources>
