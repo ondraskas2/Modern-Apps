@@ -66,4 +66,22 @@
     <string name="label_source_top_channel">Canali migliori</string>
     <string name="label_source_search">Basato su ricerca</string>
     <string name="label_hide_shorts">Nascondi Shorts</string>
+    <string name="label_min_duration">Lunghezza min (secondi)</string>
+    <string name="label_max_duration">Lunghezza max (secondi)</string>
+    <string name="label_manage_interests">Gestisci interessi</string>
+    <string name="action_reset_algorithm">Reimposta algoritmo</string>
+    <string name="preset_discover_more">Scopri di più</string>
+    <string name="preset_balanced">Bilanciato</string>
+    <string name="title_manage_interests">Gestisci interessi</string>
+    <string name="label_your_channels">I tuoi canali</string>
+    <string name="label_your_topics">I tuoi argomenti</string>
+    <string name="label_blocked_channels">Canali bloccati</string>
+    <string name="label_muted_keywords">Parole chiave silenziate</string>
+    <string name="label_no_blocked_channels">Nessun canale bloccato</string>
+    <string name="label_no_muted_keywords">Nessuna parola chiave silenziata</string>
+    <string name="label_pinned">Fissati</string>
+    <string name="action_pin">Fissa</string>
+    <string name="action_unpin">Sgancia</string>
+    <string name="action_remove">Rimuovi</string>
+    <string name="action_unblock">Sblocca</string>
 </resources>
