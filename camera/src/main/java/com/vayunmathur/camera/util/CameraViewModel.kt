@@ -104,8 +104,11 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         private const val NIGHT_DISENGAGE_LUMA = 55f
         private const val NIGHT_DEBOUNCE_FRAMES = 4
 
-        // Target night exposure/ISO used when night mode fires on an Auto exposure stop.
+        // Target night exposure/ISO used when night mode fires on an Auto exposure stop. The
+        // single-frame emulation (fallback) uses the long ~1/4s target; the multi-frame burst uses
+        // a shorter per-frame exposure so each frame has less motion blur and the merge recovers SNR.
         private const val NIGHT_TARGET_EXPOSURE_NANOS = 250_000_000L // ~1/4s
+        private const val NIGHT_BURST_PER_FRAME_NANOS = 100_000_000L // ~1/10s, in the 1/15–1/8s range
         private const val NIGHT_ISO_FRACTION = 0.75f
 
         val EXPOSURE_TIME_STOPS = listOf(
@@ -281,6 +284,10 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     private var boundCamera: Camera? = null
     private var imageCapture: ImageCapture? = null
     private var imageAnalysis: ImageAnalysis? = null
+
+    // The analyzer currently attached to imageAnalysis, so the night burst can swap in a temporary
+    // frame collector and restore the previous analyzer (PhotoAnalyzer) when it finishes.
+    private var currentAnalyzer: ImageAnalysis.Analyzer? = null
 
     // Latest device orientation as a Surface.ROTATION_* constant. Driven by the UI's
     // OrientationEventListener and applied to ImageCapture so landscape shots save
@@ -610,9 +617,20 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                     .setTargetRotation(targetRotation)
                     .build()
                 imageCapture = capture
-                val analysis = ImageAnalysis.Builder()
+                val analysisBuilder = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
+                if (maxRes) {
+                    // Raise the analysis stream too so the night-mode burst (collected off this
+                    // stream) is as high-res as the device's 3-stream combo allows. Tied to maxRes
+                    // so the default-resolution fallback keeps the analysis stream conservative if
+                    // the high-res 3-stream bind is rejected.
+                    analysisBuilder.setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                            .build()
+                    )
+                }
+                val analysis = analysisBuilder.build()
                 imageAnalysis = analysis
                 return provider.bindToLifecycle(owner, selector, preview, capture, analysis)
             }
@@ -709,6 +727,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         highSpeedRecording?.stop()
         highSpeedRecording = null
         imageAnalysis?.clearAnalyzer()
+        currentAnalyzer = null
         sessionLifecycleOwner?.destroy()
         sessionLifecycleOwner = null
         cameraProvider?.unbindAll()
@@ -758,6 +777,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     /** Swaps the analyzer on the bound ImageAnalysis without rebinding. */
     fun setImageAnalyzer(analyzer: ImageAnalysis.Analyzer?) {
         val analysis = imageAnalysis ?: return
+        currentAnalyzer = analyzer
         if (analyzer == null) analysis.clearAnalyzer()
         else analysis.setAnalyzer(ContextCompat.getMainExecutor(app), analyzer)
     }
@@ -835,6 +855,17 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun capturePhoto() {
+        if (imageCapture == null) return
+        // Multi-frame night capture only when night mode is active on the Auto exposure stop.
+        // A manual exposure stop always wins and falls through to the single-frame path.
+        if (nightModeActive.value && _exposureTimeIndex.value == 0) {
+            captureNightPhoto()
+        } else {
+            captureSinglePhoto()
+        }
+    }
+
+    private fun captureSinglePhoto() {
         val capture = imageCapture ?: return
         _isCapturing.value = true
         val contentValues = MediaStoreSaver.imageValues("IMG_${MediaStoreSaver.timestamp()}.jpg")
@@ -973,15 +1004,153 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Multi-frame night capture: locks the sensor to a per-frame night exposure/ISO, collects a
+     * burst off the ImageAnalysis stream, then aligns + merges + brightens it (via
+     * [NightCaptureEngine]) and saves. Falls back to the single long-exposure capture if the burst
+     * is empty or the merge fails, so the user always gets a shot.
+     */
+    private fun captureNightPhoto() {
+        _isCapturing.value = true
+        val perFrame = computeNightExposure(NIGHT_BURST_PER_FRAME_NANOS)
+        // The countdown overlay shows the total burst duration.
+        startLongExposureCountdown(perFrame.nanos * NightCaptureEngine.NIGHT_BURST_COUNT)
+
+        captureNightBurst(perFrame) { frames ->
+            if (frames.isEmpty()) {
+                Log.w("CameraViewModel", "Night burst produced no frames; falling back to single capture")
+                stopLongExposureCountdown()
+                captureSinglePhoto()
+                return@captureNightBurst
+            }
+            viewModelScope.launch {
+                val uri = withContext(Dispatchers.Default) {
+                    val merged = NightCaptureEngine.merge(frames)
+                    frames.forEach { it.recycle() }
+                    merged?.let { bmp ->
+                        val values = MediaStoreSaver.imageValues("IMG_${MediaStoreSaver.timestamp()}.jpg")
+                        MediaStoreSaver.saveBitmap(app.contentResolver, values, bmp)
+                            .also { bmp.recycle() }
+                    }
+                }
+                if (uri != null) {
+                    // Merged pixels are already upright/mirrored, so the orientation tag is normal.
+                    withContext(Dispatchers.IO) { writeCaptureExif(uri, null, 0) }
+                    _isCapturing.value = false
+                    stopLongExposureCountdown()
+                    setLastCaptureUri(uri)
+                } else {
+                    Log.w("CameraViewModel", "Night merge failed; falling back to single capture")
+                    stopLongExposureCountdown()
+                    captureSinglePhoto()
+                }
+            }
+        }
+    }
+
+    /**
+     * Locks 3A to [exposure], temporarily swaps the analyzer for a frame collector that gathers the
+     * next [NightCaptureEngine.NIGHT_BURST_COUNT] frames as upright (front-mirrored) bitmaps, then
+     * restores auto 3A and the previous analyzer and invokes [onDone] with the collected frames
+     * (empty if the analysis stream is unavailable).
+     */
+    private fun captureNightBurst(exposure: NightExposure, onDone: (List<Bitmap>) -> Unit) {
+        if (imageAnalysis == null) {
+            onDone(emptyList())
+            return
+        }
+        val cam2Control = try {
+            boundCamera?.cameraControl?.let {
+                androidx.camera.camera2.interop.Camera2CameraControl.from(it)
+            }
+        } catch (e: Exception) { Log.w("CameraViewModel", "Camera2 control unavailable", e); null }
+
+        val previousAnalyzer = currentAnalyzer
+        val mirror = mirrorCaptures
+        val collected = mutableListOf<Bitmap>()
+        var finished = false
+
+        fun restore() {
+            if (cam2Control != null) {
+                try {
+                    cam2Control.setCaptureRequestOptions(
+                        androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+                            .clearCaptureRequestOption(android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME)
+                            .clearCaptureRequestOption(android.hardware.camera2.CaptureRequest.SENSOR_SENSITIVITY)
+                            .clearCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE)
+                            .clearCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AWB_LOCK)
+                            .build()
+                    )
+                } catch (e: Exception) {
+                    Log.w("CameraViewModel", "Failed to restore auto 3A after night burst", e)
+                }
+            }
+            setImageAnalyzer(previousAnalyzer)
+        }
+
+        val collector = ImageAnalysis.Analyzer { imageProxy ->
+            if (!finished && collected.size < NightCaptureEngine.NIGHT_BURST_COUNT) {
+                try {
+                    val raw = imageProxy.toBitmap()
+                    val matrix = Matrix().apply {
+                        postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                        if (mirror) postScale(-1f, 1f)
+                    }
+                    val upright = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+                    if (upright !== raw) raw.recycle()
+                    collected.add(upright)
+                } catch (e: Exception) {
+                    Log.w("CameraViewModel", "Failed to collect night burst frame", e)
+                }
+            }
+            imageProxy.close()
+            if (!finished && collected.size >= NightCaptureEngine.NIGHT_BURST_COUNT) {
+                finished = true
+                restore()
+                onDone(collected.toList())
+            }
+        }
+
+        if (cam2Control != null) {
+            try {
+                val options = androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+                    .setCaptureRequestOption(
+                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                        android.hardware.camera2.CameraMetadata.CONTROL_AE_MODE_OFF
+                    )
+                    .setCaptureRequestOption(
+                        android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME,
+                        exposure.nanos
+                    )
+                    // Lock white balance so frames merge without color drift across the burst.
+                    .setCaptureRequestOption(
+                        android.hardware.camera2.CaptureRequest.CONTROL_AWB_LOCK, true
+                    )
+                exposure.iso?.let {
+                    options.setCaptureRequestOption(
+                        android.hardware.camera2.CaptureRequest.SENSOR_SENSITIVITY, it
+                    )
+                }
+                cam2Control.setCaptureRequestOptions(options.build())
+                    .addListener({ setImageAnalyzer(collector) }, ContextCompat.getMainExecutor(app))
+            } catch (e: Exception) {
+                Log.w("CameraViewModel", "Failed to set night exposure for burst", e)
+                setImageAnalyzer(collector)
+            }
+        } else {
+            setImageAnalyzer(collector)
+        }
+    }
+
     private data class NightExposure(val nanos: Long, val iso: Int?)
 
     /**
-     * Derives a night exposure/ISO from the bound sensor's characteristics: clamps a ~1/4s target
+     * Derives a night exposure/ISO from the bound sensor's characteristics: clamps [targetNanos]
      * into the sensor's exposure-time range and picks a high fraction of its sensitivity range.
-     * Falls back to a fixed exposure (and auto ISO) if the characteristics are unavailable.
+     * Falls back to [targetNanos] (and auto ISO) if the characteristics are unavailable.
      */
-    private fun computeNightExposure(): NightExposure {
-        val fallback = NightExposure(NIGHT_TARGET_EXPOSURE_NANOS, null)
+    private fun computeNightExposure(targetNanos: Long = NIGHT_TARGET_EXPOSURE_NANOS): NightExposure {
+        val fallback = NightExposure(targetNanos, null)
         return try {
             val cam = boundCamera ?: return fallback
             val info = androidx.camera.camera2.interop.Camera2CameraInfo.from(cam.cameraInfo)
@@ -992,8 +1161,8 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE
             )
             val nanos = expRange?.let {
-                NIGHT_TARGET_EXPOSURE_NANOS.coerceIn(it.lower, it.upper)
-            } ?: NIGHT_TARGET_EXPOSURE_NANOS
+                targetNanos.coerceIn(it.lower, it.upper)
+            } ?: targetNanos
             val iso = isoRange?.let {
                 (it.lower + ((it.upper - it.lower) * NIGHT_ISO_FRACTION).roundToInt())
                     .coerceIn(it.lower, it.upper)
@@ -1102,17 +1271,20 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Restores the EXIF that re-encoding the adjusted bitmap dropped: copies the original frame's
-     * metadata tags, writes the orientation for [rotationDegrees], and stamps GPS when location is
-     * enabled — so an adjusted photo carries the same EXIF as an unadjusted one.
+     * Restores the EXIF that re-encoding a processed bitmap dropped: copies the original frame's
+     * metadata tags (when [sourceJpeg] is provided), writes the orientation for [rotationDegrees],
+     * and stamps GPS when location is enabled. For the night merge there is no single source frame,
+     * so [sourceJpeg] is null and only orientation + GPS are written.
      */
-    private fun writeCaptureExif(uri: Uri, sourceJpeg: ByteArray, rotationDegrees: Int) {
+    private fun writeCaptureExif(uri: Uri, sourceJpeg: ByteArray?, rotationDegrees: Int) {
         try {
-            val source = ExifInterface(ByteArrayInputStream(sourceJpeg))
+            val source = sourceJpeg?.let { ExifInterface(ByteArrayInputStream(it)) }
             app.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
                 val dest = ExifInterface(pfd.fileDescriptor)
-                EXIF_TAGS_TO_COPY.forEach { tag ->
-                    source.getAttribute(tag)?.let { dest.setAttribute(tag, it) }
+                source?.let { src ->
+                    EXIF_TAGS_TO_COPY.forEach { tag ->
+                        src.getAttribute(tag)?.let { dest.setAttribute(tag, it) }
+                    }
                 }
                 dest.setAttribute(
                     ExifInterface.TAG_ORIENTATION,
