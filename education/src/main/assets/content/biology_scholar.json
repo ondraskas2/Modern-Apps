@@ -23,7 +23,7 @@
               "id": "lesson.cell-theory",
               "title": "Cell theory",
               "videos": [
-                { "youtubeId": "yt-placeholder-cell-theory", "title": "Introduction to cells", "durationSeconds": 480 }
+                { "youtubeId": "5KfHxF6Vhps", "title": "Introduction to the cell", "durationSeconds": 351 }
               ],
               "exercise": {
                 "id": "ex.cell-theory",
@@ -35,7 +35,7 @@
               "id": "lesson.organelles",
               "title": "Organelles",
               "videos": [
-                { "youtubeId": "yt-placeholder-organelles", "title": "Tour of a cell", "durationSeconds": 540 }
+                { "youtubeId": "Hmwvj9X4GNY", "title": "Parts of a cell", "durationSeconds": 1263 }
               ],
               "exercise": {
                 "id": "ex.organelles",

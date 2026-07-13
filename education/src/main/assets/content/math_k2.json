@@ -25,7 +25,7 @@
               "id": "lesson.k-count",
               "title": "Count to 5",
               "videos": [
-                { "youtubeId": "yt-placeholder-count", "title": "Let's count to 5", "durationSeconds": 150 }
+                { "youtubeId": "y2-uaPiyoxc", "title": "Counting with small numbers", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.k-count",
@@ -44,7 +44,7 @@
               "id": "lesson.k-shapes",
               "title": "Find the shape",
               "videos": [
-                { "youtubeId": "yt-placeholder-shapes", "title": "Shapes all around", "durationSeconds": 150 }
+                { "youtubeId": "10dTx1Zy_4w", "title": "Recognizing shapes", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.k-shapes",
@@ -63,7 +63,7 @@
               "id": "lesson.k-trace",
               "title": "Trace 1, 2, 3",
               "videos": [
-                { "youtubeId": "yt-placeholder-trace", "title": "Let's write numbers", "durationSeconds": 120 }
+                { "youtubeId": "eLRMI2ZX5Qw", "title": "Writing numbers", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.k-trace",

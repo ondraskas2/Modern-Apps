@@ -24,7 +24,7 @@
               "id": "lesson.mult-meaning",
               "title": "What is multiplication?",
               "videos": [
-                { "youtubeId": "yt-placeholder-mult-meaning", "title": "Multiplication as groups", "durationSeconds": 240 }
+                { "youtubeId": "RNxwasijbAo", "title": "Intro to multiplication", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.mult-meaning",
@@ -36,7 +36,7 @@
               "id": "lesson.mult-facts",
               "title": "Times tables",
               "videos": [
-                { "youtubeId": "yt-placeholder-times-tables", "title": "The 3 times table", "durationSeconds": 300 }
+                { "youtubeId": "mvOkMYCygps", "title": "Basic multiplication", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.mult-facts",
@@ -60,7 +60,7 @@
               "id": "lesson.frac-intro",
               "title": "What is a fraction?",
               "videos": [
-                { "youtubeId": "yt-placeholder-fractions", "title": "Intro to fractions", "durationSeconds": 260 }
+                { "youtubeId": "kZzoVCmUyKg", "title": "Introduction to fractions", "durationSeconds": 341 }
               ],
               "exercise": {
                 "id": "ex.frac-intro",

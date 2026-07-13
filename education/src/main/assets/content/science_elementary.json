@@ -21,9 +21,9 @@
           "lessons": [
             {
               "id": "lesson.butterfly",
-              "title": "The butterfly life cycle",
+              "title": "The frog life cycle",
               "videos": [
-                { "youtubeId": "yt-placeholder-butterfly", "title": "From caterpillar to butterfly", "durationSeconds": 280 }
+                { "youtubeId": "Q_mpfkhVIOY", "title": "Life cycle of a frog", "durationSeconds": 247 }
               ],
               "exercise": {
                 "id": "ex.life-cycles",
@@ -47,7 +47,7 @@
               "id": "lesson.states",
               "title": "Solid, liquid, gas",
               "videos": [
-                { "youtubeId": "yt-placeholder-states", "title": "The three states of matter", "durationSeconds": 300 }
+                { "youtubeId": "gBiF-OLUVTY", "title": "States of matter", "durationSeconds": 0 }
               ],
               "exercise": {
                 "id": "ex.matter",
@@ -65,9 +65,9 @@
       "type": "ordering",
       "id": "q.sci.metamorph-order",
       "skillId": "skill.sci.lifecycle",
-      "prompt": { "text": "Put the butterfly life cycle in order." },
-      "items": ["Egg", "Caterpillar", "Chrysalis", "Butterfly"],
-      "explanation": "Egg → caterpillar → chrysalis → butterfly.",
+      "prompt": { "text": "Put the frog life cycle in order." },
+      "items": ["Egg", "Tadpole", "Froglet", "Frog"],
+      "explanation": "Egg → tadpole → froglet → frog.",
       "bands": ["ELEMENTARY"],
       "difficulty": 2
     },
@@ -75,14 +75,14 @@
       "type": "multiple_choice",
       "id": "q.sci.stage",
       "skillId": "skill.sci.lifecycle",
-      "prompt": { "text": "During which stage does a caterpillar form a hard case around itself?" },
+      "prompt": { "text": "During which stage does a young frog live in water and have a tail?" },
       "choices": [
         { "text": "Egg" },
-        { "text": "Chrysalis" },
-        { "text": "Butterfly" }
+        { "text": "Tadpole" },
+        { "text": "Adult frog" }
       ],
       "correctIndex": 1,
-      "explanation": "The chrysalis (pupa) stage.",
+      "explanation": "A tadpole lives in water and has a tail.",
       "bands": ["ELEMENTARY"],
       "difficulty": 1
     },
