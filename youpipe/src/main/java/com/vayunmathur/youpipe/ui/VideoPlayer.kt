@@ -2,6 +2,7 @@ package com.vayunmathur.youpipe.ui
 
 import android.app.PictureInPictureParams
 import android.content.ComponentName
+import android.net.Uri
 import android.os.Bundle
 import android.text.format.DateUtils
 import androidx.annotation.OptIn
@@ -58,10 +59,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import android.view.WindowManager
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,6 +101,7 @@ fun VideoPlayer(
     videoInfo: VideoInfo,
     videoStreams: List<VideoStream>,
     audioStreams: List<AudioStream>,
+    subtitles: List<SubtitleTrack>,
     segments: List<VideoChapter>,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
@@ -127,6 +133,10 @@ fun VideoPlayer(
     var isLanguageMenuExpanded by remember { mutableStateOf(false) }
     var isAudioMenuExpanded by remember { mutableStateOf(false) }
     var isChapterMenuVisible by remember { mutableStateOf(false) }
+    var isCaptionMenuExpanded by remember { mutableStateOf(false) }
+
+    var selectedSubtitle by remember { mutableStateOf<SubtitleTrack?>(null) }
+    var cues by remember { mutableStateOf<List<Cue>>(emptyList()) }
 
     DisposableEffect(Unit) {
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
@@ -172,6 +182,9 @@ fun VideoPlayer(
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 if(videoSize.width == 0 || videoSize.height == 0) return
                 aspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat() * videoSize.pixelWidthHeightRatio
+            }
+            override fun onCues(cueGroup: CueGroup) {
+                cues = cueGroup.cues
             }
         }
         player.addListener(listener)
@@ -223,7 +236,7 @@ fun VideoPlayer(
     val timeWatched = historyVideo?.progress ?: 0
 
     // 3. Updated LaunchedEffect to pass audio URI through Metadata Extras
-    LaunchedEffect(controller, currentVideoStream, currentAudioStream, videoInfo.name, videoInfo.author) {
+    LaunchedEffect(controller, currentVideoStream, currentAudioStream, videoInfo.name, videoInfo.author, subtitles) {
         val player = controller ?: return@LaunchedEffect
 
         val metadataBuilder = MediaMetadata.Builder()
@@ -237,14 +250,35 @@ fun VideoPlayer(
             metadataBuilder.setExtras(extras)
         }
 
+        val subtitleConfigs = subtitles.map { sub ->
+            MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.url))
+                .setMimeType(MimeTypes.TEXT_VTT)
+                .setLanguage(sub.languageTag)
+                .build()
+        }
+
         val mediaItem = MediaItem.Builder()
             .setUri(currentVideoStream.url)
+            .setSubtitleConfigurations(subtitleConfigs)
             .setMediaMetadata(metadataBuilder.build())
             .build()
 
         player.setMediaItem(mediaItem, timeWatched)
         player.prepare()
         currentPosition = timeWatched
+    }
+
+    LaunchedEffect(controller, selectedSubtitle) {
+        val player = controller ?: return@LaunchedEffect
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().apply {
+            val sub = selectedSubtitle
+            if (sub == null) {
+                setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            } else {
+                setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                setPreferredTextLanguage(sub.languageTag)
+            }
+        }.build()
     }
 
     val isPipMode = rememberIsInPipMode()
@@ -295,6 +329,27 @@ fun VideoPlayer(
                 surfaceType = SURFACE_TYPE_TEXTURE_VIEW
             )
         } ?: Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+
+        if (cues.isNotEmpty()) {
+            Column(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp, start = 16.dp, end = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                cues.forEach { cue ->
+                    cue.text?.let { text ->
+                        Text(
+                            text = text.toString(),
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
 
         AnimatedVisibility(visible = isControlsVisible && !isPipMode, enter = fadeIn(), exit = fadeOut()) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f))) {
@@ -363,6 +418,33 @@ fun VideoPlayer(
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.audio_bitrate_codec, stream.bitrate / 1000, getAudioCodecName(stream.codec))) },
                                         onClick = { currentAudioStream = stream; isAudioMenuExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (subtitles.isNotEmpty()) {
+                        Box {
+                            Surface(
+                                onClick = { isCaptionMenuExpanded = true },
+                                color = Color.Black.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(text = selectedSubtitle?.languageTag?.ifEmpty { "CC" } ?: "CC", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                                    Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
+                                }
+                            }
+                            DropdownMenu(expanded = isCaptionMenuExpanded, onDismissRequest = { isCaptionMenuExpanded = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Off") },
+                                    onClick = { selectedSubtitle = null; isCaptionMenuExpanded = false }
+                                )
+                                subtitles.forEach { sub ->
+                                    DropdownMenuItem(
+                                        text = { Text(sub.displayName) },
+                                        onClick = { selectedSubtitle = sub; isCaptionMenuExpanded = false }
                                     )
                                 }
                             }

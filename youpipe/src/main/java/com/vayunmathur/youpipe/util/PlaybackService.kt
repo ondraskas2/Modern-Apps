@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
@@ -78,7 +79,13 @@ class PlaybackService : MediaSessionService() {
                     val audioSource = ProgressiveMediaSource.Factory(dataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(audioUriString))
 
-                    MergingMediaSource(videoSource, audioSource)
+                    val subtitleSources = mediaItem.localConfiguration?.subtitleConfigurations
+                        ?.map { cfg ->
+                            SingleSampleMediaSource.Factory(dataSourceFactory)
+                                .createMediaSource(cfg, C.TIME_UNSET)
+                        } ?: emptyList()
+
+                    MergingMediaSource(videoSource, audioSource, *subtitleSources.toTypedArray())
                 } else {
                     // Delegate to the standard factory for normal items
                     defaultMediaSourceFactory.createMediaSource(mediaItem)
