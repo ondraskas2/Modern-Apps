@@ -1,0 +1,158 @@
+{
+  "id": "math-core-sample",
+  "name": "Math (sample pack)",
+  "version": 1,
+  "skills": [
+    { "id": "skill.alg.one-step", "subject": "MATH", "name": "Solve one-step equations" },
+    { "id": "skill.alg.two-step", "subject": "MATH", "name": "Solve two-step equations" },
+    { "id": "skill.alg.distribute", "subject": "MATH", "name": "Apply the distributive property" }
+  ],
+  "courses": [
+    {
+      "id": "course.algebra-basics",
+      "subject": "MATH",
+      "title": "Algebra basics",
+      "description": "Foundations of algebra: variables, expressions, and solving equations.",
+      "gradeLevel": 8,
+      "units": [
+        {
+          "id": "unit.solving-equations",
+          "title": "Solving equations",
+          "description": "Isolate the variable using inverse operations.",
+          "lessons": [
+            {
+              "id": "lesson.one-step",
+              "title": "One-step equations",
+              "videos": [
+                { "youtubeId": "yt-placeholder-one-step", "title": "Solving one-step equations", "durationSeconds": 300 }
+              ],
+              "exercise": {
+                "id": "ex.one-step",
+                "title": "Practice: one-step equations",
+                "questionIds": ["q.one-step.mc1", "q.one-step.num1", "q.one-step.order1"]
+              }
+            },
+            {
+              "id": "lesson.two-step",
+              "title": "Two-step equations",
+              "videos": [
+                { "youtubeId": "yt-placeholder-two-step", "title": "Solving two-step equations", "durationSeconds": 420 }
+              ],
+              "exercise": {
+                "id": "ex.two-step",
+                "title": "Practice: two-step equations",
+                "questionIds": ["q.two-step.num1", "q.two-step.text1", "q.two-step.ms1"]
+              }
+            }
+          ],
+          "quiz": {
+            "id": "quiz.solving-equations",
+            "title": "Unit quiz: Solving equations",
+            "questionIds": ["q.one-step.mc1", "q.two-step.num1", "q.distribute.match1"]
+          }
+        }
+      ],
+      "challenge": {
+        "id": "challenge.algebra-basics",
+        "title": "Course challenge",
+        "questionIds": ["q.one-step.num1", "q.two-step.num1", "q.distribute.match1", "q.two-step.ms1"]
+      }
+    }
+  ],
+  "questions": [
+    {
+      "type": "multiple_choice",
+      "id": "q.one-step.mc1",
+      "skillId": "skill.alg.one-step",
+      "prompt": { "text": "Solve for x:  x + 7 = 12" },
+      "choices": [
+        { "text": "x = 5" },
+        { "text": "x = 19" },
+        { "text": "x = 7" },
+        { "text": "x = 12" }
+      ],
+      "correctIndex": 0,
+      "hints": ["Subtract 7 from both sides.", "12 - 7 = 5"],
+      "explanation": "Subtract 7 from both sides: x = 12 - 7 = 5.",
+      "bands": ["SCHOLAR", "ELEMENTARY"],
+      "difficulty": 1
+    },
+    {
+      "type": "numeric",
+      "id": "q.one-step.num1",
+      "skillId": "skill.alg.one-step",
+      "prompt": { "text": "Solve for x:  4x = 20" },
+      "answer": 5,
+      "tolerance": 0,
+      "hints": ["Divide both sides by 4."],
+      "explanation": "x = 20 / 4 = 5.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 1
+    },
+    {
+      "type": "ordering",
+      "id": "q.one-step.order1",
+      "skillId": "skill.alg.one-step",
+      "prompt": { "text": "Order the steps to solve  x - 3 = 8." },
+      "items": [
+        "Start with x - 3 = 8",
+        "Add 3 to both sides",
+        "Simplify to x = 11"
+      ],
+      "explanation": "Add 3 to both sides to isolate x, giving x = 11.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 2
+    },
+    {
+      "type": "numeric",
+      "id": "q.two-step.num1",
+      "skillId": "skill.alg.two-step",
+      "prompt": { "text": "Solve for x:  2x + 3 = 11" },
+      "answer": 4,
+      "tolerance": 0,
+      "hints": ["Subtract 3 first, then divide by 2."],
+      "explanation": "2x = 11 - 3 = 8, so x = 4.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 2
+    },
+    {
+      "type": "short_text",
+      "id": "q.two-step.text1",
+      "skillId": "skill.alg.two-step",
+      "prompt": { "text": "What operation do you perform FIRST when solving 3x - 5 = 10? (add, subtract, multiply, or divide)" },
+      "acceptedAnswers": ["add", "addition"],
+      "caseSensitive": false,
+      "explanation": "Add 5 to both sides first to undo the subtraction.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 2
+    },
+    {
+      "type": "multiple_select",
+      "id": "q.two-step.ms1",
+      "skillId": "skill.alg.two-step",
+      "prompt": { "text": "Which of these are valid steps when solving  5x + 2 = 17?  (Select all that apply.)" },
+      "choices": [
+        { "text": "Subtract 2 from both sides" },
+        { "text": "Divide both sides by 5" },
+        { "text": "Add 17 to both sides" },
+        { "text": "Multiply both sides by x" }
+      ],
+      "correctIndices": [0, 1],
+      "explanation": "Subtract 2, then divide by 5. The other options don't isolate x.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 3
+    },
+    {
+      "type": "matching",
+      "id": "q.distribute.match1",
+      "skillId": "skill.alg.distribute",
+      "prompt": { "text": "Match each expression to its expanded form." },
+      "left": ["2(x + 3)", "3(x - 1)", "4(2x + 1)"],
+      "right": ["3x - 3", "8x + 4", "2x + 6"],
+      "correctRightForLeft": [2, 0, 1],
+      "explanation": "Distribute the factor across each term inside the parentheses.",
+      "bands": ["SCHOLAR"],
+      "difficulty": 3
+    }
+  ]
+}
