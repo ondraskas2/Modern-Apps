@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         val route by externalRoute
                         Box(Modifier.fillMaxSize().onFileDrop { importUris.value = it }) {
-                            Navigation(viewModel, route)
+                            Navigation(viewModel, route, onExit = { finish() })
                         }
                     }
                 }
@@ -160,11 +160,26 @@ class MainActivity : ComponentActivity() {
                         }
                         else -> {
                             resolveContactId(intent.data)?.let { id -> Route.ContactDetail(id) }
+                                ?: extractPhoneNumber(intent)?.takeIf { it.isNotBlank() }?.let { number ->
+                                    Route.EditContact(contactId = null, phone = number)
+                                }
                         }
                     }
                 }
             }
         }
+    }
+
+    private fun extractPhoneNumber(intent: Intent): String? {
+        intent.getStringExtra(ContactsContract.Intents.Insert.PHONE)?.let { return it }
+        val uri = intent.data ?: return null
+        if (uri.scheme == "tel") {
+            return uri.schemeSpecificPart
+        }
+        if (uri.authority == ContactsContract.AUTHORITY && uri.path?.contains("phone_lookup") == true) {
+            return uri.lastPathSegment
+        }
+        return null
     }
 
     private fun resolveContactId(uri: Uri?): Long? {
@@ -229,12 +244,20 @@ fun NoPermissionsScreen(permissions: Array<String>, setHasPermissions: (Boolean)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
-    val backStack = rememberNavBackStack<Route>(listOfNotNull(Route.ContactsList, initialRoute).distinct())
+fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null, onExit: () -> Unit = {}) {
+    val backStack = rememberNavBackStack<Route>(initialRoute ?: Route.ContactsList)
 
     LaunchedEffect(initialRoute) {
         if (initialRoute != null && backStack.last() != initialRoute) {
             backStack.add(initialRoute)
+        }
+    }
+
+    fun goBack() {
+        if (backStack.backStack.size > 1) {
+            backStack.pop()
+        } else {
+            onExit()
         }
     }
 
@@ -284,7 +307,7 @@ fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
             ContactDetailsPage(
                 viewModel = viewModel,
                 contactId = key.contactId,
-                onBack = { backStack.pop() },
+                onBack = { goBack() },
                 onEdit = { id -> backStack.add(Route.EditContact(id)) },
                 onDelete = {
                     // Show the delete confirmation dialog using the contact id and name
@@ -295,7 +318,7 @@ fun Navigation(viewModel: ContactViewModel, initialRoute: Route? = null) {
             )
         }
         entry<Route.EditContact>(metadata = ListDetailPage()) { key ->
-            EditContactPage(backStack, viewModel, key)
+            EditContactPage(backStack, viewModel, key, onExit = { goBack() })
         }
 
         entry<Route.Settings>(metadata = ListDetailPage()) {

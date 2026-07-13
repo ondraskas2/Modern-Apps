@@ -92,7 +92,7 @@ import kotlin.io.encoding.Base64
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel, editRoute: Route.EditContact) {
+fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel, editRoute: Route.EditContact, onExit: () -> Unit = { backStack.pop() }) {
     val contactId = editRoute.contactId
     val context = LocalContext.current
 
@@ -133,14 +133,14 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                     Text(pageTitle)
                 },
                 navigationIcon = {
-                    IconButton(onClick = { backStack.pop() }) {
+                    IconButton(onClick = { onExit() }) {
                         IconClose()
                     }
                 },
                 actions = {
                     Button(onClick = {
                         viewModel.saveEditDraft()
-                        backStack.pop()
+                        onExit()
                     }) {
                         Text(stringResource(R.string.save))
                     }
