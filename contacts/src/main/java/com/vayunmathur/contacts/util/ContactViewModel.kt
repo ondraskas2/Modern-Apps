@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
@@ -74,10 +75,11 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val contacts: StateFlow<List<com.vayunmathur.contacts.data.Contact>> = combine(
         _searchQuery.flatMapLatest { query ->
-            if (query.isBlank()) {
+            val ftsQuery = toFtsPrefixQuery(query)
+            if (ftsQuery == null) {
                 contactDao.getContactsFlow()
             } else {
-                contactDao.search("$query*")
+                contactDao.search(ftsQuery).catch { emit(emptyList()) }
             }
         },
         hiddenAccounts
@@ -155,6 +157,23 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    /**
+     * Builds a safe FTS4 prefix-match expression from raw user input. Splits on
+     * whitespace, wraps each token in double quotes (escaping internal quotes)
+     * and appends `*` for prefix matching, e.g. `"tok1"* "tok2"*`. Returns
+     * `null` when there is nothing searchable, so callers fall back to the full
+     * contact list. Quoting neutralizes FTS special characters (`(`, `"`, `*`,
+     * trailing `-`, etc.) that would otherwise produce a malformed MATCH.
+     */
+    private fun toFtsPrefixQuery(query: String): String? {
+        val tokens = query.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return null
+        return tokens.joinToString(" ") { token ->
+            val escaped = token.replace("\"", "\"\"")
+            "\"$escaped\"*"
+        }
     }
 
     fun setCalendarSyncEnabled(enabled: Boolean) {
