@@ -1,0 +1,109 @@
+package com.vayunmathur.education.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.vayunmathur.education.Route
+import com.vayunmathur.education.util.EducationViewModel
+import com.vayunmathur.education.util.LocalNarrator
+import com.vayunmathur.library.ui.IconNavigation
+import com.vayunmathur.library.util.NavBackStack
+
+/** K-2 lesson: two big, narrated tiles — Watch a video, then Play the questions. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun K2LessonPage(backStack: NavBackStack<Route>, viewModel: EducationViewModel, lessonId: String) {
+    val content = viewModel.content
+    val lesson = content.lesson(lessonId)
+    val narrator = LocalNarrator.current
+
+    LaunchedEffect(lessonId) { narrator?.speak(lesson?.title.orEmpty()) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(lesson?.title ?: "Lesson") },
+                navigationIcon = { IconNavigation(backStack) },
+            )
+        },
+    ) { padding ->
+        if (lesson == null) {
+            MissingContent(padding, "Let's go back.")
+            return@Scaffold
+        }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
+        ) {
+            lesson.videos.firstOrNull()?.let { video ->
+                K2BigTile(
+                    emoji = "📺",
+                    label = "Watch",
+                    color = Color(0xFF3B82F6),
+                    onClick = {
+                        narrator?.stop()
+                        backStack.add(Route.VideoPlayer(video.youtubeId, video.title))
+                    },
+                )
+            }
+            lesson.exercise?.let { exercise ->
+                K2BigTile(
+                    emoji = "🎮",
+                    label = "Play",
+                    color = Color(0xFF22C55E),
+                    onClick = {
+                        narrator?.stop()
+                        backStack.add(Route.K2Quiz(exercise.id))
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun K2BigTile(emoji: String, label: String, color: Color, onClick: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = color),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(emoji, fontSize = 72.sp)
+            Text(
+                label,
+                style = MaterialTheme.typography.headlineMedium,
+                color = Color.White,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}

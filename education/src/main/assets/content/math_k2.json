@@ -1,0 +1,135 @@
+{
+  "id": "math-k2-sample",
+  "name": "Kindergarten Math (K-2)",
+  "version": 1,
+  "skills": [
+    { "id": "skill.k2.count", "subject": "MATH", "name": "Counting to 10" },
+    { "id": "skill.k2.compare", "subject": "MATH", "name": "More and fewer" },
+    { "id": "skill.k2.shapes", "subject": "MATH", "name": "Basic shapes" }
+  ],
+  "courses": [
+    {
+      "id": "course.k-math",
+      "subject": "MATH",
+      "title": "Counting and shapes",
+      "description": "Count, compare, and find shapes.",
+      "gradeLevel": 0,
+      "units": [
+        {
+          "id": "unit.k-counting",
+          "title": "Counting",
+          "description": "Count things and find the number.",
+          "lessons": [
+            {
+              "id": "lesson.k-count",
+              "title": "Count to 5",
+              "videos": [
+                { "youtubeId": "yt-placeholder-count", "title": "Let's count to 5", "durationSeconds": 150 }
+              ],
+              "exercise": {
+                "id": "ex.k-count",
+                "title": "Count with me",
+                "questionIds": ["q.k.count3", "q.k.count5", "q.k.more"]
+              }
+            }
+          ]
+        },
+        {
+          "id": "unit.k-shapes",
+          "title": "Shapes",
+          "description": "Find circles, squares, and triangles.",
+          "lessons": [
+            {
+              "id": "lesson.k-shapes",
+              "title": "Find the shape",
+              "videos": [
+                { "youtubeId": "yt-placeholder-shapes", "title": "Shapes all around", "durationSeconds": 150 }
+              ],
+              "exercise": {
+                "id": "ex.k-shapes",
+                "title": "Tap the shape",
+                "questionIds": ["q.k.circle", "q.k.triangle"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "type": "multiple_choice",
+      "id": "q.k.count3",
+      "skillId": "skill.k2.count",
+      "prompt": { "text": "How many apples? 🍎🍎🍎" },
+      "choices": [
+        { "text": "2" },
+        { "text": "3" },
+        { "text": "4" }
+      ],
+      "correctIndex": 1,
+      "explanation": "There are three apples.",
+      "bands": ["K2"],
+      "difficulty": 1
+    },
+    {
+      "type": "multiple_choice",
+      "id": "q.k.count5",
+      "skillId": "skill.k2.count",
+      "prompt": { "text": "How many stars? ⭐⭐⭐⭐⭐" },
+      "choices": [
+        { "text": "5" },
+        { "text": "3" },
+        { "text": "6" }
+      ],
+      "correctIndex": 0,
+      "explanation": "There are five stars.",
+      "bands": ["K2"],
+      "difficulty": 1
+    },
+    {
+      "type": "multiple_choice",
+      "id": "q.k.more",
+      "skillId": "skill.k2.compare",
+      "prompt": { "text": "Which group has MORE?" },
+      "choices": [
+        { "text": "🐟🐟" },
+        { "text": "🐟🐟🐟🐟" }
+      ],
+      "correctIndex": 1,
+      "explanation": "Four fish is more than two fish.",
+      "bands": ["K2"],
+      "difficulty": 1
+    },
+    {
+      "type": "multiple_choice",
+      "id": "q.k.circle",
+      "skillId": "skill.k2.shapes",
+      "prompt": { "text": "Tap the circle." },
+      "choices": [
+        { "text": "🔺" },
+        { "text": "⬛" },
+        { "text": "🔵" }
+      ],
+      "correctIndex": 2,
+      "explanation": "🔵 is the circle.",
+      "bands": ["K2"],
+      "difficulty": 1
+    },
+    {
+      "type": "multiple_choice",
+      "id": "q.k.triangle",
+      "skillId": "skill.k2.shapes",
+      "prompt": { "text": "Tap the triangle." },
+      "choices": [
+        { "text": "🔺" },
+        { "text": "🔵" },
+        { "text": "⬛" }
+      ],
+      "correctIndex": 0,
+      "explanation": "🔺 is the triangle.",
+      "bands": ["K2"],
+      "difficulty": 1
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -19,6 +20,9 @@ import com.vayunmathur.education.data.LearnerDao
 import com.vayunmathur.education.data.SkillProgressDao
 import com.vayunmathur.education.ui.CoursePage
 import com.vayunmathur.education.ui.HomePage
+import com.vayunmathur.education.ui.K2LessonPage
+import com.vayunmathur.education.ui.K2QuizPage
+import com.vayunmathur.education.ui.K2RewardPage
 import com.vayunmathur.education.ui.LessonPage
 import com.vayunmathur.education.ui.OnboardingPage
 import com.vayunmathur.education.ui.ParentGatePage
@@ -29,6 +33,8 @@ import com.vayunmathur.education.ui.UnitPage
 import com.vayunmathur.education.ui.VideoPlayerPage
 import com.vayunmathur.education.util.EducationViewModel
 import com.vayunmathur.education.util.EducationViewModelFactory
+import com.vayunmathur.education.util.LocalNarrator
+import com.vayunmathur.education.util.rememberNarrator
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.library.util.DialogPage
 import com.vayunmathur.library.util.MainNavigation
@@ -68,7 +74,9 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             DynamicTheme {
-                if (ready.value) RootNavigation(viewModel)
+                CompositionLocalProvider(LocalNarrator provides rememberNarrator()) {
+                    if (ready.value) RootNavigation(viewModel)
+                }
             }
         }
     }
@@ -88,6 +96,12 @@ sealed interface Route : NavKey {
     data class Quiz(val exerciseId: String) : Route
     @Serializable
     data class VideoPlayer(val youtubeId: String, val title: String) : Route
+    @Serializable
+    data class K2Lesson(val lessonId: String) : Route
+    @Serializable
+    data class K2Quiz(val exerciseId: String) : Route
+    @Serializable
+    data class K2Reward(val stars: Int) : Route
     @Serializable
     data class Results(val total: Int, val correct: Int, val stars: Int) : Route
     @Serializable
@@ -118,6 +132,9 @@ fun MainGraph(viewModel: EducationViewModel) {
         entry<Route.LessonScreen> { LessonPage(backStack, viewModel, it.lessonId) }
         entry<Route.Quiz> { QuizPage(backStack, viewModel, it.exerciseId) }
         entry<Route.VideoPlayer> { VideoPlayerPage(backStack, it.youtubeId, it.title) }
+        entry<Route.K2Lesson> { K2LessonPage(backStack, viewModel, it.lessonId) }
+        entry<Route.K2Quiz> { K2QuizPage(backStack, viewModel, it.exerciseId) }
+        entry<Route.K2Reward> { K2RewardPage(backStack, viewModel, it.stars) }
         entry<Route.Results> { ResultsPage(backStack, viewModel, it.total, it.correct, it.stars) }
         entry<Route.ParentGate>(metadata = DialogPage()) { ParentGatePage(backStack, viewModel) }
         entry<Route.Parent> { ParentPage(backStack, viewModel) }
