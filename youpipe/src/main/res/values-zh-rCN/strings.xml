@@ -90,4 +90,8 @@
     <string name="action_remove">移除</string>
     <string name="action_unblock">取消屏蔽</string>
     <string name="action_unmute">取消屏蔽</string>
+    <string name="label_youtube_content">YouTube 内容</string>
+    <string name="label_youtube_language">内容语言</string>
+    <string name="label_youtube_language_description">视频标题、描述、评论和搜索结果的语言</string>
+    <string name="label_system_default">系统默认</string>
 </resources>
