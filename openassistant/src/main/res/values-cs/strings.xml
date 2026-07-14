@@ -6,4 +6,12 @@
     <string name="mic_error_format">Chyba mikrofonu: %1$s</string>
     <string name="new_conversation">Nová konverzace</string>
     <string name="error_prefix">Chyba: %1$s</string>
+    <string name="app_name">OpenAsistent</string>
+    <string name="perm_desc_inference">Umožňuje ostatním aplikacím přístup k inferenční službě AI na zařízení pro extrakci strukturovaných dat.</string>
+    <string name="inference_service">Inferenční služba</string>
+    <string name="processing_ai_inference">Zpracování AI inference…</string>
+    <string name="error_request_expired">Požadavek ve frontě vypršel</string>
+    <string name="error_inference_timeout">Časový limit inference vypršel</string>
+    <string name="error_ai_engine_failed">Selhal AI engine</string>
+    <string name="error_ai_json_schema_mismatch">AI se nepodařilo vrátit platný JSON odpovídající schématu.</string>
 </resources>
