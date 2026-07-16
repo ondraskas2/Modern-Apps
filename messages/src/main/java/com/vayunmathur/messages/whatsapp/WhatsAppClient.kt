@@ -1,6 +1,8 @@
 package com.vayunmathur.messages.whatsapp
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.util.Base64
 import android.util.Log
 import com.vayunmathur.messages.data.MessageSource
@@ -111,6 +113,12 @@ object WhatsAppClient {
     private val knownGroups: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
+    // True while a connect() attempt is actively setting up / handshaking, so the network-available
+    // callback doesn't tear down an in-progress attempt (it fires right after registration).
+    private val connectInProgress = AtomicBoolean(false)
+    // Watches for the network coming back so we can reconnect immediately instead of waiting out
+    // the backoff (or staying dead after a long offline stretch).
+    private var connectivityCallback: ConnectivityManager.NetworkCallback? = null
     private val pollSecrets = ConcurrentHashMap<String, ByteArray>()
     // Cached media upload connection (host, auth, expiryEpochMs) from the w:m media_conn IQ.
     private var mediaConnCache: Triple<String, String, Long>? = null
@@ -138,7 +146,6 @@ object WhatsAppClient {
     // receipts (the user turned them off).
     @Volatile private var readReceiptsEnabled = true
 
-    private const val MAX_RECONNECT_ATTEMPTS = 10
     private const val INITIAL_RECONNECT_DELAY_MS = 1000L
     private const val MAX_RECONNECT_DELAY_MS = 60_000L
     private const val MAX_FILE_SIZE = 50L * 1024 * 1024
@@ -161,6 +168,7 @@ object WhatsAppClient {
             if (auth != null) {
                 authData = auth
                 _state.value = State.Connecting
+                registerNetworkMonitor()
             } else {
                 _state.value = State.NeedsSetup
             }
@@ -190,6 +198,7 @@ object WhatsAppClient {
         qrRotateJob?.cancel()
         reconnectJob?.cancel()
         reconnectAttempts = 0
+        unregisterNetworkMonitor()
         webSocket?.disconnect()
         webSocket = null
         nameCache.clear()
@@ -199,18 +208,18 @@ object WhatsAppClient {
     }
 
     private fun scheduleReconnect() {
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            Log.e(TAG, "Max reconnection attempts ($MAX_RECONNECT_ATTEMPTS) reached")
-            _state.value = State.Disconnected("Max reconnection attempts reached")
-            return
-        }
+        // Never permanently give up: a companion device must keep retrying so it recovers after a
+        // long offline stretch (device asleep, no Wi-Fi/data) without a manual app restart. The
+        // backoff is capped, and registerNetworkMonitor() short-circuits the wait when the network
+        // actually returns.
+        if (suppressReconnect || authData == null) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
-            val delayMs = minOf(
-                INITIAL_RECONNECT_DELAY_MS * (1L shl reconnectAttempts),
-                MAX_RECONNECT_DELAY_MS
-            )
-            Log.i(TAG, "Reconnecting in ${delayMs}ms (attempt ${reconnectAttempts + 1}/$MAX_RECONNECT_ATTEMPTS)")
+            // Exponential backoff capped at MAX_RECONNECT_DELAY_MS. Cap the shift too so the left
+            // shift can't overflow/wrap once attempts grow large.
+            val shift = reconnectAttempts.coerceAtMost(16)
+            val delayMs = minOf(INITIAL_RECONNECT_DELAY_MS shl shift, MAX_RECONNECT_DELAY_MS)
+            Log.i(TAG, "Reconnecting in ${delayMs}ms (attempt ${reconnectAttempts + 1})")
             _state.value = State.Connecting
             delay(delayMs)
             reconnectAttempts++
@@ -221,6 +230,52 @@ object WhatsAppClient {
                 Log.e(TAG, "Reconnection failed", e)
                 scheduleReconnect()
             }
+        }
+    }
+
+    /**
+     * Register a default-network callback so a returning network triggers an immediate reconnect,
+     * instead of waiting out the (up to 60s) backoff or staying disconnected indefinitely. Idempotent.
+     */
+    private fun registerNetworkMonitor() {
+        if (connectivityCallback != null) return
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (authData == null || suppressReconnect) return
+                if (_state.value is State.Connected) return
+                if (connectInProgress.get()) return
+                WhatsAppDiag.log(TAG, "network available — reconnecting now")
+                reconnectAttempts = 0
+                reconnectJob?.cancel()
+                reconnectJob = scope.launch {
+                    val auth = authData ?: return@launch
+                    try {
+                        connect(auth)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "reconnect on network-available failed", e)
+                        scheduleReconnect()
+                    }
+                }
+            }
+        }
+        connectivityCallback = cb
+        try {
+            cm.registerDefaultNetworkCallback(cb)
+        } catch (e: Exception) {
+            Log.e(TAG, "registerDefaultNetworkCallback failed", e)
+            connectivityCallback = null
+        }
+    }
+
+    private fun unregisterNetworkMonitor() {
+        val cb = connectivityCallback ?: return
+        connectivityCallback = null
+        try {
+            (appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)
+                ?.unregisterNetworkCallback(cb)
+        } catch (e: Exception) {
+            Log.e(TAG, "unregisterNetworkCallback failed", e)
         }
     }
 
@@ -816,6 +871,8 @@ object WhatsAppClient {
     private suspend fun connect(auth: WhatsAppAuthData) {
         _state.value = State.Connecting
         suppressReconnect = false
+        connectInProgress.set(true)
+        registerNetworkMonitor()
         // Ensure no previous socket (provisioning or a prior login attempt) is still alive,
         // otherwise overlapping sessions make the server reject us with <stream:error><conflict>.
         teardownSocket()
@@ -829,10 +886,12 @@ object WhatsAppClient {
                     when (state) {
                         is WebViewWebSocket.ConnectionState.Connected -> {
                             WhatsAppDiag.log(TAG, "login socket: Noise connected, awaiting <success>")
+                            connectInProgress.set(false)
                             ensureE2E(auth)
                         }
                         is WebViewWebSocket.ConnectionState.Disconnected -> {
                             WhatsAppDiag.log(TAG, "login socket: Disconnected (${state.reason})")
+                            connectInProgress.set(false)
                             if (authData != null && !suppressReconnect) {
                                 scheduleReconnect()
                             } else {
