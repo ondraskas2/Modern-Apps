@@ -84,4 +84,14 @@
     <string name="action_unpin">Sgancia</string>
     <string name="action_remove">Rimuovi</string>
     <string name="action_unblock">Sblocca</string>
+    <string name="label_youtube_content">Contenuti YouTube</string>
+    <string name="label_youtube_language">Lingua contenuti</string>
+    <string name="label_youtube_language_description">Lingua per titoli dei video, descrizioni, commenti e risultati di ricerca</string>
+    <string name="label_system_default">Predefinita di sistema</string>
+    <string name="label_hide_live">Nascondi live/durata sconosciuta</string>
+    <string name="preset_mostly_subscriptions">Soprattutto iscrizioni</string>
+    <string name="preset_deep_dives">Approfondimenti</string>
+    <string name="label_no_channels">Nessun canale correlato rilevato</string>
+    <string name="label_no_topics">Nessun argomento correlato rilevato</string>
+    <string name="action_unmute">Attiva audio</string>
 </resources>
