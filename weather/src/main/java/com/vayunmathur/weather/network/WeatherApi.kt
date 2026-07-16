@@ -102,6 +102,22 @@ object WeatherApi {
     }
 
     /**
+     * Fetch just the current temperature (°C) for a coordinate. Used by the
+     * city-search list to show the current temp next to each result. Requests
+     * a single variable to keep these on-demand lookups lightweight.
+     */
+    suspend fun currentTemperature(latitude: Double, longitude: Double): Double? {
+        val url = buildString {
+            append(FORECAST_BASE)
+            append("?latitude=").append(latitude)
+            append("&longitude=").append(longitude)
+            append("&current=temperature_2m")
+            append("&forecast_days=1")
+        }
+        return NetworkClient.getJson<CurrentTemperatureResponse>(url).current?.temperature
+    }
+
+    /**
      * Resolve the IANA time zone for a coordinate via Open-Meteo's
      * `timezone=auto`. Requests a single trivial variable (the endpoint rejects
      * variable-less requests) and reads only the timezone fields. Used by the

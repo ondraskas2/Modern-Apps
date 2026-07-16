@@ -37,6 +37,21 @@ data class RegionTimezone(
     @SerialName("utc_offset_seconds") val utcOffsetSeconds: Int = 0,
 )
 
+/**
+ * Minimal Open-Meteo `/v1/forecast` response used to show the current
+ * temperature next to a city-search result. Requests only `temperature_2m`
+ * so the per-result lookups stay cheap.
+ */
+@Serializable
+data class CurrentTemperatureResponse(
+    val current: CurrentTemperature? = null,
+)
+
+@Serializable
+data class CurrentTemperature(
+    @SerialName("temperature_2m") val temperature: Double,
+)
+
 @Serializable
 data class Minutely15(
     val time: List<String> = emptyList(),

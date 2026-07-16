@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,6 +65,9 @@ import com.vayunmathur.weather.ui.components.LocationItem
 import com.vayunmathur.weather.ui.components.UseDeviceLocationCard
 import com.vayunmathur.weather.util.LocationProvider
 import com.vayunmathur.weather.util.WeatherViewModel
+import com.vayunmathur.weather.util.formatTemperatureCompact
+import com.vayunmathur.weather.util.rememberTempUnit
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -355,6 +359,8 @@ fun SearchLocationPage(backStack: NavBackStack<Route>, viewModel: WeatherViewMod
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<GeocodingResult>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
+    var temps by remember { mutableStateOf<Map<Long, Double?>>(emptyMap()) }
+    val tempUnit = rememberTempUnit()
 
     LaunchedEffect(Unit) {
         snapshotFlow { query }
@@ -373,6 +379,20 @@ fun SearchLocationPage(backStack: NavBackStack<Route>, viewModel: WeatherViewMod
                 }
             }
             .collect { results = it }
+    }
+
+    LaunchedEffect(results) {
+        temps = emptyMap()
+        coroutineScope {
+            results.forEach { r ->
+                launch {
+                    val temp = runCatching {
+                        WeatherApi.currentTemperature(r.latitude, r.longitude)
+                    }.getOrNull()
+                    temps = temps + (r.id to temp)
+                }
+            }
+        }
     }
 
     androidx.compose.material3.Surface(
@@ -428,6 +448,22 @@ fun SearchLocationPage(backStack: NavBackStack<Route>, viewModel: WeatherViewMod
                                     supportingContent = {
                                         val parts = listOfNotNull(r.admin1, r.country).filter { it.isNotBlank() }
                                         if (parts.isNotEmpty()) Text(parts.joinToString(", "))
+                                    },
+                                    trailingContent = {
+                                        if (temps.containsKey(r.id)) {
+                                            temps[r.id]?.let { temp ->
+                                                Text(
+                                                    formatTemperatureCompact(temp, tempUnit),
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                )
+                                            }
+                                        } else {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                            )
+                                        }
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
