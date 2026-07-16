@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="ok">OK</string>
     <string name="app_name">PDF</string>
-    <string name="pdf_viewer_title">Przeglądarka plików PDF</string>
     <string name="search_label">Znajdź</string>
-    <string name="search_result_counter">%1$d z %2$d</string>
-    <string name="password_dialog_title">Wymagane hasło</string>
-    <string name="password_dialog_message">Ten plik PDF jest chroniony hasłem. Proszę wprowadzić hasło.</string>
-    <string name="password_label">Hasło</string>
-    <string name="incorrect_password">Nieprawidłowe hasło. Spróbuj ponownie.</string>
     <string name="open_pdf">Otwórz plik PDF</string>
     <string name="capture_pdf">Zapisz jako PDF</string>
     <string name="capture_pdf_title">Zapisz PDF</string>
@@ -23,7 +16,6 @@
     <string name="pdf_save">Zapisz</string>
     <string name="pdf_save_as_copy">Zapisz kopię</string>
     <string name="auto_detect">Automatyczne wykrywanie</string>
-    <string name="open_pdf_safe">Otwórz PDF (bezpieczny)</string>
     <string name="safe_pdf_viewer_title">Przeglądarka PDF (bezpieczna)</string>
     <string name="safe_pdf_error">Tego pliku PDF nie można otworzyć za pomocą bezpiecznej przeglądarki. Możliwe, że jest zaszyfrowany lub korzysta z nieobsługiwanych funkcji.</string>
 </resources>

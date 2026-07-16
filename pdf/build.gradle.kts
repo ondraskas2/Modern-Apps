@@ -104,11 +104,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 }
 
 dependencies {
-    // pdf
-    implementation(libs.androidx.pdf.viewer)
-    implementation(libs.androidx.pdf.compose)
-    implementation(libs.androidx.pdf.document.service)
-
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)

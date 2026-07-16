@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="ok">OK</string>
     <string name="app_name">PDF</string>
-    <string name="pdf_viewer_title">Visualizzatore PDF</string>
     <string name="search_label">Trova</string>
-    <string name="search_result_counter">%1$d di %2$d</string>
-    <string name="password_dialog_title">Password necessaria</string>
-    <string name="password_dialog_message">Questo PDF è protetto tramite password. Inserisci la password.</string>
-    <string name="password_label">Password</string>
-    <string name="incorrect_password">Password errata. Riprova.</string>
     <string name="open_pdf">Apri PDF</string>
     <string name="capture_pdf">Acquisisci PDF</string>
     <string name="capture_pdf_title">Acquisizione PDF</string>
@@ -23,7 +16,6 @@
     <string name="auto_detect">Rilevamento automatico</string>
     <string name="pdf_save">Salva</string>
     <string name="pdf_save_as_copy">Salva come copia</string>
-    <string name="open_pdf_safe">Apri PDF (sicuro)</string>
     <string name="safe_pdf_viewer_title">Visualizzatore PDF (sicuro)</string>
     <string name="safe_pdf_error">Impossibile aprire questo PDF con il visualizzatore sicuro. Potrebbe essere crittografato o utilizzare funzionalità non supportate.</string>
 </resources>

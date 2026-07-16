@@ -5,7 +5,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ext.SdkExtensions
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,17 +15,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,13 +29,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.ui.DynamicTheme
 import com.vayunmathur.pdf.ui.CapturePdfScreen
 import com.vayunmathur.pdf.ui.CutGlueScreen
-import com.vayunmathur.pdf.ui.PdfViewerScreen
 import com.vayunmathur.pdf.ui.SafePdfViewerScreen
 import com.vayunmathur.pdf.util.PdfViewModel
 
@@ -69,29 +60,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val startedWithIntent = remember { intentData != null }
-            var data by rememberSaveable { mutableStateOf(intentData) }
-            var safeData: Uri? by rememberSaveable { mutableStateOf(null) }
-            var password: String? by rememberSaveable { mutableStateOf(null) }
+            var data: Uri? by rememberSaveable { mutableStateOf(intentData) }
             var isCapturing by rememberSaveable { mutableStateOf(false) }
             var isCutGlue by rememberSaveable { mutableStateOf(false) }
 
-            val pdfDocument by pdfViewModel.pdfDocument.collectAsState()
-            val passwordRequired by pdfViewModel.passwordRequired.collectAsState()
-            val passwordError by pdfViewModel.passwordError.collectAsState()
-
             val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let { data = it }
-            }
-
-            val safeFilePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                uri?.let { safeData = it }
-            }
-
-            LaunchedEffect(data, password) {
-                val uri = data
-                if (uri != null) {
-                    pdfViewModel.loadDocument(uri, password)
-                }
             }
 
             DynamicTheme {
@@ -99,20 +73,8 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    if (safeData != null) {
-                        SafePdfViewerScreen(
-                            uri = safeData!!,
-                            onBack = { safeData = null }
-                        )
-                    } else if (isCutGlue) {
+                    if (isCutGlue) {
                         CutGlueScreen(onBack = { isCutGlue = false })
-                    } else if (data == null && !isCapturing) {
-                        InitialScreen(
-                            onOpenPdf = { filePickerLauncher.launch(arrayOf("application/pdf")) },
-                            onOpenPdfSafe = { safeFilePickerLauncher.launch(arrayOf("application/pdf")) },
-                            onCapturePdf = { isCapturing = true },
-                            onCutGlue = { isCutGlue = true }
-                        )
                     } else if (isCapturing) {
                         CapturePdfScreen(
                             viewModel = pdfViewModel,
@@ -122,34 +84,18 @@ class MainActivity : ComponentActivity() {
                                 isCapturing = false
                             }
                         )
-                    } else {
-                        val onBack = {
-                            if (startedWithIntent) {
-                                finish()
-                            } else {
-                                data = null
-                                password = null
-                                pdfViewModel.clearDocument()
+                    } else if (data != null) {
+                        SafePdfViewerScreen(
+                            uri = data!!,
+                            onBack = {
+                                if (startedWithIntent) finish() else data = null
                             }
-                        }
-
-                        pdfDocument?.let {
-                            PdfViewerScreen(
-                                pdfDocument = it,
-                                pdfName = data?.lastPathSegment ?: "pdf",
-                                viewModel = pdfViewModel,
-                                onBack = onBack
-                            )
-                        } ?: run {
-                            BackHandler { onBack() }
-                            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
-                        }
-                    }
-
-                    if (passwordRequired) {
-                        PasswordDialog(
-                            errorMessage = passwordError,
-                            onPasswordEntered = { password = it }
+                        )
+                    } else {
+                        InitialScreen(
+                            onOpenPdf = { filePickerLauncher.launch(arrayOf("application/pdf")) },
+                            onCapturePdf = { isCapturing = true },
+                            onCutGlue = { isCutGlue = true }
                         )
                     }
                 }
@@ -159,14 +105,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun InitialScreen(onOpenPdf: () -> Unit, onOpenPdfSafe: () -> Unit, onCapturePdf: () -> Unit, onCutGlue: () -> Unit) {
+fun InitialScreen(onOpenPdf: () -> Unit, onCapturePdf: () -> Unit, onCutGlue: () -> Unit) {
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Button(onClick = onOpenPdf, Modifier.padding(16.dp)) {
                 Text(stringResource(R.string.open_pdf))
-            }
-            Button(onClick = onOpenPdfSafe, Modifier.padding(16.dp)) {
-                Text(stringResource(R.string.open_pdf_safe))
             }
             Button(onClick = onCapturePdf, Modifier.padding(16.dp)) {
                 Text(stringResource(R.string.capture_pdf))
@@ -176,42 +119,6 @@ fun InitialScreen(onOpenPdf: () -> Unit, onOpenPdfSafe: () -> Unit, onCapturePdf
             }
         }
     }
-}
-
-@Composable
-fun PasswordDialog(
-    onPasswordEntered: (String) -> Unit,
-    errorMessage: String? = null
-) {
-    var password by rememberSaveable { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = {},
-        title = { Text(stringResource(R.string.password_dialog_title)) },
-        text = {
-            Column {
-                Text(stringResource(R.string.password_dialog_message))
-                if (errorMessage != null) {
-                    Text(errorMessage, color = MaterialTheme.colorScheme.error)
-                }
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(stringResource(R.string.password_label)) },
-                    singleLine = true,
-                    isError = errorMessage != null,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onPasswordEntered(password) }) {
-                Text(stringResource(R.string.ok))
-            }
-        },
-        dismissButton = null
-    )
 }
 
 fun isAdvancedPdfSupported(): Boolean {
