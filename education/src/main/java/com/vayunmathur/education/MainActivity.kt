@@ -28,7 +28,6 @@ import com.vayunmathur.education.ui.K2LessonPage
 import com.vayunmathur.education.ui.K2QuizPage
 import com.vayunmathur.education.ui.K2RewardPage
 import com.vayunmathur.education.ui.LessonPage
-import com.vayunmathur.education.ui.OnboardingPage
 import com.vayunmathur.education.ui.ParentGatePage
 import com.vayunmathur.education.ui.ParentPage
 import com.vayunmathur.education.ui.QuizPage
@@ -117,16 +116,12 @@ sealed interface Route : NavKey {
     data object Badges : Route
 }
 
-/** Chooses onboarding vs. the main graph based on the (single) learner's state. */
+/** Waits for the (single) learner row to load, then opens the catalog. */
 @Composable
 fun RootNavigation(viewModel: EducationViewModel) {
     val learner by viewModel.learner.collectAsStateWithLifecycle()
-    val l = learner ?: return
-    if (!l.onboarded) {
-        OnboardingPage(viewModel)
-    } else {
-        MainGraph(viewModel)
-    }
+    learner ?: return
+    MainGraph(viewModel)
 }
 
 @Composable

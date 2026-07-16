@@ -78,17 +78,6 @@ class EducationViewModel(
 
     // --- Onboarding + parent edits ---------------------------------------
 
-    fun completeOnboarding(name: String, gradeLevel: Int, pin: String) {
-        updateLearner {
-            it.copy(
-                name = name.trim(),
-                gradeLevel = gradeLevel,
-                pinHash = hashPin(pin),
-                onboarded = true,
-            )
-        }
-    }
-
     fun setName(name: String) = updateLearner { it.copy(name = name.trim()) }
     fun setAvatar(avatar: String) = updateLearner { it.copy(avatar = avatar) }
     fun setGrade(gradeLevel: Int) = updateLearner { it.copy(gradeLevel = gradeLevel) }

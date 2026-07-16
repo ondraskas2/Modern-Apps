@@ -49,7 +49,7 @@ fun ScholarHomePage(backStack: NavBackStack<Route>, viewModel: EducationViewMode
                     IconButton(onClick = { backStack.add(Route.Badges) }) {
                         Icon(Icons.Filled.EmojiEvents, "Badges")
                     }
-                    IconButton(onClick = { backStack.add(Route.ParentGate) }) {
+                    IconButton(onClick = { openParentArea(backStack, viewModel) }) {
                         IconSettings()
                     }
                 },
@@ -149,4 +149,14 @@ fun navigateToModule(backStack: NavBackStack<Route>, type: ModuleType?, moduleId
         ModuleType.LESSON -> backStack.add(Route.LessonScreen(moduleId))
         null -> {}
     }
+}
+
+/**
+ * Opens the parent area. Until a PIN has been set, this goes straight to the
+ * parent settings (where the PIN can be created); once a PIN exists the entry
+ * is protected by the PIN gate.
+ */
+fun openParentArea(backStack: NavBackStack<Route>, viewModel: EducationViewModel) {
+    val route = if (viewModel.learner.value?.pinHash == null) Route.Parent else Route.ParentGate
+    backStack.add(route)
 }

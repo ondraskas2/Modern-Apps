@@ -9,19 +9,13 @@ import com.vayunmathur.education.util.EducationViewModel
 import com.vayunmathur.library.util.NavBackStack
 
 /**
- * Band dispatchers. The same content spine is rendered by a different
- * "shell" per band. Home and Course are the divergent entry surfaces; deeper
- * screens (Unit/Lesson/Quiz/Results) are shared by the Explorer and Scholar
- * shells. K-2 has its own fully bespoke, audio-first flow (see K2* screens)
- * and does not use the shared Course/Unit/Lesson screens.
+ * Band dispatchers. The catalog (Home) is a single, unified list of every
+ * course and is shown to everyone. Deeper screens (Course/Unit/Lesson/Quiz/
+ * Results) still adapt per band: Course diverges into Explorer/Scholar shells.
  */
 @Composable
 fun HomePage(backStack: NavBackStack<Route>, viewModel: EducationViewModel) {
-    when (activeBand(viewModel)) {
-        Band.SCHOLAR -> ScholarHomePage(backStack, viewModel)
-        Band.ELEMENTARY -> ExplorerHomePage(backStack, viewModel)
-        Band.K2 -> K2HomePage(backStack, viewModel)
-    }
+    ScholarHomePage(backStack, viewModel)
 }
 
 @Composable
