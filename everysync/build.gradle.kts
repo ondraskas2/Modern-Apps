@@ -8,13 +8,31 @@ android {
     defaultConfig {
         applicationId = "com.vayunmathur.everysync"
 
-        // OAuth2 public-client IDs (PKCE, no secret shipped). Registered clients
-        // must use the redirect scheme "com.vayunmathur.everysync:/oauth". Empty
-        // placeholders let the module compile; provide real IDs to test Google /
-        // Withings integrations.
-        buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"${project.findProperty("EVERYSYNC_GOOGLE_CLIENT_ID") ?: ""}\"")
-        buildConfigField("String", "WITHINGS_OAUTH_CLIENT_ID", "\"${project.findProperty("EVERYSYNC_WITHINGS_CLIENT_ID") ?: ""}\"")
-        buildConfigField("String", "WITHINGS_OAUTH_CLIENT_SECRET", "\"${project.findProperty("EVERYSYNC_WITHINGS_CLIENT_SECRET") ?: ""}\"")
+        // OAuth2 configuration. These are ALL public values (client IDs are
+        // identifiers, not secrets) so they can be committed and the build stays
+        // reproducible. Override per-build with a -PEVERYSYNC_* gradle property.
+        // No client secret is ever shipped: confidential secrets (Withings,
+        // optionally Samsung) live behind a *_TOKEN_PROXY_URL backend relay.
+        val googleClientId = (project.findProperty("EVERYSYNC_GOOGLE_CLIENT_ID")
+            ?: "827025129169-1nm22b5uec77b3b7e0qjl0lah29g82h7.apps.googleusercontent.com").toString()
+        val withingsClientId = project.findProperty("EVERYSYNC_WITHINGS_CLIENT_ID") ?: ""
+        val withingsTokenProxy = project.findProperty("EVERYSYNC_WITHINGS_TOKEN_PROXY_URL") ?: ""
+
+        // Google installed-app PKCE uses the reverse-DNS custom scheme derived from
+        // the client ID (e.g. com.googleusercontent.apps.<id>:/oauth2redirect).
+        val googleReverse = if (googleClientId.endsWith(".apps.googleusercontent.com"))
+            "com.googleusercontent.apps." + googleClientId.removeSuffix(".apps.googleusercontent.com")
+        else ""
+        val googleRedirectUri = if (googleReverse.isNotBlank()) "$googleReverse:/oauth2redirect"
+        else "com.vayunmathur.everysync:/oauth"
+
+        buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$googleClientId\"")
+        buildConfigField("String", "GOOGLE_REDIRECT_URI", "\"$googleRedirectUri\"")
+        buildConfigField("String", "WITHINGS_OAUTH_CLIENT_ID", "\"$withingsClientId\"")
+        buildConfigField("String", "WITHINGS_TOKEN_PROXY_URL", "\"$withingsTokenProxy\"")
+
+        // Register the Google reverse-DNS redirect scheme for OAuthCallbackActivity.
+        manifestPlaceholders["googleRedirectScheme"] = googleReverse.ifBlank { "com.vayunmathur.everysync.oauthunused" }
     }
     buildFeatures {
         buildConfig = true

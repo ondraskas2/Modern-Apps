@@ -33,6 +33,7 @@ object OAuthManager {
     suspend fun start(context: Context, providerId: String) {
         val provider = ProviderRegistry.get(providerId) ?: return
         val config = provider.oauthConfig() ?: return
+        if (!config.hasClientId) return // No client ID configured for this build.
         val verifier = randomUrlSafe(64)
         val challenge = codeChallenge(verifier)
         val state = randomUrlSafe(24)
@@ -41,7 +42,7 @@ object OAuthManager {
 
         val url = Uri.parse(config.authEndpoint).buildUpon()
             .appendQueryParameter("client_id", config.clientId)
-            .appendQueryParameter("redirect_uri", OAuthConfig.REDIRECT_URI)
+            .appendQueryParameter("redirect_uri", config.redirectUri)
             .appendQueryParameter("response_type", "code")
             .appendQueryParameter("scope", config.scopes.joinToString(" "))
             .appendQueryParameter("code_challenge", challenge)
@@ -104,11 +105,10 @@ object OAuthManager {
             put("client_id", config.clientId)
             put("grant_type", "refresh_token")
             put("refresh_token", refreshToken)
-            if (config.clientSecret.isNotBlank()) put("client_secret", config.clientSecret)
             // Withings requires an action param.
             if (config.tokenEndpoint.contains("withings")) put("action", "requesttoken")
         }
-        val parsed = postForm(config.tokenEndpoint, form) ?: return null
+        val parsed = postForm(config, form) ?: return null
         val updated = tokens.copy(
             accessToken = parsed.accessToken,
             refreshToken = parsed.refreshToken ?: tokens.refreshToken,
@@ -123,15 +123,18 @@ object OAuthManager {
             put("client_id", config.clientId)
             put("grant_type", "authorization_code")
             put("code", code)
-            put("redirect_uri", OAuthConfig.REDIRECT_URI)
+            put("redirect_uri", config.redirectUri)
             put("code_verifier", verifier)
-            if (config.clientSecret.isNotBlank()) put("client_secret", config.clientSecret)
             if (config.tokenEndpoint.contains("withings")) put("action", "requesttoken")
         }
-        return postForm(config.tokenEndpoint, form)
+        return postForm(config, form)
     }
 
-    private suspend fun postForm(endpoint: String, form: Map<String, String>): OAuthTokens? {
+    private suspend fun postForm(config: OAuthConfig, form: Map<String, String>): OAuthTokens? {
+        // Providers needing a confidential secret (Withings) go through a backend
+        // relay so the secret never ships in the build; everyone else hits the
+        // real token endpoint directly with PKCE.
+        val endpoint = config.tokenProxyUrl.ifBlank { config.tokenEndpoint }
         return try {
             val body = form.entries.joinToString("&") {
                 "${Uri.encode(it.key)}=${Uri.encode(it.value)}"

@@ -1,0 +1,62 @@
+package com.vayunmathur.everysync.provider.impl
+
+import android.content.Context
+import android.util.Log
+import com.vayunmathur.everysync.R
+import com.vayunmathur.everysync.auth.AccountConfig
+import com.vayunmathur.everysync.auth.OAuthConfig
+import com.vayunmathur.everysync.auth.OAuthManager
+import com.vayunmathur.everysync.auth.OAuthTokens
+import com.vayunmathur.everysync.provider.AuthType
+import com.vayunmathur.everysync.provider.DataType
+import com.vayunmathur.everysync.provider.SyncDirection
+import com.vayunmathur.everysync.provider.SyncProvider
+import com.vayunmathur.everysync.provider.SyncState
+import com.vayunmathur.everysync.remote.GoogleFitClient
+import com.vayunmathur.everysync.sink.HealthSink
+import com.vayunmathur.library.network.NetworkClient
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * Google Health via the Google Fitness REST API (OAuth PKCE). Pulls measurements
+ * into Health Connect. Pull-dominant — the cloud is the source of truth.
+ */
+class GoogleHealthProvider : SyncProvider {
+    override val id = "google_health"
+    override val displayName = "Google Health"
+    override val iconRes = R.drawable.ic_provider
+    override val authType = AuthType.OAUTH
+    override val capabilities = setOf(DataType.HEALTH)
+
+    override fun oauthConfig(): OAuthConfig = OAuthConfig.GOOGLE_FIT
+
+    override suspend fun resolveAccountName(context: Context, tokens: OAuthTokens): String {
+        return try {
+            val resp = NetworkClient.performRequest(
+                "https://www.googleapis.com/oauth2/v3/userinfo", "GET",
+                mapOf("Authorization" to "Bearer ${tokens.accessToken}"),
+            )
+            val email = (JSON.parseToJsonElement(resp.body) as? JsonObject)
+                ?.get("email")?.jsonPrimitive?.content
+            if (!email.isNullOrBlank()) "$email (Google Health)" else "Google Health"
+        } catch (e: Exception) {
+            Log.e(TAG, "resolveAccountName failed", e)
+            "Google Health"
+        }
+    }
+
+    override suspend fun sync(context: Context, config: AccountConfig, direction: SyncDirection) {
+        if (DataType.HEALTH !in config.enabledTypes || direction == SyncDirection.PUSH) return
+        val token = OAuthManager.validAccessToken(context, config.accountName, id) ?: return
+        val since = SyncState.get(context, config.accountName, "googlefit_since")?.toLongOrNull() ?: 0L
+        HealthSink.upsert(context, GoogleFitClient(token).getMeasurements(since))
+        SyncState.set(context, config.accountName, "googlefit_since", System.currentTimeMillis().toString())
+    }
+
+    companion object {
+        private const val TAG = "GoogleHealthProvider"
+        private val JSON = Json { ignoreUnknownKeys = true }
+    }
+}
