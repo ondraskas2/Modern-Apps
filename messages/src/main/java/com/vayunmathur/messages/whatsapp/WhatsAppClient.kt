@@ -43,6 +43,22 @@ object WhatsAppClient {
 
     private const val TAG = "WhatsAppClient"
 
+    // HistorySync.syncType values (ref whatsmeow HistorySync_HistorySyncType).
+    private const val SYNC_INITIAL_BOOTSTRAP = 0
+    private const val SYNC_ON_DEMAND = 6
+
+    // Number of older messages to request per on-demand page.
+    private const val ON_DEMAND_PAGE_SIZE = 50
+    // Safety cap on on-demand pages per chat so a misbehaving peer can't loop forever
+    // (ON_DEMAND_PAGE_SIZE * this ≈ upper bound on backfilled messages per chat).
+    private const val MAX_ON_DEMAND_PAGES_PER_CHAT = 400
+
+    // When true, on-demand history keeps paginating older messages until the phone reports
+    // end-of-history (an empty/anchor-only response). When false, only the recent pushed
+    // history is kept (no backfill of "not downloaded" messages).
+    @Volatile
+    var fullHistorySync: Boolean = true
+
     sealed interface State {
         data object Idle : State
         data object NeedsSetup : State
@@ -1974,12 +1990,17 @@ object WhatsAppClient {
                 "history sync: type=${hs.syncType} chunk=${hs.chunkOrder} conversations=${hs.conversationsCount} lidMaps=${hs.phoneNumberToLidMappingsCount} (blob=${raw.size}B inflated=${inflated.size}B)",
             )
 
+            // Backfill continues (paginates older messages) from the initial bootstrap and from
+            // each on-demand response, so full history is pulled page by page. RECENT/FULL/etc are
+            // terminal pushes and don't trigger further requests.
+            val requestMore = fullHistorySync &&
+                (hs.syncType == SYNC_INITIAL_BOOTSTRAP || hs.syncType == SYNC_ON_DEMAND)
             var emitted = 0
             for (conv in hs.conversationsList) {
                 val chatJid = conv.newJid.ifEmpty { conv.id }
                 WhatsAppDiag.log(TAG, "  conv '${conv.name}' ${chatJid} msgs=${conv.messagesCount}")
                 if (chatJid.isEmpty() || chatJid.startsWith("status@broadcast")) continue
-                emitted += emitHistoryConversation(conv, chatJid, hs.syncType == 0)
+                emitted += emitHistoryConversation(conv, chatJid, requestMore)
             }
             WhatsAppDiag.log(TAG, "history sync: emitted $emitted message(s)")
         } catch (e: Exception) {
@@ -2077,9 +2098,11 @@ object WhatsAppClient {
                 )
             )
         }
-        // Pull older messages on demand (only from the initial bootstrap, to avoid request loops).
-        // Fire-and-forget: the request fans out via usync (a slow IQ) and must NOT block the
-        // conversation backfill loop, or only the first chat would appear promptly.
+        // Pull the next older page on demand. Fire-and-forget: the request fans out via usync (a
+        // slow IQ) and must NOT block the conversation backfill loop, or only the first chat would
+        // appear promptly. Pagination walks backwards one page at a time — each on-demand response
+        // re-enters handleHistorySync with a new (older) oldest message, until the phone returns an
+        // empty/anchor-only chunk (msgs.isEmpty above → no further request), i.e. end of history.
         if (requestMore) {
             val oldest = msgs.minByOrNull { it.ts }
             if (oldest != null) {
@@ -2091,7 +2114,12 @@ object WhatsAppClient {
         return msgs.size
     }
 
-    private val onDemandRequested = java.util.Collections.synchronizedSet(HashSet<String>())
+    // Cursors ("chatJid|oldestMsgId") already requested, so a repeated response for the same anchor
+    // stops the walk instead of looping. Distinct (older) cursors are allowed through so pagination
+    // can continue.
+    private val onDemandRequested = Collections.synchronizedSet(HashSet<String>())
+    // Pages requested per chat, to bound pagination (see MAX_ON_DEMAND_PAGES_PER_CHAT).
+    private val onDemandPageCount = ConcurrentHashMap<String, Int>()
 
     /** Look up a device contact display name for an E.164 number (null if none / no permission). */
     private fun resolveDeviceContactName(phoneE164: String?): String? {
@@ -2113,8 +2141,9 @@ object WhatsAppClient {
 
     /**
      * Ask our own account to stream older history for a chat. Ref whatsmeow BuildHistorySyncRequest
-     * — a HISTORY_SYNC_ON_DEMAND peer-data-operation message sent E2E to self. Deduped per chat so
-     * the ON_DEMAND responses don't trigger further requests. Best-effort.
+     * — a HISTORY_SYNC_ON_DEMAND peer-data-operation message sent E2E to self. Deduped per
+     * (chat, oldest-message) cursor so a repeated/anchor-only response ends the walk, while genuinely
+     * older responses keep paginating. Bounded by MAX_ON_DEMAND_PAGES_PER_CHAT. Best-effort.
      */
     private suspend fun sendHistoryOnDemandRequest(
         chatJid: String,
@@ -2123,18 +2152,25 @@ object WhatsAppClient {
         oldestTsSec: Long,
     ) {
         if (oldestMsgId.isEmpty() || chatJid.isEmpty()) return
-        if (!onDemandRequested.add(chatJid)) return
+        // Stop if we've already asked for this exact cursor (prevents same-page loops).
+        if (!onDemandRequested.add("$chatJid|$oldestMsgId")) return
+        // Bound total pages per chat.
+        val pages = onDemandPageCount.merge(chatJid, 1, Int::plus) ?: 1
+        if (pages > MAX_ON_DEMAND_PAGES_PER_CHAT) {
+            WhatsAppDiag.log(TAG, "on-demand history: hit page cap for $chatJid, stopping")
+            return
+        }
         val auth = authData ?: return
         try {
             val ownUser = auth.wid.substringBefore("@").substringBefore(":").substringBefore(".")
             val ownJid = "$ownUser@s.whatsapp.net"
             val msg = WhatsAppProtocol.buildHistoryOnDemandRequest(
-                chatJid, oldestMsgId, oldestFromMe, oldestTsSec, 50,
+                chatJid, oldestMsgId, oldestFromMe, oldestTsSec, ON_DEMAND_PAGE_SIZE,
             )
             val id = WhatsAppProtocol.generateMessageId(auth.wid)
             val node = buildEncryptedMessageNode(ownJid, id, msg, "text") ?: return
             webSocket?.send(WhatsAppProtocol.encodeNode(node))
-            WhatsAppDiag.log(TAG, "on-demand history requested for $chatJid (oldest=$oldestMsgId)")
+            WhatsAppDiag.log(TAG, "on-demand history requested for $chatJid (page $pages, oldest=$oldestMsgId)")
         } catch (e: Exception) {
             WhatsAppDiag.log(TAG, "on-demand request failed: ${e.message}")
         }
