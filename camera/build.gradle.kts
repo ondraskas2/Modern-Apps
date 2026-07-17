@@ -26,5 +26,5 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.zxing.core)
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
-    implementation("org.opencv:opencv:4.10.0")
+    implementation("com.quickbirdstudios:opencv:4.5.3.0")
 }

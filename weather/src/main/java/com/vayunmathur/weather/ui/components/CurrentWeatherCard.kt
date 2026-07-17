@@ -52,7 +52,7 @@ fun CurrentWeatherCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             WeatherIconBox(
-                iconRes = condition.iconRes(isDay),
+                icon = condition.iconContent(isDay),
                 size = 32.dp,
                 tint = MaterialTheme.colorScheme.onSurface,
             )

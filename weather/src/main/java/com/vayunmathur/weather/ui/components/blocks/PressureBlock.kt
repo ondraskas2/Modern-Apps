@@ -4,7 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import com.vayunmathur.library.ui.MaterialTheme
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconPressure
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -64,7 +64,7 @@ fun PressureBlock(current: Current, pressureUnit: PressureUnit) {
         )
         Box(Modifier.align(Alignment.TopCenter)) {
             BlockHeader(
-                icon = { m, c -> Icon(painterResource(R.drawable.outline_pressure_24), null, m, c) },
+                icon = { m, c -> IconPressure(m, c) },
                 title = "Pressure",
                 topPadding = 38.dp,
             )

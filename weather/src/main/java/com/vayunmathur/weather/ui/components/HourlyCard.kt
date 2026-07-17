@@ -103,7 +103,7 @@ fun HourlyCard(
                         temperature = cell.temperature,
                         isNow = index == 0,
                         isSelected = selectedIsoTime == cell.iso,
-                        iconRes = weatherConditionForCode(cell.weatherCode).iconRes(cell.isDay),
+                        icon = weatherConditionForCode(cell.weatherCode).iconContent(cell.isDay),
                         tempUnit = tempUnit,
                         onClick = { onHourSelected(cell.iso) },
                     )
@@ -122,7 +122,7 @@ private fun HourlyItem(
     temperature: Double,
     isNow: Boolean,
     isSelected: Boolean,
-    iconRes: Int,
+    icon: @Composable (Modifier, Color) -> Unit,
     tempUnit: TemperatureUnit,
     onClick: () -> Unit,
 ) {
@@ -142,7 +142,7 @@ private fun HourlyItem(
                 .padding(bottom = 3.dp)
                 .alpha(if (precipitationProbability > 0) 1f else 0f),
         )
-        WeatherIconBox(iconRes = iconRes, size = 28.dp)
+        WeatherIconBox(icon = icon, size = 28.dp)
         Spacer(Modifier.height(3.dp))
         Text(
             time,

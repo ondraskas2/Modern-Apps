@@ -902,6 +902,64 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Binds a lean Preview + high-resolution ImageAnalysis session for the
+     * panorama and photo-sphere modes. These sweep off the analysis stream and
+     * never use ImageCapture, so dropping the capture use case frees the device's
+     * stream-config budget to grant a much sharper (~1080p) analysis stream than
+     * the 3-stream photo session can — the dominant lever on panorama quality.
+     */
+    suspend fun setupPanoramaSession(): Boolean {
+        return try {
+            val provider = ProcessCameraProvider.awaitInstance(app)
+            cameraProvider = provider
+            provider.unbindAll()
+
+            val selector = CameraSelector.Builder()
+                .requireLensFacing(_lensFacing.value)
+                .build()
+
+            val previewBuilder = Preview.Builder()
+            val preview = previewBuilder.build()
+            preview.setSurfaceProvider { request -> _surfaceRequest.value = request }
+
+            val owner = ManualLifecycleOwner()
+            owner.start()
+            sessionLifecycleOwner = owner
+
+            // Target ~1080p for the analysis stream: a large jump over the default
+            // ~VGA analysis size, while bounding per-frame memory (the sphere sweep
+            // holds ~40 frames until stitch).
+            val analysisSelector = ResolutionSelector.Builder()
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        android.util.Size(1920, 1080),
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                    )
+                )
+                .build()
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setResolutionSelector(analysisSelector)
+                .build()
+            imageAnalysis = analysis
+            // No ImageCapture in this session.
+            imageCapture = null
+
+            boundCamera = provider.bindToLifecycle(owner, selector, preview, analysis)
+
+            boundCamera?.cameraInfo?.zoomState?.value?.let {
+                updateZoomLevels(it.minZoomRatio, it.maxZoomRatio)
+                _zoomRatio.value = it.zoomRatio
+            }
+            _photoSessionActive.value = true
+            true
+        } catch (e: Exception) {
+            Log.e("PhotoSession", "Failed to set up panorama session", e)
+            false
+        }
+    }
+
     /** Reads the bound sensor's ISO range → stop list for the manual ISO control. */
     private fun readManualControlRanges() {
         val cam = boundCamera ?: return

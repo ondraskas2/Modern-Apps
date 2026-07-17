@@ -15,10 +15,12 @@ import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.CvType
+import org.opencv.core.Core
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDMatch
 import org.opencv.core.MatOfKeyPoint
 import org.opencv.core.Rect
+import org.opencv.core.Scalar
 import org.opencv.features2d.FlannBasedMatcher
 import org.opencv.features2d.SIFT
 import org.opencv.imgproc.Imgproc
@@ -107,7 +109,11 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
     var onSweepComplete: (() -> Unit)? = null
 
     companion object {
-        private const val FRAME_SCALE = 0.75f
+        // Panorama keeps frames at full analysis resolution; the sphere sweep
+        // captures ~40 frames, so it is halved to bound peak memory. Cylindrical
+        // warping resamples with bilinear interpolation either way.
+        private const val PANO_FRAME_SCALE = 1.0f
+        private const val SPHERE_FRAME_SCALE = 0.5f
 
         init {
             OpenCVLoader.initLocal()
@@ -173,8 +179,9 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
 
     private fun captureFrame() {
         val frame = latestFrame ?: return
-        val w = (frame.width * FRAME_SCALE).toInt()
-        val h = (frame.height * FRAME_SCALE).toInt()
+        val scale = if (sphereMode) SPHERE_FRAME_SCALE else PANO_FRAME_SCALE
+        val w = (frame.width * scale).toInt()
+        val h = (frame.height * scale).toInt()
         val scaled = Bitmap.createScaledBitmap(frame, w, h, true)
         val rotMatrix = Matrix().apply { postRotate(90f) }
         val rotated = Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, rotMatrix, true)
@@ -286,26 +293,56 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         return (width / 2.0) / Math.tan(Math.toRadians(hfovDegrees / 2.0))
     }
 
+    /**
+     * Estimates focal length in pixels from the recorded gyro yaw between
+     * consecutive frames and the feature translation measured on the raw frames:
+     * a camera rotation of dθ shifts image content by ≈ f·tan(dθ). Uses the
+     * median across frame pairs; returns null when there isn't enough motion or
+     * feature signal so the caller can fall back to a nominal-FOV estimate.
+     */
+    private fun estimateFocalFromMotion(mats: List<Mat>, sift: SIFT, matcher: FlannBasedMatcher): Double? {
+        if (frameOrientations.size != mats.size) return null
+        val focals = mutableListOf<Double>()
+        for (i in 1 until mats.size) {
+            val dThetaDeg = wrapDegrees(frameOrientations[i].first - frameOrientations[i - 1].first)
+            val dTheta = Math.toRadians(Math.abs(dThetaDeg).toDouble())
+            if (dTheta < Math.toRadians(3.0)) continue
+            val trans = findTranslation(mats[i - 1], mats[i], sift, matcher) ?: continue
+            val dx = Math.abs(trans.first).toDouble()
+            if (dx < 2.0) continue
+            focals.add(dx / Math.tan(dTheta))
+        }
+        if (focals.size < 2) return null
+        focals.sort()
+        return focals[focals.size / 2]
+    }
+
     private fun projectCylindrical(src: Mat, f: Double): Mat {
         val h = src.rows()
         val w = src.cols()
         val cx = w / 2.0
         val cy = h / 2.0
-        val dst = Mat.zeros(h, w, src.type())
+        // Build float remap tables and let OpenCV resample with bilinear
+        // interpolation — sharp, artifact-free, and far faster than the previous
+        // per-pixel nearest-neighbour copy.
+        val mapX = Mat(h, w, CvType.CV_32FC1)
+        val mapY = Mat(h, w, CvType.CV_32FC1)
+        val rowX = FloatArray(w)
+        val rowY = FloatArray(w)
         for (y in 0 until h) {
+            val hNorm = (y - cy) / f
             for (x in 0 until w) {
                 val theta = (x - cx) / f
-                val hNorm = (y - cy) / f
-                val srcX = f * Math.tan(theta) + cx
-                val srcY = hNorm * (1.0 / Math.cos(theta)) * f + cy
-                val sx = srcX.toInt()
-                val sy = srcY.toInt()
-                if (sx in 0 until w && sy in 0 until h) {
-                    val pixel = src.get(sy, sx)
-                    if (pixel != null) dst.put(y, x, *pixel)
-                }
+                rowX[x] = (f * Math.tan(theta) + cx).toFloat()
+                rowY[x] = (hNorm * (1.0 / Math.cos(theta)) * f + cy).toFloat()
             }
+            mapX.put(y, 0, rowX)
+            mapY.put(y, 0, rowY)
         }
+        val dst = Mat.zeros(h, w, src.type())
+        Imgproc.remap(src, dst, mapX, mapY, Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, Scalar(0.0, 0.0, 0.0, 0.0))
+        mapX.release()
+        mapY.release()
         return dst
     }
 
@@ -362,12 +399,15 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
                 mat
             }
 
-            val f = estimateFocalLength(mats[0].cols())
-            val cylFrames = mats.map { projectCylindrical(it, f) }
-            mats.forEach { it.release() }
-
             val sift = SIFT.create(3000)
             val matcher = FlannBasedMatcher.create()
+
+            // Self-calibrate the focal length from the gyro yaw + measured feature
+            // shift instead of assuming a fixed FOV; falls back to a nominal FOV
+            // when there isn't enough motion signal.
+            val f = estimateFocalFromMotion(mats, sift, matcher) ?: estimateFocalLength(mats[0].cols())
+            val cylFrames = mats.map { projectCylindrical(it, f) }
+            mats.forEach { it.release() }
 
             // Compute pairwise translations
             val offsets = mutableListOf(Pair(0, 0))

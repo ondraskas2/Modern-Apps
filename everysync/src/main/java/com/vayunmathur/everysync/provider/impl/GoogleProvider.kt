@@ -2,7 +2,7 @@ package com.vayunmathur.everysync.provider.impl
 
 import android.content.Context
 import android.util.Log
-import com.vayunmathur.everysync.R
+import androidx.compose.runtime.Composable
 import com.vayunmathur.everysync.auth.AccountConfig
 import com.vayunmathur.everysync.auth.OAuthConfig
 import com.vayunmathur.everysync.auth.OAuthManager
@@ -17,6 +17,7 @@ import com.vayunmathur.everysync.remote.GooglePeopleClient
 import com.vayunmathur.everysync.sink.CalendarSink
 import com.vayunmathur.everysync.sink.ContactsSink
 import com.vayunmathur.library.network.NetworkClient
+import com.vayunmathur.library.ui.IconProvider
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -25,7 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 class GoogleProvider : SyncProvider {
     override val id = "google"
     override val displayName = "Google"
-    override val iconRes = R.drawable.ic_provider
+    override val icon: @Composable () -> Unit = { IconProvider() }
     override val authType = AuthType.OAUTH
     override val capabilities = setOf(DataType.CONTACTS, DataType.CALENDAR)
 

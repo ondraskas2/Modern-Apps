@@ -62,6 +62,13 @@ abstract class GenerateLauncherIconTask : DefaultTask() {
 
         val drawableDir = outputDir.get().asFile.resolve("drawable").apply { mkdirs() }
         drawableDir.resolve("ic_launcher_foreground.xml").writeText(wrap(pathData))
+
+        // Emit the adaptive-icon wrapper too, so no ic_launcher.xml is committed per app.
+        // It references the generated foreground, the standard monochrome layer, and the
+        // per-app @color/ic_launcher_background (still declared in each app's values).
+        val mipmapDir = outputDir.get().asFile.resolve("mipmap-anydpi-v26").apply { mkdirs() }
+        mipmapDir.resolve("ic_launcher.xml").writeText(ADAPTIVE_ICON)
+        mipmapDir.resolve("ic_launcher_round.xml").writeText(ADAPTIVE_ICON)
     }
 
     private fun fetchRawSymbol(sym: String, gitRef: String): String {
@@ -119,5 +126,14 @@ abstract class GenerateLauncherIconTask : DefaultTask() {
     private companion object {
         const val VIEWPORT = 960.0
         val PATH_DATA = Regex("""android:pathData="([^"]*)"""")
+        val ADAPTIVE_ICON = """
+            |<?xml version="1.0" encoding="utf-8"?>
+            |<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            |    <background android:drawable="@color/ic_launcher_background"/>
+            |    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+            |    <monochrome android:drawable="@drawable/ic_launcher_foreground"/>
+            |</adaptive-icon>
+            |
+        """.trimMargin()
     }
 }

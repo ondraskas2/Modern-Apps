@@ -74,7 +74,7 @@ fun LocationItem(
                     contentAlignment = Alignment.Center,
                 ) {
                     WeatherIconBox(
-                        iconRes = condition.iconRes(isDay),
+                        icon = condition.iconContent(isDay),
                         size = 34.dp,
                         tint = contentColor,
                     )

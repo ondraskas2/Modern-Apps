@@ -9,7 +9,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import com.vayunmathur.library.ui.Button
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconBodySystem
 import com.vayunmathur.library.ui.IconDirectionsWalk
 import com.vayunmathur.library.ui.IconFavorite
 import com.vayunmathur.library.ui.IconFire
@@ -22,7 +22,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
@@ -211,7 +210,7 @@ fun Navigation(viewModel: HealthViewModel) {
                     com.vayunmathur.library.util.BottomBarItem(
                         stringResource(R.string.nav_body),
                         Route.Body,
-                    ) { Icon(painterResource(R.drawable.body_24px), null) },
+                    ) { IconBodySystem() },
                 ),
                 currentPage = backStack.last()
             )

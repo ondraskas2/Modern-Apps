@@ -91,18 +91,42 @@ jobs:
 
       - name: Prepare F-Droid Metadata
         run: |
+          # Play/F-Droid listing icons are generated here (only in CI) from each app's
+          # launcherIcon symbol + ic_launcher_background, instead of committing a
+          # per-app ic_launcher-playstore.png. Mirrors GenerateLauncherIconTask: the
+          # outlined Material Symbol glyph (black), scaled within a solid background.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq librsvg2-bin imagemagick >/dev/null
+          MATERIAL_SYMBOLS_REF="819d78680a849ceef4c78f863d8753e3160b7c89"
+          DEFAULT_BG="#FFFFFF"
+
           for dir in ${{ env.module_dirs }}; do
             module_key=$(echo $dir | sed 's|/|-|g')
             target_path="$dir/src/main/play/listings/en-US"
-          
+
             mkdir -p "$target_path/graphics/icon"
             mkdir -p "$target_path/graphics/phone-screenshots"
-          
-            icon_source="$dir/src/main/ic_launcher-playstore.png"
-            if [ -f "$icon_source" ]; then
-              cp "$icon_source" "$target_path/graphics/icon/icon.png"
+
+            # --- Generate the 512x512 Play Store icon ---
+            symbol=$(grep -oE 'symbol[[:space:]]*=[[:space:]]*"[^"]+"' "$dir/build.gradle.kts" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ -n "$symbol" ]; then
+              scale=$(grep -oE 'scale[[:space:]]*=[[:space:]]*[0-9.]+' "$dir/build.gradle.kts" 2>/dev/null | head -1 | grep -oE '[0-9.]+')
+              scale=${scale:-0.58}
+              bg=$(grep -rhoE '<color name="ic_launcher_background">#[0-9A-Fa-f]+' "$dir/src/main/res" 2>/dev/null | head -1 | grep -oE '#[0-9A-Fa-f]+')
+              bg=${bg:-$DEFAULT_BG}
+              glyph_px=$(awk "BEGIN{printf \"%d\", 512*$scale}")
+              svg_url="https://raw.githubusercontent.com/google/material-design-icons/$MATERIAL_SYMBOLS_REF/symbols/web/$symbol/materialsymbolsoutlined/${symbol}_24px.svg"
+              if curl -sf "$svg_url" -o /tmp/glyph.svg; then
+                rsvg-convert -w "$glyph_px" -h "$glyph_px" /tmp/glyph.svg -o /tmp/glyph.png
+                convert -size 512x512 "xc:$bg" /tmp/glyph.png -gravity center -composite "$target_path/graphics/icon/icon.png"
+                echo "Generated icon for $dir ($symbol on $bg, scale $scale)"
+              else
+                echo "WARNING: could not fetch Material Symbol '$symbol' for $dir"
+              fi
+            else
+              echo "WARNING: no launcherIcon symbol found for $dir"
             fi
-          
+
             screenshot_dir="metadata_data/photos/${module_key}"
             screenshot_file="metadata_data/photos/${module_key}.png"
             if [ -d "$screenshot_dir" ]; then
@@ -110,7 +134,7 @@ jobs:
             elif [ -f "$screenshot_file" ]; then
               cp "$screenshot_file" "$target_path/graphics/phone-screenshots/1.png"
             fi
-          
+
             metadata_src="metadata_data/${module_key}.md"
             if [ -f "$metadata_src" ]; then
               head -n 1 "$metadata_src" > "$target_path/short-description.txt"

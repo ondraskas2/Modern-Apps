@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
@@ -51,7 +50,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
@@ -76,6 +74,7 @@ import com.vayunmathur.health.util.displayString
 import com.vayunmathur.library.ui.IconArrowForward
 import com.vayunmathur.library.ui.IconBack
 import com.vayunmathur.library.ui.IconBedtime
+import com.vayunmathur.library.ui.IconBodySystem
 import com.vayunmathur.library.ui.IconCheck
 import com.vayunmathur.library.ui.IconDirectionsWalk
 import com.vayunmathur.library.ui.IconFavorite
@@ -583,7 +582,7 @@ private fun iconFor(config: HealthMetricConfig): @Composable (Modifier, Color) -
     RecordType.RespiratoryRate, RecordType.OxygenSaturation, RecordType.BloodPressure,
     RecordType.BloodGlucose, RecordType.Vo2Max, RecordType.SkinTemperature -> { m, c -> IconFavorite(m, c) }
     RecordType.Weight, RecordType.Height, RecordType.BodyFat, RecordType.LeanBodyMass,
-    RecordType.BoneMass, RecordType.BodyWaterMass -> { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) }
+    RecordType.BoneMass, RecordType.BodyWaterMass -> { m, c -> IconBodySystem(m, c) }
     RecordType.Sleep, RecordType.Mindfulness -> { m, c -> IconBedtime(m, c) }
     RecordType.Hydration -> { m, c -> IconBedtime(m, c) }
     RecordType.Nutrition -> { m, c -> IconFire(m, c) }

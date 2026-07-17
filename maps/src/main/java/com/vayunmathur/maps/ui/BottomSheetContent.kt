@@ -15,7 +15,6 @@ import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.ButtonDefaults
 import com.vayunmathur.library.ui.Card
 import com.vayunmathur.library.ui.FilterChip
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.PrimaryTabRow
@@ -26,11 +25,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.ui.IconHome
 import com.vayunmathur.library.ui.IconWork
+import com.vayunmathur.library.ui.LocalContentColor
 import com.vayunmathur.library.util.round
 import com.vayunmathur.maps.R
 import com.vayunmathur.maps.data.SpecificFeature
@@ -200,8 +199,8 @@ fun BottomSheetContent(
                                             ListItem({
                                                 Text(it.navInstruction.instructions)
                                             }, leadingContent = {
-                                                it.navInstruction.maneuver.icon()?.let {
-                                                    Icon(painterResource(it), null)
+                                                it.navInstruction.maneuver.iconContent()?.let { icon ->
+                                                    icon(Modifier, LocalContentColor.current)
                                                 }
                                             })
                                         }

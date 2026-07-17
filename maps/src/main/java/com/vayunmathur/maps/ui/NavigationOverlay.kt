@@ -23,7 +23,6 @@ import com.vayunmathur.library.ui.Card
 import com.vayunmathur.library.ui.CardDefaults
 import com.vayunmathur.library.ui.ExtendedFloatingActionButton
 import com.vayunmathur.library.ui.FilledTonalButton
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconLocationOn
 import com.vayunmathur.library.ui.LinearProgressIndicator
 import com.vayunmathur.library.ui.MaterialTheme
@@ -33,7 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -167,7 +165,7 @@ private fun ManeuverCard(
     // the "you're currently on" peek line below.
     val primary = nextStep ?: currentStep
     val primaryInstruction = primary?.navInstruction?.instructions.orEmpty()
-    val primaryIcon = primary?.navInstruction?.maneuver?.icon()
+    val primaryIcon = primary?.navInstruction?.maneuver?.iconContent()
     val distanceText = formatDistance(progress.distanceToNextManeuver)
 
     Card(
@@ -185,11 +183,9 @@ private fun ManeuverCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (primaryIcon != null) {
-                Icon(
-                    painterResource(primaryIcon),
-                    contentDescription = null,
-                    modifier = Modifier.size(56.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                primaryIcon(
+                    Modifier.size(56.dp),
+                    MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Spacer(Modifier.width(16.dp))
             }

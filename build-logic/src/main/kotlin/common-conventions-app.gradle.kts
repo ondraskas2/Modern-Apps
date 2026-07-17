@@ -71,6 +71,12 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         generateLocaleConfig = true
     }
 
+    // Every app declares the same res/resources.properties (unqualifiedResLocale) for
+    // per-app locale config. Share a single committed copy instead of one file per app.
+    // (Generated res dirs are NOT scanned by extractSupportedLocales, so this must be a
+    // real res source directory.)
+    sourceSets.getByName("main").res.srcDir(File(rootDir, "build-logic/shared-res"))
+
     ndkVersion = "29.0.14206865"
 
     defaultConfig {

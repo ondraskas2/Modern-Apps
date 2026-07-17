@@ -1,9 +1,9 @@
 package com.vayunmathur.everysync.provider.impl
 
-import com.vayunmathur.everysync.R
 import com.vayunmathur.everysync.auth.AccountConfig
 import com.vayunmathur.everysync.auth.DavCredentials
 import com.vayunmathur.everysync.provider.DataType
+import com.vayunmathur.library.ui.IconProvider
 
 /**
  * Apple / iCloud, delivered as a preconfigured CalDAV + CardDAV account (Apple has
@@ -13,7 +13,7 @@ import com.vayunmathur.everysync.provider.DataType
 class ICloudProvider : DavProvider(
     id = "icloud",
     displayName = "Apple / iCloud",
-    iconRes = R.drawable.ic_provider,
+    icon = { IconProvider() },
     capabilities = setOf(DataType.CONTACTS, DataType.CALENDAR),
     davPresetUrl = "https://caldav.icloud.com",
 ) {
@@ -25,7 +25,7 @@ class ICloudProvider : DavProvider(
 class GenericCalDavProvider : DavProvider(
     id = "caldav",
     displayName = "CalDAV server",
-    iconRes = R.drawable.ic_provider,
+    icon = { IconProvider() },
     capabilities = setOf(DataType.CALENDAR),
 )
 
@@ -33,6 +33,6 @@ class GenericCalDavProvider : DavProvider(
 class GenericCardDavProvider : DavProvider(
     id = "carddav",
     displayName = "CardDAV server",
-    iconRes = R.drawable.ic_provider,
+    icon = { IconProvider() },
     capabilities = setOf(DataType.CONTACTS),
 )

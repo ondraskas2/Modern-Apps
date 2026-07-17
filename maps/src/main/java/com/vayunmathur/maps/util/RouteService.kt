@@ -1,6 +1,6 @@
 package com.vayunmathur.maps.util
+
 import com.vayunmathur.maps.data.SpecificFeature
-import com.vayunmathur.maps.R
 import com.vayunmathur.library.network.NetworkClient
 import kotlinx.serialization.Serializable
 import org.maplibre.spatialk.geojson.Position
@@ -137,35 +137,7 @@ object RouteService {
             MANEUVER_UNSPECIFIED, TURN_SLIGHT_LEFT, TURN_SHARP_LEFT, UTURN_LEFT, TURN_LEFT,
             TURN_SLIGHT_RIGHT, TURN_SHARP_RIGHT, UTURN_RIGHT, TURN_RIGHT, STRAIGHT,
             RAMP_LEFT, RAMP_RIGHT, MERGE, FORK_LEFT, FORK_RIGHT, FERRY, FERRY_TRAIN,
-            ROUNDABOUT_LEFT, ROUNDABOUT_RIGHT, DEPART, NAME_CHANGE, WAIT, RIDE;
-
-            fun icon(): Int? {
-                return when(this) {
-                    TURN_SLIGHT_LEFT -> R.drawable.direction_turn_slight_left
-                    TURN_SHARP_LEFT -> R.drawable.direction_turn_sharp_left
-                    UTURN_LEFT -> R.drawable.direction_uturn
-                    TURN_LEFT -> R.drawable.direction_turn_left
-                    TURN_SLIGHT_RIGHT -> R.drawable.direction_turn_slight_right
-                    TURN_SHARP_RIGHT -> R.drawable.direction_turn_sharp_right
-                    UTURN_RIGHT -> R.drawable.direction_uturn
-                    TURN_RIGHT -> R.drawable.direction_turn_right
-                    STRAIGHT -> R.drawable.direction_turn_straight
-                    RAMP_LEFT -> R.drawable.direction_off_ramp_left
-                    RAMP_RIGHT -> R.drawable.direction_off_ramp_right
-                    MERGE -> R.drawable.direction_merge_straight
-                    FORK_LEFT -> R.drawable.direction_fork_left
-                    FORK_RIGHT -> R.drawable.direction_fork_right
-                    FERRY -> null
-                    FERRY_TRAIN -> null
-                    ROUNDABOUT_LEFT -> R.drawable.direction_roundabout_left
-                    ROUNDABOUT_RIGHT -> R.drawable.direction_roundabout_right
-                    DEPART -> R.drawable.direction_depart
-                    NAME_CHANGE -> R.drawable.direction_new_name_straight
-                    WAIT -> R.drawable.outline_nest_clock_farsight_analog_24
-                    RIDE -> R.drawable.outline_menu_book_24 // Placeholder for ride icon
-                    MANEUVER_UNSPECIFIED -> null
-                }
-            }
+            ROUNDABOUT_LEFT, ROUNDABOUT_RIGHT, DEPART, NAME_CHANGE, WAIT, RIDE
         }
     }
 

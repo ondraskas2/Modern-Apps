@@ -16,6 +16,7 @@ import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.weather.R
 import com.vayunmathur.weather.network.Daily
@@ -61,7 +62,7 @@ fun DailyCard(
                         weekday = if (index == 0) "Today" else dayLabel(date),
                         maxTemp = hi,
                         minTemp = lo,
-                        iconRes = weatherConditionForCode(code).iconRes(true),
+                        icon = weatherConditionForCode(code).iconContent(true),
                         precipitationProbability = precip,
                         tempUnit = tempUnit,
                         isSelected = date != null && date == selectedIsoDate,
@@ -80,7 +81,7 @@ private fun DailyItem(
     weekday: String,
     maxTemp: Double,
     minTemp: Double,
-    iconRes: Int,
+    icon: @Composable (Modifier, Color) -> Unit,
     precipitationProbability: Int,
     tempUnit: TemperatureUnit,
     isSelected: Boolean,
@@ -112,7 +113,7 @@ private fun DailyItem(
                 )
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                WeatherIconBox(iconRes = iconRes, size = 38.dp)
+                WeatherIconBox(icon = icon, size = 38.dp)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "${precipitationProbability}%",

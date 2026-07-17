@@ -72,6 +72,7 @@ import com.vayunmathur.library.ui.IconFlashlight
 import com.vayunmathur.library.ui.IconFlipCamera
 import com.vayunmathur.library.ui.IconGrid
 import com.vayunmathur.library.ui.IconIso
+import com.vayunmathur.library.ui.IconLightbulb
 import com.vayunmathur.library.ui.IconMic
 import com.vayunmathur.library.ui.IconMicOff
 import com.vayunmathur.library.ui.IconPause
@@ -79,6 +80,7 @@ import com.vayunmathur.library.ui.IconPhotoLibrary
 import com.vayunmathur.library.ui.IconPlay
 import com.vayunmathur.library.ui.IconSunny
 import com.vayunmathur.library.ui.IconTimer
+import com.vayunmathur.library.ui.IconToolsLevel
 import com.vayunmathur.library.ui.IconVideoCamera
 import com.vayunmathur.library.ui.IconSettings
 import com.vayunmathur.library.ui.IconButton
@@ -207,7 +209,7 @@ private enum class CameraSetting {
 }
 
 /** Which camera pipeline drives the preview for the current mode. */
-private enum class SessionKind { PHOTO, HIGH_SPEED, VIDEO }
+private enum class SessionKind { PHOTO, PANORAMA, HIGH_SPEED, VIDEO }
 
 private fun Modifier.selectedPill(
     selected: Boolean,
@@ -263,9 +265,11 @@ fun CameraScreen(
     val isPhotoType = cameraMode in listOf(CameraMode.PHOTO, CameraMode.PORTRAIT, CameraMode.PANORAMA, CameraMode.PHOTOSPHERE)
     val isSloMo = cameraMode == CameraMode.SLOW_MO
     val isVideoType = cameraMode == CameraMode.VIDEO || cameraMode == CameraMode.TIMELAPSE || cameraMode == CameraMode.CINEMATIC
+    val isPanoType = cameraMode == CameraMode.PANORAMA || cameraMode == CameraMode.PHOTOSPHERE
     val sessionKind = when {
         isSloMo -> SessionKind.HIGH_SPEED
         isVideoType -> SessionKind.VIDEO
+        isPanoType -> SessionKind.PANORAMA
         else -> SessionKind.PHOTO
     }
     val highSpeedActive by viewModel.highSpeedActive.collectAsState()
@@ -417,6 +421,7 @@ fun CameraScreen(
             when (sessionKind) {
                 SessionKind.HIGH_SPEED -> viewModel.setupHighSpeedSession()
                 SessionKind.VIDEO -> viewModel.setupVideoSession()
+                SessionKind.PANORAMA -> viewModel.setupPanoramaSession()
                 SessionKind.PHOTO -> viewModel.setupPhotoSession()
             }
             try {
@@ -673,7 +678,7 @@ fun CameraScreen(
                             CameraSetting.WARMTH -> HorizontalSettingSlider(
                                 value = warmth,
                                 onValueChange = { viewModel.setWarmth(it) },
-                                icon = { m, c -> Icon(painterResource(R.drawable.warmth_24px), null, m, c) },
+                                icon = { m, c -> IconLightbulb(m, c) },
                                 label = "Warmth"
                             )
                             CameraSetting.EXPOSURE_TIME -> ExposureTimeBar(
@@ -908,11 +913,9 @@ private fun TopBar(
                     .size(40.dp)
                     .background(levelBg, CircleShape)
             ) {
-                Icon(
-                    painterResource(R.drawable.level_24px),
-                    contentDescription = stringResource(R.string.level),
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp).rotate(iconRotation)
+                IconToolsLevel(
+                    Modifier.size(22.dp).rotate(iconRotation),
+                    Color.White
                 )
             }
 
@@ -1098,7 +1101,7 @@ private fun SettingsButtonRow(
         val settings = buildList<Pair<CameraSetting, @Composable (Modifier, Color) -> Unit>> {
             add(CameraSetting.BRIGHTNESS to { m, c -> IconSunny(m, c) })
             add(CameraSetting.SHADOWS to { m, c -> IconContrast(m, c) })
-            add(CameraSetting.WARMTH to { m, c -> Icon(painterResource(R.drawable.warmth_24px), null, m, c) })
+            add(CameraSetting.WARMTH to { m, c -> IconLightbulb(m, c) })
             add(CameraSetting.EXPOSURE_TIME to { m, c -> IconTimer(m, c) })
             if (cameraMode == CameraMode.PHOTO) {
                 add(CameraSetting.ISO to { m, c -> IconIso(m, c) })

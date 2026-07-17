@@ -1,6 +1,31 @@
 package com.vayunmathur.library.ui
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.Dehaze
+import androidx.compose.material.icons.filled.ForkLeft
+import androidx.compose.material.icons.filled.ForkRight
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Merge
+import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.RampLeft
+import androidx.compose.material.icons.filled.RampRight
+import androidx.compose.material.icons.filled.RoundaboutLeft
+import androidx.compose.material.icons.filled.RoundaboutRight
+import androidx.compose.material.icons.filled.Straight
+import androidx.compose.material.icons.filled.Thunderstorm
+import androidx.compose.material.icons.filled.TurnLeft
+import androidx.compose.material.icons.filled.TurnRight
+import androidx.compose.material.icons.filled.TurnSharpLeft
+import androidx.compose.material.icons.filled.TurnSharpRight
+import androidx.compose.material.icons.filled.TurnSlightLeft
+import androidx.compose.material.icons.filled.TurnSlightRight
+import androidx.compose.material.icons.filled.UTurnLeft
+import androidx.compose.material.icons.filled.WbCloudy
+import androidx.compose.ui.res.painterResource
+import com.vayunmathur.library.R
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Backspace
@@ -712,3 +737,107 @@ fun IconInfo(modifier: Modifier = Modifier, tint: Color = LocalContentColor.curr
 @Composable
 fun IconNote(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
     AppIcon(Icons.AutoMirrored.Filled.Note, "Note", modifier, tint)
+
+// --- Camera / health custom (Material Symbol vectors bundled in library res) ---
+@Composable
+fun IconLightbulb(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Lightbulb, "Warmth", modifier, tint)
+
+@Composable
+fun IconBodySystem(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    Icon(painterResource(R.drawable.body_system_24px), "Body", modifier = modifier, tint = tint)
+
+@Composable
+fun IconToolsLevel(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    Icon(painterResource(R.drawable.tools_level_24px), "Level", modifier = modifier, tint = tint)
+
+// --- Sync provider (generic) ---
+@Composable
+fun IconProvider(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.CloudSync, "Provider", modifier, tint)
+
+// --- Weather conditions ---
+@Composable
+fun IconSnow(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.AcUnit, "Snow", modifier, tint)
+
+@Composable
+fun IconThunder(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Thunderstorm, "Thunderstorm", modifier, tint)
+
+@Composable
+fun IconFog(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Dehaze, "Fog", modifier, tint)
+
+@Composable
+fun IconPressure(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Compress, "Pressure", modifier, tint)
+
+@Composable
+fun IconPartlyCloudyDay(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.WbCloudy, "Partly cloudy", modifier, tint)
+
+@Composable
+fun IconPartlyCloudyNight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.NightsStay, "Partly cloudy", modifier, tint)
+
+// --- Navigation maneuvers ---
+@Composable
+fun IconTurnLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnLeft, "Turn left", modifier, tint)
+
+@Composable
+fun IconTurnRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnRight, "Turn right", modifier, tint)
+
+@Composable
+fun IconTurnSlightLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnSlightLeft, "Slight left", modifier, tint)
+
+@Composable
+fun IconTurnSlightRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnSlightRight, "Slight right", modifier, tint)
+
+@Composable
+fun IconTurnSharpLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnSharpLeft, "Sharp left", modifier, tint)
+
+@Composable
+fun IconTurnSharpRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.TurnSharpRight, "Sharp right", modifier, tint)
+
+@Composable
+fun IconUTurn(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.UTurnLeft, "U-turn", modifier, tint)
+
+@Composable
+fun IconStraight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Straight, "Straight", modifier, tint)
+
+@Composable
+fun IconMerge(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Merge, "Merge", modifier, tint)
+
+@Composable
+fun IconForkLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.ForkLeft, "Fork left", modifier, tint)
+
+@Composable
+fun IconForkRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.ForkRight, "Fork right", modifier, tint)
+
+@Composable
+fun IconRampLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RampLeft, "Ramp left", modifier, tint)
+
+@Composable
+fun IconRampRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RampRight, "Ramp right", modifier, tint)
+
+@Composable
+fun IconRoundaboutLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RoundaboutLeft, "Roundabout", modifier, tint)
+
+@Composable
+fun IconRoundaboutRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RoundaboutRight, "Roundabout", modifier, tint)

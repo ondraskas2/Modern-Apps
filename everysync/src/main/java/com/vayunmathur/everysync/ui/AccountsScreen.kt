@@ -11,8 +11,8 @@ import androidx.compose.foundation.lazy.items
 import com.vayunmathur.library.ui.CircularProgressIndicator
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconAdd
+import com.vayunmathur.library.ui.IconProvider
 import com.vayunmathur.library.ui.IconRefresh
 import com.vayunmathur.library.ui.IconSettings
 import com.vayunmathur.library.ui.IconButton
@@ -96,7 +96,7 @@ fun AccountsScreen(backStack: NavBackStack<Route>, viewModel: EverySyncViewModel
                                 }
                             },
                             leadingContent = {
-                                Icon(androidx.compose.ui.res.painterResource(provider?.iconRes ?: R.drawable.ic_provider), null)
+                                (provider?.icon ?: { IconProvider() })()
                             },
                             trailingContent = {
                                 if (isSyncing) {

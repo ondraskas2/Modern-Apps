@@ -1,6 +1,7 @@
 package com.vayunmathur.everysync.provider.impl
 
 import android.content.Context
+import androidx.compose.runtime.Composable
 import com.vayunmathur.everysync.auth.AccountConfig
 import com.vayunmathur.everysync.auth.TokenStore
 import com.vayunmathur.everysync.format.ICalendar
@@ -22,7 +23,7 @@ import java.util.UUID
 abstract class DavProvider(
     override val id: String,
     override val displayName: String,
-    override val iconRes: Int,
+    override val icon: @Composable () -> Unit,
     override val capabilities: Set<DataType>,
     override val davPresetUrl: String? = null,
 ) : SyncProvider {

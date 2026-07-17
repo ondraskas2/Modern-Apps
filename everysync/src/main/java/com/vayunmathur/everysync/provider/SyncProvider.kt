@@ -1,6 +1,7 @@
 package com.vayunmathur.everysync.provider
 
 import android.content.Context
+import androidx.compose.runtime.Composable
 import com.vayunmathur.everysync.auth.AccountConfig
 import com.vayunmathur.everysync.auth.OAuthConfig
 import com.vayunmathur.everysync.auth.OAuthTokens
@@ -14,7 +15,7 @@ import com.vayunmathur.everysync.auth.OAuthTokens
 interface SyncProvider {
     val id: String
     val displayName: String
-    val iconRes: Int
+    val icon: @Composable () -> Unit
     val authType: AuthType
     val capabilities: Set<DataType>
 

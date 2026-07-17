@@ -266,7 +266,6 @@ class NavigationService : Service() {
                 val etaText = formatEta(p.etaEpochMs)
                 val route = NavigationSessionManager.currentRoute
                 val currentStep = route?.step?.getOrNull(p.currentStepIndex)
-                val maneuverIcon = currentStep?.navInstruction?.maneuver?.icon() ?: defaultIcon
                 when (mode) {
                     TravelMode.DRIVE -> {
                         val title = currentStep?.navInstruction?.instructions?.takeIf { it.isNotBlank() }
@@ -276,7 +275,7 @@ class NavigationService : Service() {
                             formatDistance(p.distanceToNextManeuver),
                             etaText,
                         )
-                        NotificationInfo(title, content, percent, maneuverIcon)
+                        NotificationInfo(title, content, percent, defaultIcon)
                     }
                     TravelMode.WALK -> NotificationInfo(
                         getString(R.string.nav_walk_title_format, destLabel),
