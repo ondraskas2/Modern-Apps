@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import com.vayunmathur.library.ui.ExperimentalMaterial3ExpressiveApi
+import com.vayunmathur.library.ui.IconSunny
 import com.vayunmathur.library.ui.MaterialShapes
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
@@ -80,7 +81,7 @@ fun UvIndexBlock(uvIndex: Double?) {
         }
         Box(Modifier.align(Alignment.TopCenter)) {
             BlockHeader(
-                iconRes = R.drawable.outline_clear_day_24,
+                icon = { m, c -> IconSunny(m, c) },
                 title = "UV index",
                 topPadding = 32.dp,
             )

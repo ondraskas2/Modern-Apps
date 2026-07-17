@@ -15,6 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
+import com.vayunmathur.library.ui.IconBedtime
+import com.vayunmathur.library.ui.IconDirectionsWalk
+import com.vayunmathur.library.ui.IconFavorite
+import com.vayunmathur.library.ui.IconLocationOn
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Surface
@@ -123,7 +127,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_sleep),
                         value = sleepValue,
                         unit = "",
-                        leadingIconRes = R.drawable.baseline_bedtime_24,
+                        leadingIcon = { m, c -> IconBedtime(m, c) },
                         leadingTint = HealthColors.Sleep,
                         onClick = { backStack.add(Route.SleepDetails) },
                     )
@@ -140,7 +144,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_heart_rate),
                         value = if (hrMax > 0L) "$hrMin-$hrMax" else "--",
                         unit = stringResource(R.string.unit_bpm),
-                        leadingIconRes = R.drawable.baseline_favorite_24,
+                        leadingIcon = { m, c -> IconFavorite(m, c) },
                         leadingTint = colorFor(RecordType.HeartRate),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.HEART_RATE)) },
                     )
@@ -149,7 +153,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_blood_pressure),
                         value = metrics.bloodPressure?.let { "${it.first.toInt()}/${it.second.toInt()}" } ?: "--",
                         unit = stringResource(R.string.label_blood_pressure_unit),
-                        leadingIconRes = R.drawable.baseline_favorite_24,
+                        leadingIcon = { m, c -> IconFavorite(m, c) },
                         leadingTint = colorFor(RecordType.BloodPressure),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.BLOOD_PRESSURE)) },
                     )
@@ -158,7 +162,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_oxygen_saturation),
                         value = metrics.spo2?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_percent),
-                        leadingIconRes = R.drawable.baseline_favorite_24,
+                        leadingIcon = { m, c -> IconFavorite(m, c) },
                         leadingTint = colorFor(RecordType.OxygenSaturation),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.OXYGEN_SATURATION)) },
                     )
@@ -167,7 +171,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_resting_heart_rate),
                         value = metrics.rhr?.toString() ?: "--",
                         unit = stringResource(R.string.unit_bpm),
-                        leadingIconRes = R.drawable.baseline_favorite_24,
+                        leadingIcon = { m, c -> IconFavorite(m, c) },
                         leadingTint = colorFor(RecordType.RestingHeartRate),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.RESTING_HEART_RATE)) },
                     )
@@ -184,7 +188,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_steps),
                         value = stepsToday.toString(),
                         unit = stringResource(R.string.unit_steps),
-                        leadingIconRes = R.drawable.outline_directions_walk_24,
+                        leadingIcon = { m, c -> IconDirectionsWalk(m, c) },
                         leadingTint = colorFor(RecordType.Steps),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.STEPS)) },
                     )
@@ -193,7 +197,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_distance),
                         value = distanceToday.round(2).toString(),
                         unit = stringResource(R.string.unit_km),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Distance),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.DISTANCE)) },
                     )
@@ -202,7 +206,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_floors),
                         value = floorsToday.round(1).toString(),
                         unit = stringResource(R.string.unit_fl),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Floors),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.FLOORS)) },
                     )
@@ -211,7 +215,7 @@ fun TodayPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_hydration),
                         value = hydrationToday.toInt().toString(),
                         unit = stringResource(R.string.unit_ml),
-                        leadingIconRes = R.drawable.baseline_bedtime_24, // TODO: replace with a water-drop icon
+                        leadingIcon = { m, c -> IconBedtime(m, c) }, // TODO: replace with a water-drop icon
                         leadingTint = hydrationColor,
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.HYDRATION)) },
                     )

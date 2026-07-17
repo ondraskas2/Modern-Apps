@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import com.vayunmathur.library.ui.LinearProgressIndicator
+import com.vayunmathur.library.ui.IconWind
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +32,7 @@ fun AirQualityBlock(air: AirQualityCurrent?) {
 
     SquareBlock {
         Box(Modifier.align(Alignment.TopStart)) {
-            BlockHeader(iconRes = R.drawable.outline_air_24, title = "Air quality")
+            BlockHeader(icon = { m, c -> IconWind(m, c) }, title = "Air quality")
         }
         Column(
             modifier = Modifier

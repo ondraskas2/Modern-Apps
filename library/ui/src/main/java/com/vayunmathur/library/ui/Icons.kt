@@ -2,50 +2,133 @@ package com.vayunmathur.library.ui
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.Forward
+import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
+import androidx.compose.material.icons.automirrored.filled.FormatAlignRight
+import androidx.compose.material.icons.automirrored.filled.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.filled.FormatIndentIncrease
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.Note
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Cake
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FlashAuto
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.FlashlightOn
+import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FormatAlignCenter
+import androidx.compose.material.icons.filled.FormatAlignJustify
+import androidx.compose.material.icons.filled.FormatColorText
+import androidx.compose.material.icons.filled.FormatListNumbered
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Grain
+import androidx.compose.material.icons.filled.Grass
+import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Iso
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsBackupRestore
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.outlined.HighlightAlt
@@ -297,3 +380,335 @@ fun IconEmojiEvents(modifier: Modifier = Modifier, tint: Color = LocalContentCol
 @Composable
 fun IconHighlightAlt(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
     AppIcon(Icons.Outlined.HighlightAlt, "Select", modifier, tint)
+
+@Composable
+fun IconArrowDropDown(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.ArrowDropDown, "Dropdown", modifier, tint)
+
+@Composable
+fun IconArrowForward(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", modifier, tint)
+
+@Composable
+fun IconSchedule(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Schedule, "Schedule", modifier, tint)
+
+@Composable
+fun IconGlobe(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Public, "Website", modifier, tint)
+
+@Composable
+fun IconDescription(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Description, "Details", modifier, tint)
+
+@Composable
+fun IconSunny(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.WbSunny, "Sunny", modifier, tint)
+
+@Composable
+fun IconContrast(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Contrast, "Contrast", modifier, tint)
+
+@Composable
+fun IconBlur(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.BlurOn, "Blur", modifier, tint)
+
+@Composable
+fun IconFlashlight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FlashlightOn, "Flashlight", modifier, tint)
+
+@Composable
+fun IconFlashOn(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FlashOn, "Flash on", modifier, tint)
+
+@Composable
+fun IconFlashOff(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FlashOff, "Flash off", modifier, tint)
+
+@Composable
+fun IconFlashAuto(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FlashAuto, "Flash auto", modifier, tint)
+
+@Composable
+fun IconGrid(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.GridOn, "Grid", modifier, tint)
+
+@Composable
+fun IconTimer(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Timer, "Timer", modifier, tint)
+
+@Composable
+fun IconMic(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Mic, "Mic", modifier, tint)
+
+@Composable
+fun IconMicOff(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.MicOff, "Mic off", modifier, tint)
+
+@Composable
+fun IconBedtime(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Bedtime, "Sleep", modifier, tint)
+
+@Composable
+fun IconPhotoLibrary(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.PhotoLibrary, "Photos", modifier, tint)
+
+@Composable
+fun IconFlipCamera(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FlipCameraAndroid, "Flip camera", modifier, tint)
+
+@Composable
+fun IconVideoCamera(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Videocam, "Video", modifier, tint)
+
+@Composable
+fun IconRestartAlt(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RestartAlt, "Restart", modifier, tint)
+
+@Composable
+fun IconAlarm(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Alarm, "Alarm", modifier, tint)
+
+@Composable
+fun IconAccessTime(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.AccessTime, "Clock", modifier, tint)
+
+@Composable
+fun IconHourglass(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.HourglassBottom, "Timer", modifier, tint)
+
+@Composable
+fun IconPerson(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Person, "Person", modifier, tint)
+
+@Composable
+fun IconGroup(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Group, "Group", modifier, tint)
+
+@Composable
+fun IconStarBorder(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.StarBorder, "Star", modifier, tint)
+
+@Composable
+fun IconCall(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Call, "Call", modifier, tint)
+
+@Composable
+fun IconChat(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Chat, "Chat", modifier, tint)
+
+@Composable
+fun IconLocationOn(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.LocationOn, "Location", modifier, tint)
+
+@Composable
+fun IconDirections(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Directions, "Directions", modifier, tint)
+
+@Composable
+fun IconCake(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Cake, "Birthday", modifier, tint)
+
+@Composable
+fun IconEvent(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Event, "Event", modifier, tint)
+
+@Composable
+fun IconSms(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Sms, "Message", modifier, tint)
+
+@Composable
+fun IconRemoveCircle(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RemoveCircleOutline, "Remove", modifier, tint)
+
+@Composable
+fun IconAddPhoto(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.AddPhotoAlternate, "Add photo", modifier, tint)
+
+@Composable
+fun IconFolder(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Folder, "Folder", modifier, tint)
+
+@Composable
+fun IconFile(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.InsertDriveFile, "File", modifier, tint)
+
+@Composable
+fun IconLink(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Link, "Link", modifier, tint)
+
+@Composable
+fun IconDirectionsWalk(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.DirectionsWalk, "Walk", modifier, tint)
+
+@Composable
+fun IconMenuBook(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.MenuBook, "Menu", modifier, tint)
+
+@Composable
+fun IconShuffle(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Shuffle, "Shuffle", modifier, tint)
+
+@Composable
+fun IconLibraryMusic(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.LibraryMusic, "Music", modifier, tint)
+
+@Composable
+fun IconAlbum(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Album, "Album", modifier, tint)
+
+@Composable
+fun IconMoreVert(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.MoreVert, "More", modifier, tint)
+
+@Composable
+fun IconRepeat(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Repeat, "Repeat", modifier, tint)
+
+@Composable
+fun IconRepeatOne(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.RepeatOne, "Repeat one", modifier, tint)
+
+@Composable
+fun IconSkipPrevious(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.SkipPrevious, "Previous", modifier, tint)
+
+@Composable
+fun IconSkipNext(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.SkipNext, "Next", modifier, tint)
+
+@Composable
+fun IconFormatAlignLeft(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.FormatAlignLeft, "Align left", modifier, tint)
+
+@Composable
+fun IconFormatAlignCenter(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FormatAlignCenter, "Align center", modifier, tint)
+
+@Composable
+fun IconFormatAlignRight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.FormatAlignRight, "Align right", modifier, tint)
+
+@Composable
+fun IconFormatAlignJustify(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FormatAlignJustify, "Justify", modifier, tint)
+
+@Composable
+fun IconFormatColorText(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FormatColorText, "Text color", modifier, tint)
+
+@Composable
+fun IconFormatIndentIncrease(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.FormatIndentIncrease, "Indent", modifier, tint)
+
+@Composable
+fun IconFormatIndentDecrease(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.FormatIndentDecrease, "Outdent", modifier, tint)
+
+@Composable
+fun IconFormatListBulleted(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.FormatListBulleted, "Bulleted list", modifier, tint)
+
+@Composable
+fun IconFormatListNumbered(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FormatListNumbered, "Numbered list", modifier, tint)
+
+@Composable
+fun IconCheckBox(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.CheckBox, "Checkbox", modifier, tint)
+
+@Composable
+fun IconRedo(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.Redo, "Redo", modifier, tint)
+
+@Composable
+fun IconVisibilityOff(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.VisibilityOff, "Hide", modifier, tint)
+
+@Composable
+fun IconKey(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Key, "Key", modifier, tint)
+
+@Composable
+fun IconLock(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Lock, "Lock", modifier, tint)
+
+@Composable
+fun IconPlayCircle(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.PlayCircle, "Play", modifier, tint)
+
+@Composable
+fun IconMap(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Map, "Map", modifier, tint)
+
+@Composable
+fun IconMyLocation(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.MyLocation, "My location", modifier, tint)
+
+@Composable
+fun IconCalendar(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.CalendarMonth, "Calendar", modifier, tint)
+
+@Composable
+fun IconCloudy(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Cloud, "Cloudy", modifier, tint)
+
+@Composable
+fun IconRain(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.WaterDrop, "Rain", modifier, tint)
+
+@Composable
+fun IconDrizzle(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Grain, "Drizzle", modifier, tint)
+
+@Composable
+fun IconWind(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Air, "Wind", modifier, tint)
+
+@Composable
+fun IconGrass(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Grass, "Pollen", modifier, tint)
+
+@Composable
+fun IconClearNight(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.DarkMode, "Clear night", modifier, tint)
+
+@Composable
+fun IconThumbUp(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.ThumbUp, "Like", modifier, tint)
+
+@Composable
+fun IconThumbDown(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.ThumbDown, "Dislike", modifier, tint)
+
+@Composable
+fun IconFullscreen(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Fullscreen, "Fullscreen", modifier, tint)
+
+@Composable
+fun IconFullscreenExit(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.FullscreenExit, "Exit fullscreen", modifier, tint)
+
+@Composable
+fun IconList(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.List, "List", modifier, tint)
+
+@Composable
+fun IconSubscriptions(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Subscriptions, "Subscriptions", modifier, tint)
+
+@Composable
+fun IconHistory(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.History, "History", modifier, tint)
+
+@Composable
+fun IconIso(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Iso, "ISO", modifier, tint)
+
+@Composable
+fun IconInfo(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.Filled.Info, "Info", modifier, tint)
+
+@Composable
+fun IconNote(modifier: Modifier = Modifier, tint: Color = LocalContentColor.current) =
+    AppIcon(Icons.AutoMirrored.Filled.Note, "Note", modifier, tint)

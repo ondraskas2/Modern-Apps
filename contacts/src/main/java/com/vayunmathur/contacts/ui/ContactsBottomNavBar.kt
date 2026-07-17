@@ -2,7 +2,6 @@ package com.vayunmathur.contacts.ui
 
 import com.vayunmathur.library.ui.*
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.Route
@@ -14,13 +13,13 @@ fun ContactsBottomNavBar(backStack: NavBackStack<Route>) {
     val currentRoute = backStack.last()
     NavigationBar {
         NavigationBarItem(
-            icon = { Icon(painterResource(R.drawable.person_24px), contentDescription = null) },
+            icon = { IconPerson() },
             label = { Text(stringResource(R.string.contacts)) },
             selected = currentRoute is Route.ContactsList,
             onClick = { if (currentRoute !is Route.ContactsList) backStack.pop() }
         )
         NavigationBarItem(
-            icon = { Icon(painterResource(R.drawable.baseline_group_24), contentDescription = null) },
+            icon = { IconGroup() },
             label = { Text(stringResource(R.string.groups)) },
             selected = currentRoute is Route.GroupsList,
             onClick = {

@@ -20,8 +20,8 @@ import com.vayunmathur.library.ui.Card
 import com.vayunmathur.library.ui.CircularProgressIndicator
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
+import com.vayunmathur.library.ui.IconCopy
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.SnackbarHost
@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,7 +46,10 @@ import androidx.core.net.toUri
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconLink
 import com.vayunmathur.library.ui.IconNavigation
+import com.vayunmathur.library.ui.IconVisibilityOff
+import com.vayunmathur.library.ui.IconVisible
 import com.vayunmathur.passwords.data.Password
 import com.vayunmathur.passwords.R
 import com.vayunmathur.passwords.Route
@@ -145,14 +147,14 @@ fun PasswordPage(
                         )
 
                         IconButton(onClick = { showPassword = !showPassword }) {
-                            if (showPassword) Icon(painterResource(R.drawable.visibility_off_24px), contentDescription = "Hide")
-                            else Icon(painterResource(R.drawable.visibility_24px), contentDescription = "Show")
+                            if (showPassword) IconVisibilityOff()
+                            else IconVisible()
                         }
 
                         IconButton(onClick = {
                             viewModel.copyToClipboard("password", password.password)
                         }) {
-                            Icon(painterResource(R.drawable.content_copy_24px), contentDescription = "Copy")
+                            IconCopy()
                         }
                     }
                 }
@@ -190,7 +192,7 @@ fun PasswordPage(
                                 IconButton({
                                     viewModel.copyToClipboard("totp", currentCode, "TOTP copied")
                                 }) {
-                                    Icon(painterResource(R.drawable.content_copy_24px), contentDescription = "Copy TOTP")
+                                    IconCopy()
                                 }
                             }
                         }
@@ -216,7 +218,7 @@ fun PasswordPage(
                                 }
                                 .padding(vertical = 6.dp)) {
                                 Text(w, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                Icon(painterResource(R.drawable.link_24px), contentDescription = "Open site")
+                                IconLink()
                             }
                         }
                     }

@@ -16,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -102,7 +101,7 @@ fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expa
                             shape = headerShape,
                             color = headerColor,
                         ) {
-                            ListItem(
+                            SafeListItem(
                                 content = {
                                     Text(
                                         text = group.name,
@@ -123,9 +122,7 @@ fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expa
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.baseline_group_24),
-                                            contentDescription = null,
+                                        IconGroup(
                                             tint = Color.White
                                         )
                                     }
@@ -135,7 +132,7 @@ fun GroupsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>, expa
                                         IconDelete()
                                     }
                                 },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                                containerColor = Color.Transparent
                             )
                         }
 

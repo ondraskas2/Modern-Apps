@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.CircularProgressIndicator
+import com.vayunmathur.library.ui.IconBack
 import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.FilledTonalButton
@@ -352,10 +353,7 @@ fun WeatherMapPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 FilledTonalIconButton(onClick = { backStack.pop() }) {
-                    Icon(
-                        painter = painterResource(R.drawable.outline_arrow_back_24),
-                        contentDescription = stringResource(R.string.map_back),
-                    )
+                    IconBack()
                 }
                 MeasureSelector(
                     selected = selectedMetric,

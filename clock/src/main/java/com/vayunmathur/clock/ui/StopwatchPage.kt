@@ -16,7 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconRestartAlt
+import com.vayunmathur.library.ui.IconTimer
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Surface
@@ -33,7 +34,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,14 +78,14 @@ fun StopwatchPage(backStack: NavBackStack<Route>, clockViewModel: ClockViewModel
                 FloatingActionButton({
                     clockViewModel.addLap()
                 }) {
-                    Icon(painterResource(R.drawable.outline_timer_24), null)
+                    IconTimer()
                 }
             }
             if(countingTime > 0.seconds) {
                 FloatingActionButton(onClick = {
                     clockViewModel.resetStopwatch()
                 }) {
-                    Icon(painterResource(R.drawable.outline_restart_alt_24), null)
+                    IconRestartAlt()
                 }
             }
             FloatingActionButton({

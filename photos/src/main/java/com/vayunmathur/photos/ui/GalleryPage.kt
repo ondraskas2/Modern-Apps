@@ -24,7 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import com.vayunmathur.library.ui.CircularProgressIndicator
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconLock
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
@@ -47,7 +47,6 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -202,7 +201,7 @@ fun GalleryPage(
                         },
                         actions = {
                             IconButton(onClick = onMoveToSecureClick) {
-                                Icon(painterResource(R.drawable.lock_24px), contentDescription = stringResource(R.string.action_move_to_secure))
+                                IconLock()
                             }
                             IconButton(onClick = onDeleteClick) {
                                 IconDelete()

@@ -22,7 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.ButtonDefaults
 import com.vayunmathur.library.ui.FilledTonalButton
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconAlarm
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Surface
@@ -31,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -188,9 +187,7 @@ fun AlarmRingingScreen(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.05f)
                 ) {
-                    Icon(
-                        painterResource(R.drawable.baseline_access_alarm_24),
-                        contentDescription = null,
+                    IconAlarm(
                         modifier = Modifier.padding(40.dp),
                         tint = MaterialTheme.colorScheme.primary
                     )

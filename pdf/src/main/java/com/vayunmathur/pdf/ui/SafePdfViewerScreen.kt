@@ -107,8 +107,15 @@ import androidx.compose.ui.unit.IntSize
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconCheck
 import com.vayunmathur.library.ui.IconClose
+import com.vayunmathur.library.ui.IconCopy
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconKeyboardArrowDown
+import com.vayunmathur.library.ui.IconKeyboardArrowUp
+import com.vayunmathur.library.ui.IconLock
+import com.vayunmathur.library.ui.IconRedo
+import com.vayunmathur.library.ui.IconUndo
 import com.vayunmathur.library.ui.IconMenu
+import com.vayunmathur.library.ui.IconNote
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconSearch
@@ -777,17 +784,17 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                                 modifier = Modifier.padding(end = 8.dp),
                             )
                             IconButton({ if (matchIndex > 0) matchIndex-- }) {
-                                Icon(painterResource(R.drawable.keyboard_arrow_up_24px), null)
+                                IconKeyboardArrowUp()
                             }
                             IconButton({ if (matchIndex < matches.size - 1) matchIndex++ }) {
-                                Icon(painterResource(R.drawable.keyboard_arrow_down_24px), null)
+                                IconKeyboardArrowDown()
                             }
                         }
                     } else {
                         if (!editMode) {
                             IconButton({ searching = true }) { IconSearch() }
                             IconButton({ showEncrypt = true }) {
-                                Icon(painterResource(R.drawable.ic_lock), contentDescription = "Encrypt with password")
+                                IconLock()
                             }
                             IconButton({ signLauncher.launch((uri.lastPathSegment ?: "document") + "-signed.pdf") }) {
                                 Icon(painterResource(R.drawable.ic_signature), contentDescription = "Sign document")
@@ -795,10 +802,10 @@ fun SafePdfViewerScreen(uri: Uri, onBack: () -> Unit) {
                         }
                         if (editMode) {
                             IconButton({ undo() }, enabled = undoStack.isNotEmpty()) {
-                                Icon(painterResource(R.drawable.ic_undo), contentDescription = "Undo")
+                                IconUndo()
                             }
                             IconButton({ redo() }, enabled = redoStack.isNotEmpty()) {
-                                Icon(painterResource(R.drawable.ic_redo), contentDescription = "Redo")
+                                IconRedo()
                             }
                         }
                         if (hasRedactions) {
@@ -1809,7 +1816,7 @@ private fun EditToolbar(
             toolButton(R.drawable.ic_tool_draw, "Draw", tool == EditTool.DRAW) { onTool(EditTool.DRAW) }
             shapeMenuButton(shape = shape, active = tool == EditTool.SHAPE, onShape = onShape)
             linesMenuButton(tool = tool, onTool = onTool)
-            toolButton(R.drawable.ic_note, "Note", tool == EditTool.NOTE) { onTool(EditTool.NOTE) }
+            toolButton({ IconNote(tint = it) }, tool == EditTool.NOTE) { onTool(EditTool.NOTE) }
             toolButton(R.drawable.ic_callout, "Callout", tool == EditTool.CALLOUT) { onTool(EditTool.CALLOUT) }
             toolButton(R.drawable.ic_redact, "Redact", tool == EditTool.REDACT) { onTool(EditTool.REDACT) }
             toolButton(R.drawable.ic_tool_image, "Image", tool == EditTool.IMAGE) { onTool(EditTool.IMAGE) }
@@ -1835,7 +1842,7 @@ private fun EditToolbar(
             }
             if (canDelete) {
                 IconButton(onDuplicate) {
-                    Icon(painterResource(R.drawable.ic_duplicate), contentDescription = "Duplicate")
+                    IconCopy()
                 }
                 IconButton(onDelete) { IconDelete() }
             }
@@ -1971,6 +1978,20 @@ private fun toolButton(
             painterResource(icon),
             contentDescription = contentDescription,
             tint = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun toolButton(
+    icon: @Composable (tint: Color) -> Unit,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick) {
+        icon(
+            if (selected) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

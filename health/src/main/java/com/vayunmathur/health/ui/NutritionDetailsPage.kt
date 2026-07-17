@@ -110,9 +110,7 @@ fun NutritionDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewMo
                                     supporting = supporting,
                                     trailing = {
                                         IconButton(onClick = { viewModel.deleteRecord(log) }) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.baseline_delete_24),
-                                                contentDescription = "Unlog",
+                                            IconDelete(
                                                 tint = MaterialTheme.colorScheme.error
                                             )
                                         }

@@ -43,7 +43,6 @@ import com.vayunmathur.library.ui.AlertDialog
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
@@ -77,7 +76,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -92,6 +90,8 @@ import com.vayunmathur.library.ui.IconChevronRight
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconFile
+import com.vayunmathur.library.ui.IconFolder
 import com.vayunmathur.library.ui.IconSave
 import com.vayunmathur.library.ui.IconUnarchive
 import okio.FileSystem
@@ -609,13 +609,10 @@ fun DirectoryItem(
                     Text(file.name.ifEmpty { "/" })
                 }
             }, leadingContent = {
-                Icon(
-                    if (file.isDirectory(fileSystem)) painterResource(R.drawable.folder_24px)
-                    else painterResource(R.drawable.docs_24px),
-                    contentDescription = null,
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline
-                )
+                val iconTint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline
+                if (file.isDirectory(fileSystem)) IconFolder(tint = iconTint)
+                else IconFile(tint = iconTint)
             }, supportingContent = {
                 if (!file.isDirectory(fileSystem)) {
                     file.size(fileSystem)?.let { size -> Text(Formatter.formatShortFileSize(context, size)) }

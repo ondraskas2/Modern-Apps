@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.ButtonDefaults
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconShuffle
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -61,7 +60,7 @@ fun PlayShuffleRow(onPlay: () -> Unit, onShuffle: () -> Unit) {
             shape = RoundedCornerShape(50.dp),
             contentPadding = PaddingValues(vertical = 12.dp),
         ) {
-            Icon(painterResource(R.drawable.ic_shuffle), contentDescription = null, tint = Color.Black)
+            IconShuffle(tint = Color.Black)
             Spacer(modifier = Modifier.width(8.dp))
             Text(stringResource(R.string.label_shuffle), color = Color.Black)
         }

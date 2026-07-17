@@ -33,7 +33,6 @@ import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
@@ -59,7 +58,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,6 +70,7 @@ import com.vayunmathur.calendar.data.Event
 import com.vayunmathur.calendar.data.Instance
 import com.vayunmathur.calendar.util.CalendarViewModel
 import com.vayunmathur.library.ui.IconAdd
+import com.vayunmathur.library.ui.IconArrowDropDown
 import com.vayunmathur.library.ui.IconSettings
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.ResultEffect
@@ -149,7 +148,7 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(stringResource(R.string.month_year_format, mon, dateViewing.year), fontWeight = FontWeight.Bold)
-                        Icon(painterResource(R.drawable.arrow_drop_down_24px), null)
+                        IconArrowDropDown()
                     }
                 }, actions = {
                     var showLayoutMenu by remember { mutableStateOf(false) }
@@ -157,7 +156,7 @@ fun CalendarScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                         TextButton(onClick = { showLayoutMenu = true }) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(currentLayout.shortName, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                Icon(painterResource(R.drawable.arrow_drop_down_24px), null, tint = MaterialTheme.colorScheme.primary)
+                                IconArrowDropDown(tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                         DropdownMenu(expanded = showLayoutMenu, onDismissRequest = { showLayoutMenu = false }) {

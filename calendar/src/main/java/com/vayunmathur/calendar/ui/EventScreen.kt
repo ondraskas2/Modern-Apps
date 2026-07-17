@@ -16,7 +16,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
@@ -32,7 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.calendar.R
@@ -40,7 +38,9 @@ import com.vayunmathur.calendar.Route
 import com.vayunmathur.calendar.data.Instance
 import com.vayunmathur.calendar.util.CalendarViewModel
 import com.vayunmathur.library.ui.IconDelete
+import com.vayunmathur.library.ui.IconDescription
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconGlobe
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.util.NavBackStack
 import kotlinx.datetime.LocalDate
@@ -130,7 +130,7 @@ fun EventScreen(viewModel: CalendarViewModel, instance: Instance, backStack: Nav
             if(event.description.isNotBlank()) ListItem({
                 Text(com.vayunmathur.library.util.parseMarkdown(event.description, showMarkers = false))
             }, leadingContent = {
-                Icon(painterResource(R.drawable.description_24px), null)
+                IconDescription()
             })
             if(event.location.isNotBlank()) ListItem(
                 { Text(event.location) },
@@ -154,7 +154,7 @@ fun EventScreen(viewModel: CalendarViewModel, instance: Instance, backStack: Nav
                         // still selectable elsewhere.
                     }
                 },
-                leadingContent = { Icon(painterResource(R.drawable.globe_24px), null) },
+                leadingContent = { IconGlobe() },
             )
         }
     }

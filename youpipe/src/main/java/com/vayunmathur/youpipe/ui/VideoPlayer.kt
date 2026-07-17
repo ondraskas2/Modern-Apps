@@ -31,7 +31,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconArrowDropDown
+import com.vayunmathur.library.ui.IconFullscreen
+import com.vayunmathur.library.ui.IconFullscreenExit
+import com.vayunmathur.library.ui.IconList
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Slider
@@ -54,7 +57,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -367,7 +369,7 @@ fun VideoPlayer(
                         ) {
                             Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(text = stringResource(R.string.video_quality_codec, currentVideoStream.quality, getVideoCodecName(currentVideoStream.codec)), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                                Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
+                                IconArrowDropDown(tint = Color.White)
                             }
                         }
                         DropdownMenu(expanded = isVideoMenuExpanded, onDismissRequest = { isVideoMenuExpanded = false }) {
@@ -389,7 +391,7 @@ fun VideoPlayer(
                             ) {
                                 Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(text = language, color = Color.White, style = MaterialTheme.typography.labelMedium)
-                                    Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
+                                    IconArrowDropDown(tint = Color.White)
                                 }
                             }
                             DropdownMenu(expanded = isLanguageMenuExpanded, onDismissRequest = { isLanguageMenuExpanded = false }) {
@@ -410,7 +412,7 @@ fun VideoPlayer(
                             ) {
                                 Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(text = stringResource(R.string.audio_bitrate_codec, (currentAudioStream?.bitrate ?: 0) / 1000, getAudioCodecName(currentAudioStream?.codec ?: "")), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                                    Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
+                                    IconArrowDropDown(tint = Color.White)
                                 }
                             }
                         DropdownMenu(expanded = isAudioMenuExpanded, onDismissRequest = { isAudioMenuExpanded = false }) {
@@ -433,7 +435,7 @@ fun VideoPlayer(
                             ) {
                                 Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(text = selectedSubtitle?.languageTag?.ifEmpty { "CC" } ?: "CC", color = Color.White, style = MaterialTheme.typography.labelMedium)
-                                    Icon(painter = painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null, tint = Color.White)
+                                    IconArrowDropDown(tint = Color.White)
                                 }
                             }
                             DropdownMenu(expanded = isCaptionMenuExpanded, onDismissRequest = { isCaptionMenuExpanded = false }) {
@@ -456,7 +458,7 @@ fun VideoPlayer(
                             onClick = { isChapterMenuVisible = true },
                             modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp)).size(32.dp)
                         ) {
-                            Icon(painter = painterResource(R.drawable.outline_list_24), contentDescription = "Chapters", tint = Color.White, modifier = Modifier.size(20.dp))
+                            IconList(tint = Color.White, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -532,7 +534,7 @@ fun VideoPlayer(
                     }
                     Spacer(Modifier.padding(4.dp))
                     IconButton({onFullscreenChange(!isFullscreen)}) {
-                        Icon(if(isFullscreen) painterResource(R.drawable.outline_fullscreen_exit_24) else painterResource(R.drawable.outline_fullscreen_24), null)
+                        if(isFullscreen) IconFullscreenExit() else IconFullscreen()
                     }
                 }
             }

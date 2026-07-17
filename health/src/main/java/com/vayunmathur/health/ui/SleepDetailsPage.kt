@@ -78,10 +78,7 @@ fun SleepDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel)
                             pagerState.animateScrollToPage(pagerState.currentPage - 1)
                         }
                     }) {
-                    Icon(
-                        painterResource(R.drawable.baseline_arrow_back_24),
-                        stringResource(R.string.nav_prev)
-                    )
+                    IconBack()
                 }
 
                 Text(
@@ -99,10 +96,7 @@ fun SleepDetailsPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel)
                     },
                     enabled = pagerState.currentPage < pagerState.pageCount - 1 && selectedDay < today
                 ) {
-                    Icon(
-                        painterResource(R.drawable.outline_arrow_forward_24),
-                        stringResource(R.string.nav_next)
-                    )
+                    IconArrowForward()
                 }
             }
 

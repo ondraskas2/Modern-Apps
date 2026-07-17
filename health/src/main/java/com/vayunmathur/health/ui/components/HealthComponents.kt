@@ -46,7 +46,7 @@ import kotlin.math.min
 fun SectionHeader(
     title: String,
     modifier: Modifier = Modifier,
-    leadingIconRes: Int? = null,
+    leadingIcon: (@Composable (Modifier, Color) -> Unit)? = null,
     accentColor: Color? = null,
 ) {
     val textColor = accentColor?.copy(alpha = 0.85f) ?: MaterialTheme.colorScheme.onSurfaceVariant
@@ -57,13 +57,8 @@ fun SectionHeader(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (leadingIconRes != null) {
-            Icon(
-                painter = painterResource(id = leadingIconRes),
-                contentDescription = null,
-                tint = iconColor,
-                modifier = Modifier.size(16.dp),
-            )
+        if (leadingIcon != null) {
+            leadingIcon(Modifier.size(16.dp), iconColor)
             Spacer(Modifier.width(8.dp))
         }
         Text(
@@ -84,13 +79,13 @@ fun SectionHeader(
 fun GroupedSection(
     title: String? = null,
     modifier: Modifier = Modifier,
-    leadingIconRes: Int? = null,
+    leadingIcon: (@Composable (Modifier, Color) -> Unit)? = null,
     accentColor: Color? = null,
     content: @Composable () -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         if (title != null) {
-            SectionHeader(title = title, leadingIconRes = leadingIconRes, accentColor = accentColor)
+            SectionHeader(title = title, leadingIcon = leadingIcon, accentColor = accentColor)
         }
         Surface(
             modifier = Modifier
@@ -125,7 +120,7 @@ fun HealthRow(
     headline: String,
     modifier: Modifier = Modifier,
     supporting: String? = null,
-    leadingIconRes: Int? = null,
+    leadingIcon: (@Composable (Modifier, Color) -> Unit)? = null,
     leadingTint: Color = MaterialTheme.colorScheme.primary,
     trailing: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
@@ -139,7 +134,7 @@ fun HealthRow(
         modifier = rowModifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (leadingIconRes != null) {
+        if (leadingIcon != null) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -147,12 +142,7 @@ fun HealthRow(
                     .background(leadingTint.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    painter = painterResource(id = leadingIconRes),
-                    contentDescription = null,
-                    tint = leadingTint,
-                    modifier = Modifier.size(20.dp),
-                )
+                leadingIcon(Modifier.size(20.dp), leadingTint)
             }
             Spacer(Modifier.width(12.dp))
         }
@@ -187,7 +177,7 @@ fun MetricRow(
     value: String,
     unit: String,
     modifier: Modifier = Modifier,
-    leadingIconRes: Int? = null,
+    leadingIcon: (@Composable (Modifier, Color) -> Unit)? = null,
     leadingTint: Color = MaterialTheme.colorScheme.primary,
     delta: Float? = null,
     sparkline: List<Float>? = null,
@@ -197,7 +187,7 @@ fun MetricRow(
     HealthRow(
         headline = label,
         modifier = modifier,
-        leadingIconRes = leadingIconRes,
+        leadingIcon = leadingIcon,
         leadingTint = leadingTint,
         onClick = onClick,
         trailing = {

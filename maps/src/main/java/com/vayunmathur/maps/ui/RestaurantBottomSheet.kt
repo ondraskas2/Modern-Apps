@@ -12,7 +12,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.Card
 import com.vayunmathur.library.ui.CardDefaults
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconCall
+import com.vayunmathur.library.ui.IconGlobe
+import com.vayunmathur.library.ui.IconMenuBook
+import com.vayunmathur.library.ui.IconSchedule
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
 import com.vayunmathur.library.ui.MaterialTheme
@@ -28,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -95,7 +97,7 @@ fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigatio
             }.toAnnotatedString()
             Column {
                 RestaurantItem(
-                    R.drawable.outline_nest_clock_farsight_analog_24,
+                    { IconSchedule() },
                     text,
                     shape = verticalShape(0, if (showDetails) 2 else 1)
                 ) {
@@ -117,17 +119,17 @@ fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigatio
             }
         }
         feature.menu?.let {
-            RestaurantItem(R.drawable.outline_menu_book_24, stringResource(R.string.menu_label)) { goto(context, it) }
+            RestaurantItem({ IconMenuBook() }, stringResource(R.string.menu_label)) { goto(context, it) }
         }
         feature.website?.let {
             // OSM `website` tags can be malformed or non-http (e.g. plain
             // "facebook.com/foo", "mailto:..."). Fall back to the raw
             // string if URI parsing yields no host.
             val label = runCatching { it.toUri().host }.getOrNull()?.takeUnless { h -> h.isBlank() } ?: it
-            RestaurantItem(R.drawable.outline_globe_24, label) { goto(context, it) }
+            RestaurantItem({ IconGlobe() }, label) { goto(context, it) }
         }
         feature.phone?.let {
-            RestaurantItem(R.drawable.outline_phone_enabled_24, it) { goto(context, "tel:$it") }
+            RestaurantItem({ IconCall() }, it) { goto(context, "tel:$it") }
         }
     }
 }
@@ -175,7 +177,7 @@ fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigatio
             }.toAnnotatedString()
             Column {
                 RestaurantItem(
-                    R.drawable.outline_nest_clock_farsight_analog_24,
+                    { IconSchedule() },
                     text,
                     shape = verticalShape(0, if (showDetails) 2 else 1)
                 ) {
@@ -198,10 +200,10 @@ fun RestaurantBottomSheet(viewModel: SelectedFeatureViewModel, inactiveNavigatio
         }
         feature.website?.let {
             val label = runCatching { it.toUri().host }.getOrNull()?.takeUnless { h -> h.isBlank() } ?: it
-            RestaurantItem(R.drawable.outline_globe_24, label) { goto(context, it) }
+            RestaurantItem({ IconGlobe() }, label) { goto(context, it) }
         }
         feature.phone?.let {
-            RestaurantItem(R.drawable.outline_phone_enabled_24, it) { goto(context, "tel:$it") }
+            RestaurantItem({ IconCall() }, it) { goto(context, "tel:$it") }
         }
     }
 }
@@ -230,7 +232,7 @@ fun TransitStopBottomSheet(inactiveNavigation: SpecificFeature.Route?, feature: 
                 }
             }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
         }
-        RestaurantItem(R.drawable.outline_globe_24, stringResource(R.string.travel_mode_transit)) {}
+        RestaurantItem({ IconGlobe() }, stringResource(R.string.travel_mode_transit)) {}
     }
 }
 
@@ -241,17 +243,17 @@ fun verticalShape(index: Int, count: Int): RoundedCornerShape {
 }
 
 @Composable
-fun RestaurantItem(icon: Int, text: String, shape: Shape = CardDefaults.shape, onClick: () -> Unit) {
+fun RestaurantItem(icon: @Composable () -> Unit, text: String, shape: Shape = CardDefaults.shape, onClick: () -> Unit) {
     RestaurantItem(icon, AnnotatedString(text), shape, onClick)
 }
 
 @Composable
-fun RestaurantItem(icon: Int, text: AnnotatedString, shape: Shape = CardDefaults.shape, onClick: () -> Unit) {
+fun RestaurantItem(icon: @Composable () -> Unit, text: AnnotatedString, shape: Shape = CardDefaults.shape, onClick: () -> Unit) {
     Card(shape = shape) {
         ListItem({
             Text(text)
         }, Modifier.clickable(onClick = onClick), leadingContent = {
-            Icon(painterResource(icon), null)
+            icon()
         }, colors = ListItemDefaults.colors(Color.Transparent))
     }
 }

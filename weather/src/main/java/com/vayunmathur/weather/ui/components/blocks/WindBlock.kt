@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconWind
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,7 +41,7 @@ fun WindBlock(current: Current, unit: WindUnit) {
         )
         Box(Modifier.align(Alignment.TopCenter)) {
             BlockHeader(
-                iconRes = R.drawable.outline_wind_24,
+                icon = { m, c -> IconWind(m, c) },
                 title = "Wind",
                 topPadding = 36.dp,
             )

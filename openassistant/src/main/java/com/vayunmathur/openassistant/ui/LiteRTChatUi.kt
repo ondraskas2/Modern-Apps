@@ -264,7 +264,7 @@ fun ChatInput(
                 )
                 val canSend = inputText.isNotBlank() || selectedImageUris.isNotEmpty() || isRecording
                 IconButton(enabled = canSend, onClick = onSend) {
-                    Icon(painterResource(android.R.drawable.ic_menu_send), "Send", tint = if (canSend) MaterialTheme.colorScheme.primary else Color.Gray)
+                    IconSend(tint = if (canSend) MaterialTheme.colorScheme.primary else Color.Gray)
                 }
             }
         }
@@ -314,12 +314,7 @@ fun ChatBubble(message: Message) {
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painterResource(android.R.drawable.ic_dialog_info),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        IconInfo(Modifier.size(20.dp), MaterialTheme.colorScheme.onSecondaryContainer)
                         Spacer(Modifier.width(12.dp))
                         Text(
                             cleanText,

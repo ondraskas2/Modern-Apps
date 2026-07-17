@@ -17,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -99,7 +98,7 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
                 val hasCalendarPermissions = arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
                     .all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
-                ListItem(
+                SafeListItem(
                     content = { Text(stringResource(R.string.sync_contacts_calendar)) },
                     trailingContent = {
                         if (hasCalendarPermissions) {
@@ -130,7 +129,7 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 val showAccountLabels by viewModel.showAccountLabels.collectAsStateWithLifecycle()
-                ListItem(
+                SafeListItem(
                     content = { Text(stringResource(R.string.show_account_labels)) },
                     trailingContent = {
                         Switch(
@@ -150,14 +149,11 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
-                ListItem(
+                SafeListItem(
                     content = { Text(stringResource(R.string.export_contacts)) },
                     trailingContent = {
                         IconButton(onClick = { exportLauncher.launch("contacts.vcf") }) {
-                            Icon(
-                                painterResource(R.drawable.download_24px),
-                                contentDescription = stringResource(R.string.export_contacts)
-                            )
+                            IconDownload()
                         }
                     }
                 )
@@ -176,7 +172,7 @@ fun SettingsPage(viewModel: ContactViewModel, backStack: NavBackStack<Route>) {
             items(accounts, key = { "${it.type}|${it.name}" }) { account ->
                 val isVisible = account.name !in hiddenAccounts
                 val onDevice = stringResource(R.string.on_device)
-                ListItem(
+                SafeListItem(
                     content = { Text(account.name.ifEmpty { onDevice }) },
                     supportingContent = { Text(account.type) },
                     trailingContent = {

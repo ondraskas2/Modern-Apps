@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconDirectionsWalk
 import com.vayunmathur.library.ui.IconFavorite
 import com.vayunmathur.library.ui.IconFire
 import com.vayunmathur.library.ui.Text
@@ -202,7 +203,7 @@ fun Navigation(viewModel: HealthViewModel) {
                     com.vayunmathur.library.util.BottomBarItem(
                         stringResource(R.string.nav_activity),
                         Route.Activity,
-                    ) { Icon(painterResource(R.drawable.outline_directions_walk_24), null) },
+                    ) { IconDirectionsWalk() },
                     com.vayunmathur.library.util.BottomBarItem(
                         stringResource(R.string.nav_nutrition),
                         Route.NutritionDetails,

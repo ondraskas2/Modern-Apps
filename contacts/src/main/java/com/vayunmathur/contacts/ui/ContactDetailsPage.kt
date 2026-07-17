@@ -37,10 +37,7 @@ import com.vayunmathur.library.ui.CircularProgressIndicator
 import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
-import com.vayunmathur.library.ui.ListItem
-import com.vayunmathur.library.ui.ListItemDefaults
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Surface
@@ -59,11 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -81,10 +76,22 @@ import com.vayunmathur.contacts.util.ContactViewModel
 import com.vayunmathur.contacts.R
 import com.vayunmathur.contacts.util.PackageUtils
 import com.vayunmathur.contacts.util.VcfUtils
+import com.vayunmathur.library.ui.IconCake
+import com.vayunmathur.library.ui.IconCall
+import com.vayunmathur.library.ui.IconChat
 import com.vayunmathur.library.ui.IconDelete
+import com.vayunmathur.library.ui.IconDirections
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconEvent
+import com.vayunmathur.library.ui.IconGroup
+import com.vayunmathur.library.ui.IconLocationOn
+import com.vayunmathur.library.ui.IconMail
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconShare
+import com.vayunmathur.library.ui.IconSms
+import com.vayunmathur.library.ui.IconStar
+import com.vayunmathur.library.ui.IconStarBorder
+import com.vayunmathur.library.ui.IconVideoCamera
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
@@ -137,11 +144,8 @@ fun ContactDetailsPage(
                             viewModel.saveContact(newContact)
                         }
                     }) {
-                        Icon(
-                            if (!contact!!.isFavorite) painterResource(R.drawable.outline_star_24) else painterResource(R.drawable.baseline_star_24),
-                            stringResource(R.string.favorite),
-                            tint = if (contact!!.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
+                        if (!contact!!.isFavorite) IconStarBorder(tint = MaterialTheme.colorScheme.onSurface)
+                        else IconStar(tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(onClick = { onEdit(contact!!.id) }) {
                         IconEdit()
@@ -197,10 +201,10 @@ fun ContactDetailsPage(
                             var showSmsDropdown by remember(phone.id) { mutableStateOf(false) }
 
                             DetailItem(
-                                icon = painterResource(R.drawable.outline_call_24),
+                                icon = { IconCall() },
                                 data = formatPhoneNumber(phone.number),
                                 label = phone.typeString(context),
-                                trailingIcon = painterResource(R.drawable.outline_chat_24),
+                                trailingIcon = { IconChat() },
                                 onTrailingIconClick = {
                                     if (platforms.hasAnyPlatform) {
                                         showSmsDropdown = true
@@ -246,7 +250,7 @@ fun ContactDetailsPage(
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         details.emails.forEachIndexed { index, email ->
                             DetailItem(
-                                icon = painterResource(R.drawable.outline_mail_24),
+                                icon = { IconMail() },
                                 data = email.address,
                                 label = email.typeString(context),
                                 onClick = {
@@ -265,10 +269,10 @@ fun ContactDetailsPage(
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         details.addresses.forEachIndexed { index, address ->
                             DetailItem(
-                                icon = painterResource(R.drawable.outline_location_on_24),
+                                icon = { IconLocationOn() },
                                 data = address.formattedAddress,
                                 label = address.typeString(context),
-                                trailingIcon = painterResource(R.drawable.outline_directions_24),
+                                trailingIcon = { IconDirections() },
                                 onTrailingIconClick = {
                                     val gmmIntentURI = "geo:0,0?q=${Uri.encode(address.formattedAddress)}".toUri()
                                     val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentURI)
@@ -287,11 +291,11 @@ fun ContactDetailsPage(
                     GroupedSection(title = stringResource(R.string.about_name, contact!!.name.firstName)) {
                         contact!!.birthday?.let { birthday ->
                             val birthdayText = birthday.startDate.formatDisplay()
-                            ListItem(
+                            SafeListItem(
                                 content = { Text(birthdayText) },
                                 supportingContent = { Text(stringResource(R.string.birthday)) },
-                                leadingContent = { Icon(painterResource(R.drawable.outline_cake_24), birthday.typeString(context)) },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                leadingContent = { IconCake() },
+                                containerColor = Color.Transparent,
                                 modifier = Modifier.combinedClickable(
                                     onClick = { },
                                     onLongClick = {
@@ -302,11 +306,11 @@ fun ContactDetailsPage(
                         }
                         details.dates.filter{it.type != CDKEvent.TYPE_BIRTHDAY }.forEach { event ->
                             val eventText = event.startDate.formatDisplay()
-                            ListItem(
+                            SafeListItem(
                                 content = { Text(eventText) },
                                 supportingContent = { Text(event.typeString(context)) },
-                                leadingContent = { Icon(painterResource(R.drawable.outline_event_24), event.typeString(context)) },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                leadingContent = { IconEvent() },
+                                containerColor = Color.Transparent,
                                 modifier = Modifier.combinedClickable(
                                     onClick = { },
                                     onLongClick = {
@@ -354,7 +358,7 @@ fun ContactDetailsPage(
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             contactGroups.forEachIndexed { index, group ->
                                 DetailItem(
-                                    icon = painterResource(R.drawable.baseline_group_24),
+                                    icon = { IconGroup() },
                                     data = group.name,
                                     label = stringResource(R.string.groups),
                                     shape = groupShape(index, contactGroups.size),
@@ -416,7 +420,7 @@ fun ActionButtonsRow(
             var showVideoDropdown by remember { mutableStateOf(false) }
 
             ActionButton(
-                icon = painterResource(R.drawable.outline_call_24),
+                icon = { IconCall() },
                 label = stringResource(R.string.action_call),
                 action = {
                     if (platforms.hasAnyPlatform) {
@@ -456,7 +460,7 @@ fun ActionButtonsRow(
                 }
             )
             ActionButton(
-                icon = painterResource(R.drawable.outline_sms_24),
+                icon = { IconSms() },
                 label = stringResource(R.string.action_message),
                 action = {
                     if (platforms.hasAnyPlatform) {
@@ -509,7 +513,7 @@ fun ActionButtonsRow(
                 ).count { it }
 
                 ActionButton(
-                    icon = painterResource(R.drawable.outline_videocam_24),
+                    icon = { IconVideoCamera() },
                     label = stringResource(R.string.action_video),
                     action = {
                         if (videoOptionCount == 1) {
@@ -555,7 +559,7 @@ fun ActionButtonsRow(
             }
         }
         if (email != null) {
-            ActionButton(icon = painterResource(R.drawable.outline_mail_24), label = stringResource(R.string.email)) {
+            ActionButton(icon = { IconMail() }, label = stringResource(R.string.email)) {
                 val intent = Intent(Intent.ACTION_SENDTO)
                 intent.data = "mailto:$email".toUri()
                 context.startActivity(intent)
@@ -567,7 +571,7 @@ fun ActionButtonsRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActionButton(
-    icon: Painter,
+    icon: @Composable () -> Unit,
     label: String,
     dropdownContent: (@Composable () -> Unit)? = null,
     action: () -> Unit
@@ -587,11 +591,12 @@ fun ActionButton(
                     .clickable { action() },
                 contentAlignment = androidx.compose.ui.Alignment.Center
             ) {
-                Icon(
-                    icon,
-                    contentDescription = label,
-                    modifier = Modifier.size(24.dp)
-                )
+                Box(
+                    modifier = Modifier.size(24.dp),
+                    contentAlignment = androidx.compose.ui.Alignment.Center
+                ) {
+                    icon()
+                }
                 dropdownContent?.invoke()
             }
         }
@@ -602,10 +607,10 @@ fun ActionButton(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DetailItem(
-    icon: Painter,
+    icon: @Composable () -> Unit,
     data: String,
     label: String,
-    trailingIcon: Painter? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
     onTrailingIconClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     dropdownContent: (@Composable () -> Unit)? = null,
@@ -630,7 +635,7 @@ fun DetailItem(
                 onLongClick = { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("detail", data))) } }
             )
     ) {
-        ListItem(
+        SafeListItem(
             content = {
                 Box {
                     Text(data, style = MaterialTheme.typography.bodyLarge)
@@ -638,18 +643,18 @@ fun DetailItem(
                 }
             },
             supportingContent = { Text(label, style = MaterialTheme.typography.bodySmall) },
-            leadingContent = { Icon(icon, label) },
+            leadingContent = { icon() },
             trailingContent = {
                 if (trailingIcon != null && onTrailingIconClick != null) {
                     Box {
                         IconButton(onClick = onTrailingIconClick) {
-                            Icon(trailingIcon, stringResource(R.string.action))
+                            trailingIcon()
                         }
                         trailingDropdownContent?.invoke()
                     }
                 }
             },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+            containerColor = Color.Transparent
         )
     }
 }

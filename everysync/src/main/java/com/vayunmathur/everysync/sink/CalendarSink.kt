@@ -41,16 +41,31 @@ object CalendarSink {
         displayName: String,
         color: Int?,
     ): Long {
+        val existing = mutableListOf<Long>()
         try {
             context.contentResolver.query(
                 CalendarContract.Calendars.CONTENT_URI,
                 arrayOf(CalendarContract.Calendars._ID),
                 "${CalendarContract.Calendars.ACCOUNT_NAME} = ? AND ${CalendarContract.Calendars.ACCOUNT_TYPE} = ? AND ${CalendarContract.Calendars.NAME} = ?",
                 arrayOf(accountName, ACCOUNT_TYPE, remoteCalendarId),
-                null,
-            )?.use { if (it.moveToFirst()) return it.getLong(0) }
+                "${CalendarContract.Calendars._ID} ASC",
+            )?.use { while (it.moveToNext()) existing += it.getLong(0) }
         } catch (e: Exception) {
             Log.e(TAG, "query calendar failed", e)
+        }
+        if (existing.isNotEmpty()) {
+            // Delete any duplicates created by earlier races; keep the first.
+            existing.drop(1).forEach { dupId ->
+                try {
+                    context.contentResolver.delete(
+                        CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(accountName),
+                        "${CalendarContract.Calendars._ID} = ?", arrayOf(dupId.toString()),
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "delete duplicate calendar failed", e)
+                }
+            }
+            return existing.first()
         }
 
         val values = ContentValues().apply {

@@ -73,7 +73,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.health.util.displayString
+import com.vayunmathur.library.ui.IconArrowForward
+import com.vayunmathur.library.ui.IconBack
+import com.vayunmathur.library.ui.IconBedtime
 import com.vayunmathur.library.ui.IconCheck
+import com.vayunmathur.library.ui.IconDirectionsWalk
+import com.vayunmathur.library.ui.IconFavorite
+import com.vayunmathur.library.ui.IconFire
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.util.round
 import com.vayunmathur.library.util.toStringCommas
@@ -396,10 +402,7 @@ fun BarChartDetails(
                     IconButton(onClick = {
                         anchorDate = anchorDate.minus(1, dateUnit)
                     }) {
-                        Icon(
-                            painterResource(R.drawable.baseline_arrow_back_24),
-                            stringResource(R.string.nav_prev)
-                        )
+                        IconBack()
                     }
 
                     Text(
@@ -415,10 +418,7 @@ fun BarChartDetails(
                         onClick = { anchorDate = nextDate },
                         enabled = nextDate <= Clock.System.todayIn(TimeZone.currentSystemDefault())
                     ) {
-                        Icon(
-                            painterResource(R.drawable.outline_arrow_forward_24),
-                            stringResource(R.string.nav_next)
-                        )
+                        IconArrowForward()
                     }
                 }
 
@@ -548,7 +548,7 @@ private fun ChartHeader(
     unitLabel: String,
 ) {
     val accent = colorFor(config)
-    val iconRes = iconResFor(config)
+    val icon = iconFor(config)
     Row(verticalAlignment = Alignment.Bottom) {
         Box(
             modifier = Modifier
@@ -558,12 +558,7 @@ private fun ChartHeader(
                 .background(accent.copy(alpha = 0.15f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(20.dp),
-            )
+            icon(Modifier.size(20.dp), accent)
         }
         Text(
             text = avgString,
@@ -580,18 +575,18 @@ private fun ChartHeader(
     }
 }
 
-private fun iconResFor(config: HealthMetricConfig): Int = when (config.recordType) {
+private fun iconFor(config: HealthMetricConfig): @Composable (Modifier, Color) -> Unit = when (config.recordType) {
     RecordType.Steps, RecordType.Distance, RecordType.Floors, RecordType.Elevation,
-    RecordType.Wheelchair, RecordType.Exercise -> R.drawable.outline_directions_walk_24
-    RecordType.CaloriesActive, RecordType.CaloriesTotal, RecordType.CaloriesBasal -> R.drawable.baseline_local_fire_department_24
+    RecordType.Wheelchair, RecordType.Exercise -> { m, c -> IconDirectionsWalk(m, c) }
+    RecordType.CaloriesActive, RecordType.CaloriesTotal, RecordType.CaloriesBasal -> { m, c -> IconFire(m, c) }
     RecordType.HeartRate, RecordType.RestingHeartRate, RecordType.HeartRateVariabilityRmssd,
     RecordType.RespiratoryRate, RecordType.OxygenSaturation, RecordType.BloodPressure,
-    RecordType.BloodGlucose, RecordType.Vo2Max, RecordType.SkinTemperature -> R.drawable.baseline_favorite_24
+    RecordType.BloodGlucose, RecordType.Vo2Max, RecordType.SkinTemperature -> { m, c -> IconFavorite(m, c) }
     RecordType.Weight, RecordType.Height, RecordType.BodyFat, RecordType.LeanBodyMass,
-    RecordType.BoneMass, RecordType.BodyWaterMass -> R.drawable.body_24px
-    RecordType.Sleep, RecordType.Mindfulness -> R.drawable.baseline_bedtime_24
-    RecordType.Hydration -> R.drawable.baseline_bedtime_24
-    RecordType.Nutrition -> R.drawable.baseline_local_fire_department_24
+    RecordType.BoneMass, RecordType.BodyWaterMass -> { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) }
+    RecordType.Sleep, RecordType.Mindfulness -> { m, c -> IconBedtime(m, c) }
+    RecordType.Hydration -> { m, c -> IconBedtime(m, c) }
+    RecordType.Nutrition -> { m, c -> IconFire(m, c) }
 }
 
 @Composable

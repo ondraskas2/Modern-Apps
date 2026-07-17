@@ -20,7 +20,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.CircularProgressIndicator
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconGroup
+import com.vayunmathur.library.ui.IconLock
+import com.vayunmathur.library.ui.IconMap
+import com.vayunmathur.library.ui.IconPhotoLibrary
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
@@ -44,7 +47,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
@@ -318,11 +320,11 @@ private fun SecureFolderEntry(
 }
 
 private enum class MainRoute(val route: Route, @StringRes val titleRes: Int, val icon: @Composable () -> Unit) {
-    Gallery(Route.Gallery, R.string.label_gallery, { Icon(painterResource(R.drawable.gallery_thumbnail_24px), null) }),
-    Map(Route.Map, R.string.label_map, { Icon(painterResource(R.drawable.map_24px), null) }),
-    People(Route.People, R.string.label_people, { Icon(painterResource(R.drawable.people_24px), null) }),
+    Gallery(Route.Gallery, R.string.label_gallery, { IconPhotoLibrary() }),
+    Map(Route.Map, R.string.label_map, { IconMap() }),
+    People(Route.People, R.string.label_people, { IconGroup() }),
     Trash(Route.Trash, R.string.label_trash, { IconDelete() }),
-    SecureFolder(Route.SecureFolder, R.string.label_secure_folder, { Icon(painterResource(R.drawable.lock_24px), null) })
+    SecureFolder(Route.SecureFolder, R.string.label_secure_folder, { IconLock() })
 }
 
 @Composable

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconRain
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,7 +37,7 @@ fun PrecipitationBlock(
 
     SquareBlock {
         Box(Modifier.align(Alignment.TopStart)) {
-            BlockHeader(iconRes = R.drawable.outline_rain_24, title = "Precipitation")
+            BlockHeader(icon = { m, c -> IconRain(m, c) }, title = "Precipitation")
         }
         Column(
             modifier = Modifier.align(Alignment.Center),

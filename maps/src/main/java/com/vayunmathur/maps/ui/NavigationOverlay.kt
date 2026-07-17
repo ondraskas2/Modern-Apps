@@ -24,6 +24,7 @@ import com.vayunmathur.library.ui.CardDefaults
 import com.vayunmathur.library.ui.ExtendedFloatingActionButton
 import com.vayunmathur.library.ui.FilledTonalButton
 import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconLocationOn
 import com.vayunmathur.library.ui.LinearProgressIndicator
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
@@ -120,10 +121,7 @@ fun NavigationOverlay(
                     .align(Alignment.CenterEnd)
                     .padding(16.dp),
                 icon = {
-                    Icon(
-                        painterResource(R.drawable.location_on_24px),
-                        contentDescription = null,
-                    )
+                    IconLocationOn()
                 },
                 text = { Text(stringResource(R.string.nav_action_recenter)) }
             )

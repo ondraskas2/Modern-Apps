@@ -12,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -102,7 +101,7 @@ fun PlaylistDetailScreen(backStack: NavBackStack<Route>, musicViewModel: MusicVi
                         contentAlignment = Alignment.Center
                     ) {
                         if (musicInPlaylist.isEmpty()) {
-                            Icon(painterResource(com.vayunmathur.music.R.drawable.baseline_library_music_24), null, Modifier.size(100.dp))
+                            IconLibraryMusic(Modifier.size(100.dp))
                         } else {
                             AlbumArt(musicInPlaylist.map { it.uri.toUri() }, Modifier.fillMaxSize())
                         }

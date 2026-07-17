@@ -51,7 +51,7 @@ import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.DrawerValue
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconRedo
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.IconBack
 import com.vayunmathur.library.ui.IconClose
@@ -104,7 +104,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -745,7 +744,7 @@ fun DocumentScreen(document: OdfDocument, viewModel: OfficeViewModel, activity: 
                         actions = {
                             if (canEdit) IconButton(onClick = { showSearch = !showSearch }) { IconSearch() }
                             IconButton(onClick = { viewModel.undo() }, enabled = canUndo) { IconUndo() }
-                            IconButton(onClick = { viewModel.redo() }, enabled = canRedo) { Icon(painterResource(R.drawable.redo_24px), contentDescription = "Redo") }
+                            IconButton(onClick = { viewModel.redo() }, enabled = canRedo) { IconRedo() }
                             if (!isOnline) {
                                 IconButton(onClick = { if (viewModel.needsSaveAs()) saveAsLauncher.launch(saveAsName) else viewModel.save() }, enabled = hasUnsavedChanges && !isSaving) {
                                     if (isSaving) CircularProgressIndicator(Modifier.size(20.dp)) else IconSave()

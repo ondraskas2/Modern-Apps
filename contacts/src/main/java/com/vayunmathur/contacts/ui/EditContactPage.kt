@@ -35,7 +35,6 @@ import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FilledTonalButton
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.InputChip
 import com.vayunmathur.library.ui.MaterialTheme
@@ -56,10 +55,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
@@ -82,8 +79,15 @@ import com.vayunmathur.contacts.data.Photo
 import com.vayunmathur.contacts.data.formatDisplay
 import com.vayunmathur.contacts.util.ContactAccount
 import com.vayunmathur.contacts.util.ContactViewModel
+import com.vayunmathur.library.ui.IconAddPhoto
+import com.vayunmathur.library.ui.IconArrowDropDown
+import com.vayunmathur.library.ui.IconCall
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconEdit
+import com.vayunmathur.library.ui.IconEvent
+import com.vayunmathur.library.ui.IconGroup
+import com.vayunmathur.library.ui.IconMail
+import com.vayunmathur.library.ui.IconRemoveCircle
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.library.util.ResultEffect
 import kotlinx.datetime.LocalDate
@@ -260,7 +264,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                 removeLabelRes = R.string.remove_phone,
                 details = currentDraft.phoneNumbers,
                 onDetailsChange = { list -> viewModel.updateEditDraft { it.copy(phoneNumbers = list) } },
-                icon = painterResource(R.drawable.outline_call_24),
+                icon = { IconCall() },
                 keyboardType = KeyboardType.Phone,
                 visualTransformation = VisualTransformation.None,
                 options = listOf(CDKPhone.TYPE_MOBILE, CDKPhone.TYPE_HOME, CDKPhone.TYPE_WORK, CDKPhone.TYPE_OTHER)
@@ -273,7 +277,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                 removeLabelRes = R.string.remove_email,
                 details = currentDraft.emails,
                 onDetailsChange = { list -> viewModel.updateEditDraft { it.copy(emails = list) } },
-                icon = painterResource(R.drawable.outline_mail_24),
+                icon = { IconMail() },
                 keyboardType = KeyboardType.Email,
                 visualTransformation = VisualTransformation.None,
                 options = listOf(CDKEmail.TYPE_HOME, CDKEmail.TYPE_WORK, CDKEmail.TYPE_OTHER, CDKEmail.TYPE_MOBILE)
@@ -289,7 +293,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                 backStack = backStack,
                 details = currentDraft.dates,
                 onDetailsChange = { list -> viewModel.updateEditDraft { it.copy(dates = list) } },
-                icon = painterResource(R.drawable.outline_event_24),
+                icon = { IconEvent() },
                 options = listOf(CDKEvent.TYPE_ANNIVERSARY, CDKEvent.TYPE_OTHER)
             )
 
@@ -301,7 +305,7 @@ fun EditContactPage(backStack: NavBackStack<Route>, viewModel: ContactViewModel,
                 removeLabelRes = R.string.remove_address,
                 details = currentDraft.addresses,
                 onDetailsChange = { list -> viewModel.updateEditDraft { it.copy(addresses = list) } },
-                icon = painterResource(R.drawable.outline_event_24),
+                icon = { IconEvent() },
                 keyboardType = KeyboardType.Text,
                 visualTransformation = VisualTransformation.None,
                 options = listOf(CDKStructuredPostal.TYPE_HOME, CDKStructuredPostal.TYPE_WORK, CDKStructuredPostal.TYPE_OTHER)
@@ -347,7 +351,7 @@ fun AccountChooser(
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = {
                 IconButton(onClick = { expanded = true }) {
-                    Icon(painterResource(R.drawable.baseline_arrow_drop_down_24), stringResource(R.string.choose_account))
+                    IconArrowDropDown()
                 }
             }
         )
@@ -396,10 +400,7 @@ fun NamePrefixChooser(namePrefix: String, onNamePrefixChange: (String) -> Unit) 
     var expanded by remember { mutableStateOf(false) }
     TextButton(onClick = { expanded = true }) {
         Text(namePrefix)
-        Icon(
-            painterResource(R.drawable.baseline_arrow_drop_down_24),
-            contentDescription = null
-        )
+        IconArrowDropDown()
         DropdownMenu(expanded, { expanded = false }) {
             namePrefixes.forEach { prefix ->
                 DropdownMenuItem(text = { Text(prefix) }, onClick = {
@@ -416,7 +417,7 @@ fun NameSuffixChooser(nameSuffix: String, onNameSuffixChange: (String) -> Unit) 
     var expanded by remember { mutableStateOf(false) }
     TextButton(onClick = { expanded = true }) {
         Text(nameSuffix)
-        Icon(painterResource(R.drawable.baseline_arrow_drop_down_24), null)
+        IconArrowDropDown()
         DropdownMenu(expanded, { expanded = false }) {
             nameSuffixes.forEach { suffix ->
                 DropdownMenuItem(text = { Text(suffix) }, onClick = {
@@ -447,10 +448,7 @@ private fun Birthday(
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = {
                 IconButton(onClick = { setBirthday(null) }) {
-                    Icon(
-                        painterResource(R.drawable.baseline_remove_circle_outline_24),
-                        stringResource(R.string.remove_birthday)
-                    )
+                    IconRemoveCircle()
                 }
             }
         )
@@ -472,7 +470,7 @@ private fun ColumnScope.DateDetailsSection(
     backStack: NavBackStack<Route>,
     details: List<Event>,
     onDetailsChange: (List<Event>) -> Unit,
-    icon: Painter,
+    icon: @Composable () -> Unit,
     options: List<Int>
 ) {
     val detailType = stringResource(R.string.dates)
@@ -493,10 +491,7 @@ private fun ColumnScope.DateDetailsSection(
                         var dropdownExpanded by remember { mutableStateOf(false) }
                         TextButton({ dropdownExpanded = true }) {
                             Text(detail.typeString(context))
-                            Icon(
-                                painterResource(R.drawable.baseline_arrow_drop_down_24),
-                                contentDescription = null
-                            )
+                            IconArrowDropDown()
                         }
                         DropdownMenu(
                             expanded = dropdownExpanded,
@@ -514,10 +509,7 @@ private fun ColumnScope.DateDetailsSection(
                         IconButton(onClick = {
                             onDetailsChange(details.toMutableList().also { it.removeAt(index) })
                         }) {
-                            Icon(
-                                painterResource(R.drawable.baseline_remove_circle_outline_24),
-                                stringResource(R.string.remove_date)
-                            )
+                            IconRemoveCircle()
                         }
                     }
                 },
@@ -537,7 +529,7 @@ private fun ColumnScope.DateDetailsSection(
         onClick = { onDetailsChange(details + ContactDetail.default<Event>()) },
         modifier = Modifier.fillMaxWidth()
     ) {
-        Icon(icon, contentDescription = null)
+        icon()
         Spacer(Modifier.width(8.dp))
         Text(stringResource(R.string.add_date))
     }
@@ -550,7 +542,7 @@ private inline fun <reified T : ContactDetail<T>> ColumnScope.DetailsSection(
     removeLabelRes: Int,
     details: List<T>,
     noinline onDetailsChange: (List<T>) -> Unit,
-    icon: Painter,
+    crossinline icon: @Composable () -> Unit,
     keyboardType: KeyboardType,
     visualTransformation: VisualTransformation,
     options: List<Int>
@@ -574,10 +566,7 @@ private inline fun <reified T : ContactDetail<T>> ColumnScope.DetailsSection(
                     var dropdownExpanded by remember { mutableStateOf(false) }
                     TextButton({ dropdownExpanded = true }) {
                         Text(detail.typeString(context))
-                        Icon(
-                            painterResource(R.drawable.baseline_arrow_drop_down_24),
-                            contentDescription = null
-                        )
+                        IconArrowDropDown()
                     }
                     DropdownMenu(
                         expanded = dropdownExpanded,
@@ -595,10 +584,7 @@ private inline fun <reified T : ContactDetail<T>> ColumnScope.DetailsSection(
                     IconButton(onClick = {
                         onDetailsChange(details.toMutableList().also { it.removeAt(index) })
                     }) {
-                        Icon(
-                            painterResource(R.drawable.baseline_remove_circle_outline_24),
-                            stringResource(removeLabelRes)
-                        )
+                        IconRemoveCircle()
                     }
                 }
             },
@@ -611,7 +597,7 @@ private inline fun <reified T : ContactDetail<T>> ColumnScope.DetailsSection(
         onClick = { onDetailsChange(details + ContactDetail.default<T>()) },
         modifier = Modifier.fillMaxWidth()
     ) {
-        Icon(icon, contentDescription = null)
+        icon()
         Spacer(Modifier.width(8.dp))
         Text(stringResource(addLabelRes))
     }
@@ -631,9 +617,7 @@ private fun ColumnScope.GroupMembershipSection(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Icon(
-            painterResource(R.drawable.baseline_group_24),
-            contentDescription = null,
+        IconGroup(
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )
@@ -657,11 +641,7 @@ private fun ColumnScope.GroupMembershipSection(
                 onClick = { onRemoveGroup(group.id) },
                 label = { Text(group.name) },
                 trailingIcon = {
-                    Icon(
-                        painterResource(R.drawable.baseline_remove_circle_outline_24),
-                        contentDescription = stringResource(R.string.remove_from_group),
-                        modifier = Modifier.size(18.dp)
-                    )
+                    IconRemoveCircle(modifier = Modifier.size(18.dp))
                 }
             )
         }
@@ -675,10 +655,7 @@ private fun ColumnScope.GroupMembershipSection(
                 onClick = { expanded = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    painterResource(R.drawable.baseline_group_24),
-                    contentDescription = null
-                )
+                IconGroup()
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.add_to_group))
             }
@@ -724,9 +701,7 @@ private fun AddPictureSection(
                     )
                 }
             } else {
-                Icon(
-                    painterResource(R.drawable.outline_add_photo_alternate_24),
-                    contentDescription = stringResource(R.string.add_picture),
+                IconAddPhoto(
                     modifier = Modifier.size(48.dp),
                     tint = MaterialTheme.colorScheme.onSecondaryContainer
                 )

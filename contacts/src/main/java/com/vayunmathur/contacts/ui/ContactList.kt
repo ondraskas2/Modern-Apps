@@ -22,17 +22,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.plus
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
-import com.vayunmathur.library.ui.ListItem
-import com.vayunmathur.library.ui.ListItemDefaults
-import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Text
 import com.vayunmathur.library.ui.TopAppBar
@@ -44,10 +41,13 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -117,6 +117,8 @@ fun ContactList(
 
     var showDeleteConfirmation by remember { mutableStateOf(false) }
 
+    var isFocusableBySystem by remember { mutableStateOf(false) }
+
     if (showDeleteConfirmation) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirmation = false },
@@ -174,7 +176,7 @@ fun ContactList(
                         IconButton(onClick = {
                             backStack.add(Route.AddToGroupDialog(selectedIds.toList()))
                         }) {
-                            Icon(painterResource(R.drawable.baseline_group_24), contentDescription = stringResource(R.string.add_to_group))
+                            IconGroup()
                         }
                         IconButton(onClick = {
                             shareContactsAsVcf(scope, context, contacts.filter { it.id in selectedIds }, "selected_contacts.vcf", resources.getString(R.string.share_contact))
@@ -193,7 +195,28 @@ fun ContactList(
                             value = searchQuery,
                             onValueChange = { viewModel.setSearchQuery(it) },
                             placeholder = stringResource(R.string.search_contacts),
-                            padding = PaddingValues(0.dp)
+                            padding = PaddingValues(0.dp),
+                            modifier = Modifier
+                                // Start non-focusable so the field doesn't grab
+                                // focus (and raise the keyboard) on screen entry.
+                                .focusProperties { canFocus = isFocusableBySystem }
+                                // Enable focus on the initial press, before the
+                                // text field's own tap handling runs, without
+                                // consuming the event so the tap still focuses it.
+                                .pointerInput(Unit) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            awaitPointerEvent(PointerEventPass.Initial)
+                                            if (!isFocusableBySystem) isFocusableBySystem = true
+                                        }
+                                    }
+                                }
+                                // Block automatic focus again once focus is lost.
+                                .onFocusChanged { focusState ->
+                                    if (!focusState.isFocused) {
+                                        isFocusableBySystem = false
+                                    }
+                                }
                         )
                     },
                     actions = {
@@ -368,9 +391,7 @@ fun FavoritesHeader(modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Icon(painterResource(R.drawable.baseline_star_24), stringResource(R.string.favorites),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        IconStar(tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             text = stringResource(R.string.favorites),
             style = MaterialTheme.typography.titleSmall,
@@ -477,9 +498,20 @@ fun ContactItem(
                 embeddedInCard -> Color.Transparent
                 else -> MaterialTheme.colorScheme.surfaceVariant
             }
-            ListItem(
-                modifier = itemModifier,
-                content = {
+            // A plain Row/Column layout is used instead of Material3 ListItem
+            // because ListItem queries its children's baseline alignment lines,
+            // which throws a framework NPE when remeasured inside the Navigation3
+            // adaptive lookahead pass on configuration change (rotation).
+            Row(
+                modifier = itemModifier
+                    .fillMaxWidth()
+                    .background(rowContainerColor)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ContactAvatar(contact, viewModel, Modifier.size(50.dp))
+                Spacer(Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = contactDisplayName(contact),
                         style = MaterialTheme.typography.bodyLarge,
@@ -487,46 +519,30 @@ fun ContactItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                },
-                leadingContent = {
-                    ContactAvatar(contact, viewModel, Modifier.size(50.dp))
-                },
-
-                supportingContent = if (showOrg || showGroups) {
-                    {
-                        Column {
-                            if (showOrg) {
-                                Text(trimmedOrg)
-                            }
-                            if (showGroups) {
-                                Text(
-                                    text = contactGroups.joinToString(", ") { it.name },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                    if (showOrg) {
+                        Text(trimmedOrg)
                     }
-                } else null,
-
-                trailingContent = if (showAccountLabels) {
-                    {
-                        val onDevice = stringResource(R.string.on_device)
+                    if (showGroups) {
                         Text(
-                            text = contact.accountName ?: onDevice,
+                            text = contactGroups.joinToString(", ") { it.name },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 120.dp)
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
-                } else null,
-
-                colors = ListItemDefaults.colors(
-                    containerColor = rowContainerColor
-                )
-            )
+                }
+                if (showAccountLabels) {
+                    Spacer(Modifier.width(16.dp))
+                    val onDevice = stringResource(R.string.on_device)
+                    Text(
+                        text = contact.accountName ?: onDevice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 120.dp)
+                    )
+                }
+            }
         }
     }
 
@@ -535,17 +551,19 @@ fun ContactItem(
             content()
             dropdownList.forEachIndexed { idx, it ->
                 Spacer(Modifier.height(4.dp))
-                ListItem({
-                    Text(text = it)
-                }, Modifier.clickable {
-                    dropdownListClick(idx)
-                }.clip(RoundedCornerShape(0.dp, 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp)), colors = ListItemDefaults.colors(
+                SafeListItem(
+                    content = {
+                        Text(text = it)
+                    },
+                    modifier = Modifier.clickable {
+                        dropdownListClick(idx)
+                    }.clip(RoundedCornerShape(0.dp, 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp, if(idx == dropdownList.size - 1) 16.dp else 0.dp)),
                     containerColor = if (isSelected) {
                         MaterialTheme.colorScheme.secondaryContainer
                     } else {
                         MaterialTheme.colorScheme.surfaceContainer
                     }
-                ))
+                )
             }
         }
     } else {

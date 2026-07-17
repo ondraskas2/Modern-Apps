@@ -428,6 +428,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     init {
         loadSettings()
+        panoramaEngine.onSweepComplete = { finishPanoramaSweep() }
         viewModelScope.launch {
             _lastCaptureUri.collect { uri -> _galleryThumbnail.value = loadThumbnail(uri) }
         }
@@ -2016,7 +2017,12 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun stopPhotosphere() = finishPanoramaSweep()
 
+    @Volatile
+    private var isFinishingPano = false
+
     private fun finishPanoramaSweep() {
+        if (isFinishingPano) return
+        isFinishingPano = true
         panoramaEngine.stopSweep()
         viewModelScope.launch {
             panoramaEngine.stitch()?.let { (bitmap, info) ->
@@ -2024,6 +2030,7 @@ class CameraViewModel(private val app: Application) : AndroidViewModel(app) {
                 bitmap.recycle()
             }
             panoramaEngine.reset()
+            isFinishingPano = false
         }
     }
 

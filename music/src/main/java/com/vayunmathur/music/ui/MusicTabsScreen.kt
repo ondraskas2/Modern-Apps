@@ -9,7 +9,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import com.vayunmathur.library.ui.ExperimentalMaterial3ExpressiveApi
 import com.vayunmathur.library.ui.FlexibleBottomAppBar
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconAlbum
+import com.vayunmathur.library.ui.IconLibraryMusic
+import com.vayunmathur.library.ui.IconPerson
 import com.vayunmathur.library.ui.NavigationBarItem
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Text
@@ -19,7 +21,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.vayunmathur.library.util.NavBackStack
 import com.vayunmathur.music.R
@@ -60,11 +61,11 @@ fun MusicTabsScreen(
         SyncWorker.enqueue(context)
     }
 
-    val tabs = listOf(
-        Triple(stringResource(R.string.nav_home), R.drawable.baseline_library_music_24, 0),
-        Triple(stringResource(R.string.nav_albums), R.drawable.baseline_album_24, 1),
-        Triple(stringResource(R.string.nav_artists), R.drawable.outline_person_24, 2),
-        Triple(stringResource(R.string.nav_playlists), R.drawable.baseline_library_music_24, 3),
+    val tabs = listOf<Triple<String, @Composable () -> Unit, Int>>(
+        Triple(stringResource(R.string.nav_home), { IconLibraryMusic() }, 0),
+        Triple(stringResource(R.string.nav_albums), { IconAlbum() }, 1),
+        Triple(stringResource(R.string.nav_artists), { IconPerson() }, 2),
+        Triple(stringResource(R.string.nav_playlists), { IconLibraryMusic() }, 3),
     )
 
     Scaffold(
@@ -80,7 +81,7 @@ fun MusicTabsScreen(
                                     scope.launch { pagerState.animateScrollToPage(index) }
                                 }
                             },
-                            icon = { Icon(painterResource(icon), null) },
+                            icon = icon,
                             label = { Text(name) },
                         )
                     }

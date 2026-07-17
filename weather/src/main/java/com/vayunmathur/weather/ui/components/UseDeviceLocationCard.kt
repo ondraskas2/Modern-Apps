@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.CircularProgressIndicator
+import com.vayunmathur.library.ui.IconMyLocation
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.ListItem
@@ -24,7 +25,7 @@ import com.vayunmathur.weather.R
 /**
  * Direct port of WeatherMaster's `UseDeviceLocationCard`. Pill / extraLarge
  * Surface with a `surfaceBright` background. ListItem: 52 dp circle leading
- * (`outline_my_location_24` or a spinner while loading), "Use current
+ * (a my-location icon or a spinner while loading), "Use current
  * location" headline, descriptive supporting text.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,9 +49,7 @@ fun UseDeviceLocationCard(onClick: () -> Unit, isLoading: Boolean = false) {
                     if (isLoading) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     } else {
-                        Icon(
-                            painter = painterResource(R.drawable.outline_my_location_24),
-                            contentDescription = null,
+                        IconMyLocation(
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }

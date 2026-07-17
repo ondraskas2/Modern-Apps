@@ -61,6 +61,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.Button
 import com.vayunmathur.library.ui.FilledTonalButton
 import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconBedtime
+import com.vayunmathur.library.ui.IconBlur
+import com.vayunmathur.library.ui.IconCamera
+import com.vayunmathur.library.ui.IconContrast
+import com.vayunmathur.library.ui.IconFlashAuto
+import com.vayunmathur.library.ui.IconFlashOff
+import com.vayunmathur.library.ui.IconFlashOn
+import com.vayunmathur.library.ui.IconFlashlight
+import com.vayunmathur.library.ui.IconFlipCamera
+import com.vayunmathur.library.ui.IconGrid
+import com.vayunmathur.library.ui.IconIso
+import com.vayunmathur.library.ui.IconMic
+import com.vayunmathur.library.ui.IconMicOff
+import com.vayunmathur.library.ui.IconPause
+import com.vayunmathur.library.ui.IconPhotoLibrary
+import com.vayunmathur.library.ui.IconPlay
+import com.vayunmathur.library.ui.IconSunny
+import com.vayunmathur.library.ui.IconTimer
+import com.vayunmathur.library.ui.IconVideoCamera
 import com.vayunmathur.library.ui.IconSettings
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.MaterialTheme
@@ -642,19 +661,19 @@ fun CameraScreen(
                             CameraSetting.BRIGHTNESS -> HorizontalSettingSlider(
                                 value = exposureComp,
                                 onValueChange = { viewModel.setExposureCompensation(it) },
-                                iconRes = R.drawable.wb_sunny_24px,
+                                icon = { m, c -> IconSunny(m, c) },
                                 label = "Brightness"
                             )
                             CameraSetting.SHADOWS -> HorizontalSettingSlider(
                                 value = shadows,
                                 onValueChange = { viewModel.setShadows(it) },
-                                iconRes = R.drawable.contrast_24px,
+                                icon = { m, c -> IconContrast(m, c) },
                                 label = "Shadows"
                             )
                             CameraSetting.WARMTH -> HorizontalSettingSlider(
                                 value = warmth,
                                 onValueChange = { viewModel.setWarmth(it) },
-                                iconRes = R.drawable.warmth_24px,
+                                icon = { m, c -> Icon(painterResource(R.drawable.warmth_24px), null, m, c) },
                                 label = "Warmth"
                             )
                             CameraSetting.EXPOSURE_TIME -> ExposureTimeBar(
@@ -664,7 +683,7 @@ fun CameraScreen(
                             CameraSetting.PORTRAIT_BLUR -> HorizontalSettingSlider(
                                 value = blurStrength,
                                 onValueChange = { viewModel.setBlurStrength(it) },
-                                iconRes = R.drawable.blur_on_24px,
+                                icon = { m, c -> IconBlur(m, c) },
                                 label = stringResource(R.string.blur),
                                 valueRange = 0f..1f,
                                 displayValue = { "%.0f%%".format(it * 100) }
@@ -836,22 +855,16 @@ private fun TopBar(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                painterResource(
-                    if (torchEnabled) {
-                        R.drawable.flashlight_24px
-                    } else {
-                        when (flashMode) {
-                            FlashMode.ON -> R.drawable.flash_on_24px
-                            FlashMode.OFF -> R.drawable.flash_off_24px
-                            FlashMode.AUTO -> R.drawable.flash_auto_24px
-                        }
-                    }
-                ),
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(22.dp).rotate(iconRotation)
-            )
+            val flashIconModifier = Modifier.size(22.dp).rotate(iconRotation)
+            if (torchEnabled) {
+                IconFlashlight(flashIconModifier, Color.White)
+            } else {
+                when (flashMode) {
+                    FlashMode.ON -> IconFlashOn(flashIconModifier, Color.White)
+                    FlashMode.OFF -> IconFlashOff(flashIconModifier, Color.White)
+                    FlashMode.AUTO -> IconFlashAuto(flashIconModifier, Color.White)
+                }
+            }
         }
 
         Spacer(Modifier.width(4.dp))
@@ -863,12 +876,7 @@ private fun TopBar(
                 .size(40.dp)
                 .background(gridBg, CircleShape)
         ) {
-            Icon(
-                painterResource(R.drawable.grid_on_24px),
-                contentDescription = "Grid",
-                tint = Color.White,
-                modifier = Modifier.size(22.dp).rotate(iconRotation)
-            )
+            IconGrid(Modifier.size(22.dp).rotate(iconRotation), Color.White)
         }
 
         Spacer(Modifier.width(4.dp))
@@ -918,12 +926,7 @@ private fun TopBar(
                     .background(timerBg, CircleShape)
             ) {
                 if (timerDuration == TimerDuration.NONE) {
-                    Icon(
-                        painterResource(R.drawable.ic_timer),
-                        contentDescription = stringResource(R.string.settings_timer),
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp).rotate(iconRotation)
-                    )
+                    IconTimer(Modifier.size(22.dp).rotate(iconRotation), Color.White)
                 } else {
                     val timerLabel = when (timerDuration) {
                         TimerDuration.NONE -> ""
@@ -932,12 +935,7 @@ private fun TopBar(
                         TimerDuration.TEN -> "10"
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            painterResource(R.drawable.ic_timer),
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp).rotate(iconRotation)
-                        )
+                        IconTimer(Modifier.size(14.dp).rotate(iconRotation), Color.White)
                         Text(timerLabel, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, lineHeight = 10.sp)
                     }
                 }
@@ -954,12 +952,8 @@ private fun TopBar(
                     .size(40.dp)
                     .background(micBg, CircleShape)
             ) {
-                Icon(
-                    painterResource(if (micMuted) R.drawable.mic_off_24px else R.drawable.mic_24px),
-                    contentDescription = stringResource(R.string.mic),
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp).rotate(iconRotation)
-                )
+                if (micMuted) IconMicOff(Modifier.size(22.dp).rotate(iconRotation), Color.White)
+                else IconMic(Modifier.size(22.dp).rotate(iconRotation), Color.White)
             }
         }
     }
@@ -1013,7 +1007,7 @@ private fun LevelOverlay(roll: Float, modifier: Modifier = Modifier) {
 private fun HorizontalSettingSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
-    iconRes: Int,
+    icon: @Composable (Modifier, Color) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = -1f..1f,
@@ -1035,12 +1029,7 @@ private fun HorizontalSettingSlider(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                painterResource(iconRes),
-                contentDescription = label,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+            icon(Modifier.size(20.dp), Color.White)
         }
         Slider(
             value = value,
@@ -1081,12 +1070,7 @@ private fun NightModeButton(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            painterResource(R.drawable.bedtime_24px),
-            contentDescription = "Night",
-            tint = if (active) Color.White else Color(0xFFBBBBBB),
-            modifier = Modifier.size(20.dp).rotate(iconRotation)
-        )
+        IconBedtime(Modifier.size(20.dp).rotate(iconRotation), if (active) Color.White else Color(0xFFBBBBBB))
         Text(
             "Night",
             color = if (active) Color.White else Color(0xFFBBBBBB),
@@ -1111,19 +1095,19 @@ private fun SettingsButtonRow(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val settings = buildList {
-            add(CameraSetting.BRIGHTNESS to R.drawable.wb_sunny_24px)
-            add(CameraSetting.SHADOWS to R.drawable.contrast_24px)
-            add(CameraSetting.WARMTH to R.drawable.warmth_24px)
-            add(CameraSetting.EXPOSURE_TIME to R.drawable.ic_timer)
+        val settings = buildList<Pair<CameraSetting, @Composable (Modifier, Color) -> Unit>> {
+            add(CameraSetting.BRIGHTNESS to { m, c -> IconSunny(m, c) })
+            add(CameraSetting.SHADOWS to { m, c -> IconContrast(m, c) })
+            add(CameraSetting.WARMTH to { m, c -> Icon(painterResource(R.drawable.warmth_24px), null, m, c) })
+            add(CameraSetting.EXPOSURE_TIME to { m, c -> IconTimer(m, c) })
             if (cameraMode == CameraMode.PHOTO) {
-                add(CameraSetting.ISO to R.drawable.iso_24px)
+                add(CameraSetting.ISO to { m, c -> IconIso(m, c) })
             }
             if (cameraMode == CameraMode.PORTRAIT) {
-                add(CameraSetting.PORTRAIT_BLUR to R.drawable.blur_on_24px)
+                add(CameraSetting.PORTRAIT_BLUR to { m, c -> IconBlur(m, c) })
             }
         }
-        settings.forEach { (setting, iconRes) ->
+        settings.forEach { (setting, icon) ->
             val isActive = activeSetting == setting
             Box(
                 modifier = Modifier
@@ -1133,12 +1117,7 @@ private fun SettingsButtonRow(
                     .clickable { onSelect(if (isActive) null else setting) },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painterResource(iconRes),
-                    contentDescription = null,
-                    tint = if (isActive) Color.White else Color(0xFFBBBBBB),
-                    modifier = Modifier.size(20.dp)
-                )
+                icon(Modifier.size(20.dp), if (isActive) Color.White else Color(0xFFBBBBBB))
             }
         }
     }
@@ -1234,12 +1213,8 @@ private fun ShutterRow(
                     .clickable(onClick = onPauseResume),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painterResource(if (recordingPaused) R.drawable.play_arrow_24px else R.drawable.pause_24px),
-                    contentDescription = stringResource(if (recordingPaused) R.string.resume_recording else R.string.pause_recording),
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp).rotate(iconRotation)
-                )
+                if (recordingPaused) IconPlay(Modifier.size(24.dp).rotate(iconRotation), Color.White)
+                else IconPause(Modifier.size(24.dp).rotate(iconRotation), Color.White)
             }
         } else {
             Box(
@@ -1258,12 +1233,7 @@ private fun ShutterRow(
                         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp))
                     )
                 } else {
-                    Icon(
-                        painterResource(R.drawable.ic_photo_library),
-                        contentDescription = stringResource(R.string.open_gallery),
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    IconPhotoLibrary(Modifier.size(24.dp), Color.White)
                 }
             }
         }
@@ -1320,12 +1290,7 @@ private fun ShutterRow(
                         .clickable(onClick = onSnapshot),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        painterResource(R.drawable.photo_camera_24px),
-                        contentDescription = stringResource(R.string.capture),
-                        tint = Color.Black,
-                        modifier = Modifier.size(24.dp).rotate(iconRotation)
-                    )
+                    IconCamera(Modifier.size(24.dp).rotate(iconRotation), Color.Black)
                 }
             } else {
                 Spacer(Modifier.size(48.dp))
@@ -1338,12 +1303,7 @@ private fun ShutterRow(
                     .clickable(onClick = onFlipCamera),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painterResource(R.drawable.flip_camera_android_24px),
-                    contentDescription = stringResource(R.string.flip_camera),
-                    tint = Color.White,
-                    modifier = Modifier.size(24.dp).rotate(iconRotation)
-                )
+                    IconFlipCamera(Modifier.size(24.dp).rotate(iconRotation), Color.White)
             }
         }
     }
@@ -1432,12 +1392,7 @@ private fun BottomBar(
                     .clickable { if (!isPhotoType) onPickerChanged(true) },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painterResource(R.drawable.photo_camera_24px),
-                    contentDescription = stringResource(R.string.mode_photo),
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp).rotate(iconRotation)
-                )
+                IconCamera(Modifier.size(20.dp).rotate(iconRotation), Color.White)
             }
             Box(
                 modifier = Modifier
@@ -1446,12 +1401,7 @@ private fun BottomBar(
                     .clickable { if (isPhotoType) onPickerChanged(false) },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painterResource(R.drawable.video_camera_back_24px),
-                    contentDescription = stringResource(R.string.mode_video),
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp).rotate(iconRotation)
-                )
+                IconVideoCamera(Modifier.size(20.dp).rotate(iconRotation), Color.White)
             }
         }
 
@@ -1598,12 +1548,7 @@ private fun ExposureTimeBar(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                painterResource(R.drawable.ic_timer),
-                contentDescription = "Exposure time",
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+            IconTimer(Modifier.size(20.dp), Color.White)
         }
         Slider(
             value = selectedIndex.toFloat(),
@@ -1651,12 +1596,7 @@ private fun IsoBar(
                 .clickable { onIndexChange(0) },
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                painterResource(R.drawable.iso_24px),
-                contentDescription = stringResource(R.string.iso),
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
+            IconIso(Modifier.size(20.dp), Color.White)
         }
         if (isoStops.isEmpty()) {
             Text(

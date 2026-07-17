@@ -115,7 +115,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_weight),
                         value = metrics.weight?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_kg),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.Weight),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.WEIGHT)) },
                     )
@@ -124,7 +124,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_height),
                         value = metrics.height?.let { (it * 100).round(1).toString() } ?: "--",
                         unit = stringResource(R.string.unit_cm),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.Height),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.HEIGHT)) },
                     )
@@ -133,7 +133,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_body_fat),
                         value = metrics.bodyFat?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_percent),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.BodyFat),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.BODY_FAT)) },
                     )
@@ -142,7 +142,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_lean_body_mass),
                         value = metrics.leanBodyMass?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_kg),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.LeanBodyMass),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.LEAN_BODY_MASS)) },
                     )
@@ -151,7 +151,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_bone_mass),
                         value = metrics.boneMass?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_kg),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.BoneMass),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.BONE_MASS)) },
                     )
@@ -160,7 +160,7 @@ fun BodyPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_body_water_mass),
                         value = metrics.bodyWaterMass?.round(1)?.toString() ?: "--",
                         unit = stringResource(R.string.unit_kg),
-                        leadingIconRes = R.drawable.body_24px,
+                        leadingIcon = { m, c -> Icon(painterResource(R.drawable.body_24px), null, m, c) },
                         leadingTint = colorFor(com.vayunmathur.health.data.RecordType.BodyWaterMass),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.BODY_WATER_MASS)) },
                     )

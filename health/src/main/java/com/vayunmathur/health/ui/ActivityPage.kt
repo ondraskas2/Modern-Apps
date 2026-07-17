@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
+import com.vayunmathur.library.ui.IconDirectionsWalk
+import com.vayunmathur.library.ui.IconFire
+import com.vayunmathur.library.ui.IconLocationOn
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Scaffold
 import com.vayunmathur.library.ui.Text
@@ -90,7 +93,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_steps),
                         value = stepsToday.toString(),
                         unit = stringResource(R.string.unit_steps),
-                        leadingIconRes = R.drawable.outline_directions_walk_24,
+                        leadingIcon = { m, c -> IconDirectionsWalk(m, c) },
                         leadingTint = colorFor(RecordType.Steps),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.STEPS)) },
                     )
@@ -99,7 +102,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_active),
                         value = activeCaloriesToday.toString(),
                         unit = stringResource(R.string.unit_cal),
-                        leadingIconRes = R.drawable.baseline_local_fire_department_24,
+                        leadingIcon = { m, c -> IconFire(m, c) },
                         leadingTint = colorFor(RecordType.CaloriesActive),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.ACTIVE_CALORIES)) },
                     )
@@ -108,7 +111,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_distance),
                         value = distanceToday.round(2).toString(),
                         unit = stringResource(R.string.unit_km),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Distance),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.DISTANCE)) },
                     )
@@ -117,7 +120,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_floors),
                         value = floorsToday.round(1).toString(),
                         unit = stringResource(R.string.unit_fl),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Floors),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.FLOORS)) },
                     )
@@ -126,7 +129,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_elevation),
                         value = elevationToday.round(1).toString(),
                         unit = stringResource(R.string.unit_m),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Elevation),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.ELEVATION)) },
                     )
@@ -135,7 +138,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_wheelchair_pushes),
                         value = wheelchairToday.toString(),
                         unit = stringResource(R.string.unit_pushes),
-                        leadingIconRes = R.drawable.outline_directions_walk_24,
+                        leadingIcon = { m, c -> IconDirectionsWalk(m, c) },
                         leadingTint = colorFor(RecordType.Wheelchair),
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.WHEELCHAIR_PUSHES)) },
                     )
@@ -144,7 +147,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_exercise),
                         value = exerciseToday.toString(),
                         unit = stringResource(R.string.unit_min),
-                        leadingIconRes = R.drawable.outline_directions_walk_24,
+                        leadingIcon = { m, c -> IconDirectionsWalk(m, c) },
                         leadingTint = colorFor(RecordType.Exercise),
                         onClick = { backStack.add(Route.ExerciseDetails) },
                     )
@@ -161,7 +164,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_steps),
                         value = stepsToday.toString(),
                         unit = stringResource(R.string.unit_steps),
-                        leadingIconRes = R.drawable.outline_directions_walk_24,
+                        leadingIcon = { m, c -> IconDirectionsWalk(m, c) },
                         leadingTint = colorFor(RecordType.Steps),
                         sparkline = emptyList(), // TODO: HealthAPI.getListOfSums for 7d
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.STEPS)) },
@@ -171,7 +174,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_active),
                         value = activeCaloriesToday.toString(),
                         unit = stringResource(R.string.unit_cal),
-                        leadingIconRes = R.drawable.baseline_local_fire_department_24,
+                        leadingIcon = { m, c -> IconFire(m, c) },
                         leadingTint = colorFor(RecordType.CaloriesActive),
                         sparkline = emptyList(), // TODO
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.ACTIVE_CALORIES)) },
@@ -181,7 +184,7 @@ fun ActivityPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                         label = stringResource(R.string.label_distance),
                         value = distanceToday.round(2).toString(),
                         unit = stringResource(R.string.unit_km),
-                        leadingIconRes = R.drawable.baseline_location_pin_24,
+                        leadingIcon = { m, c -> IconLocationOn(m, c) },
                         leadingTint = colorFor(RecordType.Distance),
                         sparkline = emptyList(), // TODO
                         onClick = { backStack.add(Route.BarChartDetails(HealthMetricConfig.DISTANCE)) },

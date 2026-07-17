@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
+import com.vayunmathur.library.ui.IconMyLocation
 import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
@@ -91,9 +92,7 @@ fun LocationItem(
                 if (dragHandle != null) {
                     dragHandle()
                 } else if (location.isCurrent) {
-                    Icon(
-                        painter = painterResource(R.drawable.outline_my_location_24),
-                        contentDescription = "Current device location",
+                    IconMyLocation(
                         tint = contentColor,
                     )
                 }

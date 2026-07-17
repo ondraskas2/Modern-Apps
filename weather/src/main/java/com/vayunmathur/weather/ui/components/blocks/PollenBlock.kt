@@ -3,6 +3,7 @@ package com.vayunmathur.weather.ui.components.blocks
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconGrass
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -42,7 +43,7 @@ fun PollenBlock(air: AirQualityCurrent?) {
     }
     SquareBlock {
         Box(Modifier.align(Alignment.TopStart)) {
-            BlockHeader(iconRes = R.drawable.outline_grass_24, title = "Pollen")
+            BlockHeader(icon = { m, c -> IconGrass(m, c) }, title = "Pollen")
         }
         Text(
             text = "$level/4",

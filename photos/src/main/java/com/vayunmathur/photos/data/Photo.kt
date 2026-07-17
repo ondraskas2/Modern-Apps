@@ -12,8 +12,10 @@ data class VideoData(val duration: Long)
 
 /**
  * GPano geometry parsed from a photo's XMP. Present ⇒ the photo is a
- * 360/panorama and should be viewed in the sphere renderer. Describes how the
- * stored image maps onto the full equirectangular sphere.
+ * panorama/360 photo. [projectionType] distinguishes an "equirectangular" full
+ * sphere (viewed in the sphere renderer) from a "cylindrical" flat panorama
+ * (viewed as a wide, horizontally-scrolling rectangle). Describes how the stored
+ * image maps onto the full panorama.
  */
 @Serializable
 data class PanoData(
@@ -23,7 +25,15 @@ data class PanoData(
     val croppedHeight: Int,
     val croppedLeft: Int,
     val croppedTop: Int,
-)
+    val projectionType: String? = null,
+) {
+    /**
+     * True for a full 360 sphere (equirectangular); false for a flat
+     * (cylindrical) panorama. Legacy rows with no recorded projection are
+     * treated as spheres, matching the original equirectangular-only behaviour.
+     */
+    val isSphere: Boolean get() = !projectionType.equals("cylindrical", ignoreCase = true)
+}
 
 @Serializable
 @Entity(indices = [Index(value = ["date"])])

@@ -22,7 +22,6 @@ import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.OutlinedTextField
 import com.vayunmathur.library.ui.ProvideTextStyle
@@ -43,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -54,8 +52,10 @@ import com.vayunmathur.calendar.R
 import com.vayunmathur.calendar.util.RRule
 import com.vayunmathur.calendar.util.RecurrenceParams
 import com.vayunmathur.calendar.Route
+import com.vayunmathur.library.ui.IconGlobe
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
+import com.vayunmathur.library.ui.IconSchedule
 import com.vayunmathur.library.util.ResultEffect
 import kotlin.time.Instant
 import kotlinx.datetime.LocalDate
@@ -266,7 +266,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
             )
             HorizontalDivider(Modifier.padding(vertical = 16.dp))
             Item(
-                { Icon(painterResource(R.drawable.nest_clock_farsight_analog_24px), null) },
+                { IconSchedule() },
                 {Text(stringResource(R.string.all_day))},
                 { Switch(allDay, { allDay = it }) }
             )
@@ -311,7 +311,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
 
             if (!allDay) {
                 Item(
-                    { Box(modifier = Modifier.size(24.dp).background(Color.Transparent)) { Icon(painterResource(R.drawable.globe_24px), null) } },
+                    { Box(modifier = Modifier.size(24.dp).background(Color.Transparent)) { IconGlobe() } },
                     { Text(timezone, Modifier.clickable { backStack.add(Route.EditEvent.TimezonePickerDialog(KEY_TIMEZONE)) }) }
                 )
             }
@@ -321,7 +321,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
             // Reminders
             reminders.forEach { minutes ->
                 Item(
-                    { Icon(painterResource(R.drawable.nest_clock_farsight_analog_24px), null) },
+                    { IconSchedule() },
                     { Text(reminderLabel(minutes)) },
                     { Text(stringResource(R.string.remove), Modifier.clickable { reminders = reminders - minutes }) },
                 )
@@ -330,7 +330,7 @@ fun EditEventScreen(viewModel: CalendarViewModel, editRoute: Route.EditEvent, ba
             val available = REMINDER_PRESETS.filter { it !in reminders }
             if (available.isNotEmpty()) {
                 Item(
-                    { Icon(painterResource(R.drawable.nest_clock_farsight_analog_24px), null) },
+                    { IconSchedule() },
                     {
                         Box {
                             Text(stringResource(R.string.add_reminder), Modifier.clickable { addReminderExpanded = true })

@@ -4,13 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -24,7 +23,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun BlockHeader(
-    iconRes: Int,
+    icon: @Composable (Modifier, Color) -> Unit,
     title: String,
     topPadding: Dp = 16.dp,
 ) {
@@ -33,11 +32,9 @@ fun BlockHeader(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(top = topPadding, start = 12.dp, end = 12.dp),
     ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+        icon(
+            Modifier.size(18.dp),
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
         )
         Text(
             text = title,

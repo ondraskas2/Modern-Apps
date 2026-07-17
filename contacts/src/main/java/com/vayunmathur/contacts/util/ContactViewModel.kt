@@ -161,19 +161,17 @@ class ContactViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Builds a safe FTS4 prefix-match expression from raw user input. Splits on
-     * whitespace, wraps each token in double quotes (escaping internal quotes)
-     * and appends `*` for prefix matching, e.g. `"tok1"* "tok2"*`. Returns
-     * `null` when there is nothing searchable, so callers fall back to the full
-     * contact list. Quoting neutralizes FTS special characters (`(`, `"`, `*`,
-     * trailing `-`, etc.) that would otherwise produce a malformed MATCH.
+     * whitespace, strips characters that are FTS query operators (which would
+     * make the MATCH malformed) from each token, then appends `*` for prefix
+     * matching, e.g. `tok1* tok2*`. Returns `null` when there is nothing
+     * searchable, so callers fall back to the full contact list.
      */
     private fun toFtsPrefixQuery(query: String): String? {
-        val tokens = query.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val tokens = query.split(Regex("\\s+"))
+            .map { it.replace(Regex("[^\\p{L}\\p{N}]"), "") }
+            .filter { it.isNotBlank() }
         if (tokens.isEmpty()) return null
-        return tokens.joinToString(" ") { token ->
-            val escaped = token.replace("\"", "\"\"")
-            "\"$escaped\"*"
-        }
+        return tokens.joinToString(" ") { "$it*" }
     }
 
     fun setCalendarSyncEnabled(enabled: Boolean) {

@@ -213,9 +213,7 @@ fun NutritionPage(backStack: NavBackStack<Route>, viewModel: HealthViewModel) {
                     },
                     supportingContent = { Text("View full breakdown") },
                     trailingContent = {
-                        Icon(
-                            painter = painterResource(R.drawable.outline_arrow_forward_24),
-                            contentDescription = null,
+                        IconArrowForward(
                             tint = HealthColors.Nutrition,
                         )
                     },

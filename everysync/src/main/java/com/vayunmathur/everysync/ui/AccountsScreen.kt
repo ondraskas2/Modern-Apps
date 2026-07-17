@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import com.vayunmathur.library.ui.CircularProgressIndicator
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.Icon
@@ -45,6 +47,7 @@ fun AccountsScreen(backStack: NavBackStack<Route>, viewModel: EverySyncViewModel
     )
     PermissionsChecker(permissions, stringResource(R.string.need_permissions)) {
         val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+        val syncing by viewModel.syncing.collectAsStateWithLifecycle()
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -74,6 +77,7 @@ fun AccountsScreen(backStack: NavBackStack<Route>, viewModel: EverySyncViewModel
                 LazyColumn(Modifier.padding(padding)) {
                     items(accounts, key = { it.accountName }) { account ->
                         val provider = ProviderRegistry.get(account.providerId)
+                        val isSyncing = account.accountName in syncing
                         ListItem(
                             modifier = Modifier.clickable { backStack.add(Route.AccountDetail(account.accountName)) },
                             content = { Text(account.accountName) },
@@ -81,10 +85,13 @@ fun AccountsScreen(backStack: NavBackStack<Route>, viewModel: EverySyncViewModel
                                 Column {
                                     Text(provider?.displayName ?: account.providerId)
                                     Text(
-                                        account.lastSyncError
-                                            ?: if (account.lastSyncEpochMs > 0)
+                                        when {
+                                            isSyncing -> stringResource(R.string.syncing)
+                                            account.lastSyncError != null -> account.lastSyncError
+                                            account.lastSyncEpochMs > 0 ->
                                                 stringResource(R.string.last_synced, formatTime(account.lastSyncEpochMs))
-                                            else stringResource(R.string.never_synced),
+                                            else -> stringResource(R.string.never_synced)
+                                        },
                                     )
                                 }
                             },
@@ -92,8 +99,12 @@ fun AccountsScreen(backStack: NavBackStack<Route>, viewModel: EverySyncViewModel
                                 Icon(androidx.compose.ui.res.painterResource(provider?.iconRes ?: R.drawable.ic_provider), null)
                             },
                             trailingContent = {
-                                IconButton(onClick = { viewModel.syncNow(account.accountName) }) {
-                                    IconRefresh()
+                                if (isSyncing) {
+                                    CircularProgressIndicator(Modifier.size(24.dp))
+                                } else {
+                                    IconButton(onClick = { viewModel.syncNow(account.accountName) }) {
+                                        IconRefresh()
+                                    }
                                 }
                             },
                         )

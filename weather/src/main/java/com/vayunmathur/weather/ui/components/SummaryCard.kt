@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconCalendar
 import com.vayunmathur.library.ui.Surface
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
@@ -30,7 +31,7 @@ fun SummaryCard(forecast: ForecastResponse, tempUnit: TemperatureUnit) {
         shadowElevation = 2.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            CardsHeader(text = "Summary", iconRes = R.drawable.outline_calendar_24)
+            CardsHeader(text = "Summary", icon = { m, c -> IconCalendar(m, c) })
             Spacer(Modifier.height(8.dp))
             Text(
                 text = summary,

@@ -17,7 +17,7 @@ import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FilterChip
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconArrowDropDown
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.OutlinedTextField
@@ -34,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,7 +64,7 @@ private fun LanguageSelector(selectedCode: String, onSelect: (String) -> Unit) {
             content = { Text(stringResource(R.string.label_youtube_language)) },
             supportingContent = { Text(currentName) },
             trailingContent = {
-                Icon(painterResource(R.drawable.outline_arrow_drop_down_24), contentDescription = null)
+                IconArrowDropDown()
             },
             modifier = Modifier.padding(start = 16.dp).clickable { expanded = true },
         )

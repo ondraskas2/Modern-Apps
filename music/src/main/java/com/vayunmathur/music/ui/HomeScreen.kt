@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.BottomAppBar
 import com.vayunmathur.library.ui.FloatingActionButton
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconShuffle
+import com.vayunmathur.library.ui.IconSkipNext
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.LinearProgressIndicator
 import com.vayunmathur.library.ui.ListItem
@@ -25,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,7 +98,7 @@ fun ShufflePlayFab(musicViewModel: MusicViewModel) {
         FloatingActionButton({
             musicViewModel.playShuffled(allSongs, sourceId = "all_songs", sourceName = "All Songs")
         }) {
-            Icon(painterResource(R.drawable.ic_shuffle), null)
+            IconShuffle()
         }
     }
 }
@@ -159,7 +159,7 @@ fun PlayingBottomBar(
                             if (isPlaying) IconPause() else IconPlay()
                         }
                         IconButton(onClick = { musicViewModel.skipNext() }) {
-                            Icon(painterResource(R.drawable.ic_skip_next), contentDescription = null)
+                            IconSkipNext()
                         }
                     }
                 }

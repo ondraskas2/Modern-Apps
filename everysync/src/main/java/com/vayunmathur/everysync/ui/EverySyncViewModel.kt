@@ -12,6 +12,7 @@ import com.vayunmathur.everysync.auth.TokenStore
 import com.vayunmathur.everysync.provider.DataType
 import com.vayunmathur.everysync.provider.ProviderRegistry
 import com.vayunmathur.everysync.sync.SyncScheduler
+import com.vayunmathur.everysync.sync.SyncStatus
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -22,6 +23,10 @@ class EverySyncViewModel(app: Application) : AndroidViewModel(app) {
 
     val accounts = store.accountsFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Account names with a sync currently in progress. */
+    val syncing = SyncStatus.syncing
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     val interval = Settings.intervalFlow(app)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 60L)

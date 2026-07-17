@@ -99,6 +99,13 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
     @Volatile
     var latestFrame: Bitmap? = null
 
+    /**
+     * Invoked once when a sweep auto-completes (all guide dots captured, or the
+     * panorama reaches its angular limit). Lets the owner run stitch + save,
+     * since the engine only stops the sensor here.
+     */
+    var onSweepComplete: (() -> Unit)? = null
+
     companion object {
         private const val FRAME_SCALE = 0.75f
 
@@ -212,6 +219,7 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         val allCaptured = _guideDots.value.all { it.state == GuideDotState.CAPTURED }
         if (allCaptured || (!sphereMode && Math.abs(accumulatedAngle) > 200f)) {
             stopSweep()
+            onSweepComplete?.invoke()
         }
     }
 
@@ -225,7 +233,7 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         _guideDots.value = dots.map { dot ->
             if (dot.state == GuideDotState.CAPTURED) return@map dot
 
-            val angleDiff = Math.abs(currentAng - dot.targetAngle)
+            val angleDiff = Math.abs(wrapDegrees(currentAng - dot.targetAngle))
             val pitchDiff = Math.abs(accumulatedPitch - dot.targetPitch)
             val withinCapture = angleDiff < ALIGNMENT_THRESHOLD_DEGREES && pitchDiff < PITCH_THRESHOLD_DEGREES
             val withinAligning = angleDiff < ALIGNMENT_THRESHOLD_DEGREES * 2 && pitchDiff < PITCH_THRESHOLD_DEGREES * 2
@@ -249,6 +257,14 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
         _guideDots.value = _guideDots.value.map {
             if (it.index == index) it.copy(state = state) else it
         }
+    }
+
+    /** Smallest signed difference of an angle in degrees, normalized to (-180, 180]. */
+    private fun wrapDegrees(deg: Float): Float {
+        var d = deg % 360f
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return d
     }
 
     suspend fun stitch(): Pair<Bitmap, PanoInfo>? {
@@ -474,20 +490,18 @@ class PanoramaEngine(private val context: Context) : SensorEventListener {
             Utils.matToBitmap(cropped, bitmap)
             cropped.release()
 
-            // A cylindrical strip of width W covers a horizontal FOV of W/f radians,
-            // so the equivalent full equirectangular sphere is 2π·f wide. Center the
-            // covered strip inside that full sphere. GPano only defines
-            // "equirectangular"; viewers handle the limited cropped area.
-            val fullWidth = Math.round(2.0 * Math.PI * f).toInt()
-            val fullHeight = fullWidth / 2
+            // A regular (non-sphere) panorama is a flat, wide image — not a slice
+            // of a 360 sphere. Tag it as a complete cylindrical panorama (full ==
+            // cropped, no offsets) so viewers show it as a scrollable panorama
+            // rather than opening the immersive 360/VR sphere viewer.
             val info = PanoInfo(
-                projectionType = "equirectangular",
-                fullWidth = fullWidth,
-                fullHeight = fullHeight,
+                projectionType = "cylindrical",
+                fullWidth = bitmap.width,
+                fullHeight = bitmap.height,
                 croppedWidth = bitmap.width,
                 croppedHeight = bitmap.height,
-                croppedLeft = ((fullWidth - bitmap.width) / 2).coerceAtLeast(0),
-                croppedTop = ((fullHeight - bitmap.height) / 2).coerceAtLeast(0),
+                croppedLeft = 0,
+                croppedTop = 0,
             )
             Pair(bitmap, info)
         } catch (_: Exception) {

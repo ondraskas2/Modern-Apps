@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.vayunmathur.library.ui.IconAdd
 import com.vayunmathur.library.ui.IconCrop
+import com.vayunmathur.library.ui.IconMoreVert
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconNavigation
 import com.vayunmathur.library.ui.IconSave
@@ -175,7 +176,7 @@ fun CapturePdfScreen(
                             if (images.isNotEmpty()) {
                                 Box {
                                     IconButton(onClick = { showScanOptions = true }) {
-                                        Icon(painterResource(R.drawable.ic_overflow), contentDescription = "Scan options")
+                                        IconMoreVert()
                                     }
                                     com.vayunmathur.library.ui.DropdownMenu(
                                         expanded = showScanOptions,

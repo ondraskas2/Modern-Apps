@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconVisible
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -38,7 +39,7 @@ fun VisibilityBlock(current: Current, useMiles: Boolean = false) {
         )
         Box(Modifier.align(Alignment.TopCenter)) {
             BlockHeader(
-                iconRes = R.drawable.outline_visibility_24,
+                icon = { m, c -> IconVisible(m, c) },
                 title = "Visibility",
                 topPadding = 36.dp,
             )

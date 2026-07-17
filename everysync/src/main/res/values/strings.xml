@@ -27,6 +27,12 @@
     <string name="dav_username">Username / email</string>
     <string name="dav_password">Password (app-specific)</string>
     <string name="login">Log in</string>
+
+    <!-- iCloud app-specific password guidance -->
+    <string name="icloud_app_password_steps">iCloud needs an app-specific password (not your Apple ID password):\n\n1. Sign in at account.apple.com\n2. Open Sign-In &amp; Security → App-Specific Passwords\n3. Create one and name it \"EverySync\"\n4. Enter your Apple ID email and that password below</string>
+    <string name="icloud_create_password">Create app-specific password</string>
+    <string name="apple_id_email">Apple ID email</string>
+    <string name="app_specific_password">App-specific password</string>
     <string name="cancel">Cancel</string>
 
     <!-- Account detail -->

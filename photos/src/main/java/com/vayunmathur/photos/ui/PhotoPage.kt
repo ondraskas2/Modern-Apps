@@ -23,7 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconPause
+import com.vayunmathur.library.ui.IconPlayCircle
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.FilledTonalButton
 import com.vayunmathur.library.ui.MaterialTheme
@@ -52,7 +53,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
@@ -241,9 +241,11 @@ fun PhotoDetailView(
         }
     }
 
-    // 360/panorama photos show as a flat image by default; a button opens an
-    // immersive drag-to-look-around sphere viewer.
+    // Panorama photos show as a flat image by default; a button opens an
+    // immersive viewer — a drag-to-look sphere for 360s, or a wide
+    // horizontally-scrolling rectangle for flat (cylindrical) panoramas.
     val isPanorama = photo.videoData == null && photo.panoData != null
+    val isSphere = photo.panoData?.isSphere == true
     var showImmersive by remember(photo.id) { mutableStateOf(false) }
 
     Box(
@@ -411,7 +413,7 @@ fun PhotoDetailView(
                         color = Color.LightGray
                 )
                 if (photo.panoData != null) {
-                    Text(text = "360°", color = Color.LightGray)
+                    Text(text = if (isSphere) "360°" else "Panorama", color = Color.LightGray)
                 }
                 if (peopleCount > 0) {
                     Text(
@@ -452,7 +454,7 @@ fun PhotoDetailView(
                     modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
             ) {
                 FilledTonalButton(onClick = { showImmersive = true }) {
-                    Text(stringResource(R.string.view_360))
+                    Text(stringResource(if (isSphere) R.string.view_360 else R.string.view_panorama))
                 }
             }
         }
@@ -464,7 +466,11 @@ fun PhotoDetailView(
                 properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                PanoramaSphereView(photo = photo, modifier = Modifier.fillMaxSize())
+                if (isSphere) {
+                    PanoramaSphereView(photo = photo, modifier = Modifier.fillMaxSize())
+                } else {
+                    PanoramaFlatView(photo = photo, modifier = Modifier.fillMaxSize())
+                }
                 FilledTonalButton(
                         onClick = { showImmersive = false },
                         modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
@@ -545,14 +551,10 @@ fun VideoPlayer(
         // Play/Pause Overlay
         AnimatedVisibility(visible = isMetadataVisible, enter = fadeIn(), exit = fadeOut()) {
             IconButton(onClick = { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }) {
-                Icon(
-                        painter =
-                                if (isPlaying) {
-                                    painterResource(R.drawable.outline_pause_24)
-                                } else {
-                                    painterResource(R.drawable.outline_play_circle_24)
-                                },
-                        contentDescription = "Toggle Play",
+                if (isPlaying) IconPause(
+                        modifier = Modifier.size(64.dp),
+                        tint = Color.White.copy(alpha = 0.8f)
+                ) else IconPlayCircle(
                         modifier = Modifier.size(64.dp),
                         tint = Color.White.copy(alpha = 0.8f)
                 )

@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconPlayCircle
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Surface
 import androidx.compose.runtime.Composable
@@ -21,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import coil.ImageLoader
@@ -98,9 +97,7 @@ object ImageLoader {
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        painterResource(R.drawable.outline_play_circle_24),
-                        contentDescription = "Video",
+                    IconPlayCircle(
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )

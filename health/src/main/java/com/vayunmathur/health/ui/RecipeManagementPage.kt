@@ -168,7 +168,7 @@ fun IngredientsList(ingredients: List<Ingredient>, viewModel: HealthViewModel) {
                         IconButton(onClick = {
                             viewModel.updateIngredient(ingredient.copy(isRecipe = !ingredient.isRecipe))
                         }) {
-                            if (ingredient.isRecipe) IconFire() else Icon(painterResource(R.drawable.baseline_local_fire_department_24), "Mark as Recipe", tint = MaterialTheme.colorScheme.outline)
+                            if (ingredient.isRecipe) IconFire() else IconFire(tint = MaterialTheme.colorScheme.outline)
                         }
                         IconButton(onClick = { viewModel.deleteIngredient(ingredient) }) {
                             IconDelete()

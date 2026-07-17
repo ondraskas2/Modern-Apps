@@ -10,7 +10,7 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import androidx.collection.LruCache
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconMoreVert
 import com.vayunmathur.library.ui.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,13 +20,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.core.graphics.createBitmap
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Size as CoilSize
 import com.vayunmathur.library.util.NavBackStack
-import com.vayunmathur.music.R
 import com.vayunmathur.music.Route
 import com.vayunmathur.music.data.Album
 import com.vayunmathur.music.data.Artist
@@ -215,7 +213,7 @@ fun createCollageBitmap(context: Context, uris: List<Uri>): Bitmap {
 @Composable
 fun AddToPlaylistButton(backStack: NavBackStack<Route>, music: Music) {
     IconButton(onClick = { backStack.add(Route.AddToPlaylistDialog(music.id)) }) {
-        Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "Add to playlist")
+        IconMoreVert()
     }
 }
 

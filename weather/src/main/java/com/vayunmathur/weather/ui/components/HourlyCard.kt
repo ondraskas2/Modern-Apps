@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.vayunmathur.library.ui.ExperimentalMaterial3ExpressiveApi
+import com.vayunmathur.library.ui.IconSchedule
 import com.vayunmathur.library.ui.MaterialShapes
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Surface
@@ -90,7 +91,7 @@ fun HourlyCard(
         shadowElevation = 2.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            CardsHeader(text = "Hourly forecast", iconRes = R.drawable.outline_schedule_24)
+            CardsHeader(text = "Hourly forecast", icon = { m, c -> IconSchedule(m, c) })
             LazyRow(state = listState) {
                 items(cells.size, key = { "${cells[it].epochSec}_$it" }) { index ->
                     val cell = cells[index]

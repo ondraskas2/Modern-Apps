@@ -3,6 +3,7 @@ package com.vayunmathur.weather.ui.components.blocks
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconCloudy
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,7 +30,7 @@ fun CloudCoverBlock(current: Current) {
     CircularStatBlock {
         Box(Modifier.align(Alignment.TopCenter)) {
             BlockHeader(
-                iconRes = R.drawable.outline_cloudy_24,
+                icon = { m, c -> IconCloudy(m, c) },
                 title = "Cloud cover",
                 topPadding = 36.dp,
             )

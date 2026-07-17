@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.size
 import com.vayunmathur.library.ui.DropdownMenu
 import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconArrowDropDown
 import com.vayunmathur.library.ui.ListItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -17,7 +17,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.calendar.R
@@ -48,7 +47,7 @@ fun CalendarSelectorDropdown(
                 selectedCalendar?.color?.let { Box(Modifier.size(24.dp).background(Color(it), RectangleShape)) }
             },
             trailingContent = {
-                Icon(painterResource(R.drawable.arrow_drop_down_24px), contentDescription = null)
+                IconArrowDropDown()
             },
             modifier = Modifier.clickable { showDropdown = true },
         )

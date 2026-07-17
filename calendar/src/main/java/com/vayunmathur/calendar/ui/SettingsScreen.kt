@@ -22,7 +22,6 @@ import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.HorizontalDivider
-import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
@@ -41,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.vayunmathur.library.util.NavBackStack
@@ -49,6 +47,7 @@ import com.vayunmathur.calendar.util.CalendarViewModel
 import com.vayunmathur.calendar.Route
 import com.vayunmathur.calendar.R
 import com.vayunmathur.library.ui.IconAdd
+import com.vayunmathur.library.ui.IconArrowDropDown
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconEdit
 import com.vayunmathur.library.ui.IconNavigation
@@ -117,7 +116,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                                 TextButton(onClick = { showDefaultLayoutMenu = true }) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(currentLayout.prettyName)
-                                        Icon(painterResource(R.drawable.arrow_drop_down_24px), null)
+                                        IconArrowDropDown()
                                     }
                                 }
                                 DropdownMenu(expanded = showDefaultLayoutMenu, onDismissRequest = { showDefaultLayoutMenu = false }) {
@@ -143,7 +142,7 @@ fun SettingsScreen(viewModel: CalendarViewModel, backStack: NavBackStack<Route>)
                         supportingContent = { Text("Add public holidays for countries") },
                         modifier = Modifier.clickable { backStack.add(Route.Settings.HolidayCalendars) },
                         trailingContent = {
-                            Icon(painterResource(R.drawable.arrow_drop_down_24px), null)
+                            IconArrowDropDown()
                         },
                     )
                     HorizontalDivider()

@@ -36,7 +36,9 @@ import com.vayunmathur.library.ui.FilledTonalButton
 import com.vayunmathur.library.ui.FloatingActionButton
 import com.vayunmathur.library.ui.FloatingActionButtonMenu
 import com.vayunmathur.library.ui.FloatingActionButtonMenuItem
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconLink
+import com.vayunmathur.library.ui.IconLocationOn
+import com.vayunmathur.library.ui.IconPerson
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.ListItem
 import com.vayunmathur.library.ui.ListItemDefaults
@@ -68,7 +70,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -457,17 +458,17 @@ fun MainPage(
                                 backStack.add(Route.AddPersonDialog())
                             },
                                 { Text(stringResource(R.string.fab_person)) },
-                                { Icon(painterResource(R.drawable.outline_person_24), null) })
+                                { IconPerson() })
                             FloatingActionButtonMenuItem({
                                 ffViewModel.beginCreateWaypoint()
                             },
                                 { Text(stringResource(R.string.fab_location)) },
-                                { Icon(painterResource(R.drawable.outline_pin_drop_24), null) })
+                                { IconLocationOn() })
                             FloatingActionButtonMenuItem({
                                 backStack.add(Route.AddLinkDialog)
                             },
                                 { Text(stringResource(R.string.fab_link)) },
-                                { Icon(painterResource(R.drawable.outline_link_24), null) })
+                                { IconLink() })
                         }
                     } else if (selectedWaypointId != null) {
                         FloatingActionButton(

@@ -126,11 +126,9 @@ private fun ExerciseSessionCard(record: Record) {
                         .background(HealthColors.Activity.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.outline_directions_walk_24),
-                        contentDescription = null,
-                        tint = HealthColors.Activity,
+                    IconDirectionsWalk(
                         modifier = Modifier.size(22.dp),
+                        tint = HealthColors.Activity,
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -193,9 +191,7 @@ private fun ExerciseSessionCard(record: Record) {
             if (exercise?.hasRoute == true) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        painterResource(R.drawable.baseline_location_pin_24),
-                        contentDescription = null,
+                    IconLocationOn(
                         tint = HealthColors.Activity,
                         modifier = Modifier.size(16.dp)
                     )

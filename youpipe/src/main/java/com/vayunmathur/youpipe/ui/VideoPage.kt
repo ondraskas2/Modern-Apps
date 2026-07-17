@@ -28,7 +28,9 @@ import com.vayunmathur.library.ui.DropdownMenuItem
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
 import com.vayunmathur.library.ui.ExposedDropdownMenuBox
 import com.vayunmathur.library.ui.ExposedDropdownMenuDefaults
-import com.vayunmathur.library.ui.Icon
+import com.vayunmathur.library.ui.IconDownload
+import com.vayunmathur.library.ui.IconThumbDown
+import com.vayunmathur.library.ui.IconThumbUp
 import com.vayunmathur.library.ui.IconClose
 import com.vayunmathur.library.ui.IconDelete
 import com.vayunmathur.library.ui.IconButton
@@ -55,7 +57,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -412,10 +413,7 @@ fun VideoDetails(
                     IconButton(onClick = {
                         isDownloadDialogVisible = true
                     }) {
-                        Icon(
-                            painterResource(R.drawable.download_24px),
-                            contentDescription = "Download"
-                        )
+                        IconDownload()
                     }
                 } else {
                     IconButton(onClick = {
@@ -466,11 +464,11 @@ fun CommentItem(c: Comment) {
         Column {
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(R.drawable.outline_thumb_up_24), null, Modifier.size(16.dp))
+                IconThumbUp(Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(c.likes.toString())
                 Spacer(Modifier.width(16.dp))
-                Icon(painterResource(R.drawable.outline_thumb_down_24), null, Modifier.size(16.dp))
+                IconThumbDown(Modifier.size(16.dp))
             }
         }
     }) {

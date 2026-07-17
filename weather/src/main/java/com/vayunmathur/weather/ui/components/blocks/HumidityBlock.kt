@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconDrizzle
 import com.vayunmathur.library.ui.Surface
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +50,7 @@ fun HumidityBlock(current: Current, tempUnit: TemperatureUnit) {
             colorFilter = ColorFilter.tint(tint),
         )
         Box(Modifier.align(Alignment.TopStart)) {
-            BlockHeader(iconRes = R.drawable.outline_drizzle_24, title = "Humidity")
+            BlockHeader(icon = { m, c -> IconDrizzle(m, c) }, title = "Humidity")
         }
         Text(
             text = "${humidity}%",

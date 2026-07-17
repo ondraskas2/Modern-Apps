@@ -19,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -167,7 +166,7 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                     )
                 }
                 IconButton(onClick = {}) {
-                    Icon(painter = painterResource(id = R.drawable.ic_more_vert), null, tint = Color.White)
+                    IconMoreVert(tint = Color.White)
                 }
             }
 
@@ -195,22 +194,16 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = { musicViewModel.toggleRepeat() }) {
-                    Icon(
-                        painter = painterResource(
-                            when (repeatMode) {
-                                Player.REPEAT_MODE_ONE -> R.drawable.ic_repeat_one_on
-                                Player.REPEAT_MODE_ALL -> R.drawable.ic_repeat_on
-                                else -> R.drawable.ic_repeat
-                            }
-                        ),
-                        contentDescription = stringResource(R.string.content_desc_repeat),
-                        tint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    val repeatTint = if (repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                    when (repeatMode) {
+                        Player.REPEAT_MODE_ONE -> IconRepeatOne(tint = repeatTint)
+                        else -> IconRepeat(tint = repeatTint)
+                    }
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { musicViewModel.skipPrevious() }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_skip_previous), null, Modifier.size(40.dp), tint = Color.White)
+                        IconSkipPrevious(Modifier.size(40.dp), tint = Color.White)
                     }
                     Spacer(Modifier.width(16.dp))
                     Box(
@@ -225,16 +218,12 @@ fun SongScreen(backStack: NavBackStack<Route>, musicViewModel: MusicViewModel) {
                     }
                     Spacer(Modifier.width(16.dp))
                     IconButton(onClick = { musicViewModel.skipNext() }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_skip_next), null, Modifier.size(40.dp), tint = Color.White)
+                        IconSkipNext(Modifier.size(40.dp), tint = Color.White)
                     }
                 }
 
                 IconButton(onClick = { musicViewModel.toggleShuffle() }) {
-                    Icon(
-                        painter = painterResource(if (shuffleMode) R.drawable.ic_shuffle_on else R.drawable.ic_shuffle),
-                        contentDescription = stringResource(R.string.content_desc_shuffle),
-                        tint = if (shuffleMode) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    IconShuffle(tint = if (shuffleMode) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

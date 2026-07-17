@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import com.vayunmathur.library.ui.MaterialTheme
+import com.vayunmathur.library.ui.IconCalendar
 import com.vayunmathur.library.ui.Surface
 import com.vayunmathur.library.ui.Text
 import androidx.compose.runtime.Composable
@@ -44,7 +45,7 @@ fun DailyCard(
         shadowElevation = 2.dp,
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            CardsHeader(text = "Daily forecast", iconRes = R.drawable.outline_calendar_24)
+            CardsHeader(text = "Daily forecast", icon = { m, c -> IconCalendar(m, c) })
             Spacer(Modifier.height(14.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(daily.time.size, key = { "${daily.time[it]}_$it" }) { index ->

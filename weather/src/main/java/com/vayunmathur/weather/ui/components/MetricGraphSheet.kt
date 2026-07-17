@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.vayunmathur.library.ui.ExperimentalMaterial3Api
+import com.vayunmathur.library.ui.IconMap
 import com.vayunmathur.library.ui.Icon
 import com.vayunmathur.library.ui.IconButton
 import com.vayunmathur.library.ui.MaterialTheme
@@ -81,9 +82,7 @@ fun MetricGraphSheet(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 IconButton(onClick = onOpenMap) {
-                    Icon(
-                        painter = painterResource(R.drawable.outline_map_24),
-                        contentDescription = stringResource(R.string.open_map),
+                    IconMap(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
