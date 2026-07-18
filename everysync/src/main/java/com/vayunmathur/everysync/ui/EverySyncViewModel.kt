@@ -11,12 +11,16 @@ import com.vayunmathur.everysync.auth.OAuthManager
 import com.vayunmathur.everysync.auth.TokenStore
 import com.vayunmathur.everysync.provider.DataType
 import com.vayunmathur.everysync.provider.ProviderRegistry
+import com.vayunmathur.everysync.sink.CalendarSink
+import com.vayunmathur.everysync.sink.ContactsSink
 import com.vayunmathur.everysync.sync.SyncScheduler
 import com.vayunmathur.everysync.sync.SyncStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class EverySyncViewModel(app: Application) : AndroidViewModel(app) {
     private val store = AccountStore.getInstance(app)
@@ -84,6 +88,21 @@ class EverySyncViewModel(app: Application) : AndroidViewModel(app) {
             val config = store.get(accountName) ?: return@launch
             val types = if (enabled) config.enabledTypes + type else config.enabledTypes - type
             store.upsert(config.copy(enabledTypes = types))
+            val app = getApplication<Application>()
+            if (enabled) {
+                // Re-sync so the just-enabled type is repopulated on-device.
+                SyncScheduler.syncNow(app, accountName)
+            } else {
+                // Remove the disabled type's data from the on-device provider so it
+                // doesn't linger; it will be pulled again if re-enabled.
+                withContext(Dispatchers.IO) {
+                    when (type) {
+                        DataType.CONTACTS -> ContactsSink.purge(app, accountName)
+                        DataType.CALENDAR -> CalendarSink.purge(app, accountName)
+                        DataType.HEALTH -> {}
+                    }
+                }
+            }
         }
     }
 

@@ -175,6 +175,24 @@ object CalendarSink {
         }
     }
 
+    /**
+     * Removes every calendar (and, by cascade, its events) for this account from
+     * the on-device provider. Used when the user turns calendar sync off; the
+     * account itself stays, so a later re-enable can repopulate it from a fresh
+     * pull. Deleting via the sync-adapter URI hard-removes the rows.
+     */
+    fun purge(context: Context, accountName: String) {
+        try {
+            context.contentResolver.delete(
+                CalendarContract.Calendars.CONTENT_URI.asSyncAdapter(accountName),
+                "${CalendarContract.Calendars.ACCOUNT_NAME} = ? AND ${CalendarContract.Calendars.ACCOUNT_TYPE} = ?",
+                arrayOf(accountName, ACCOUNT_TYPE),
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "purge failed", e)
+        }
+    }
+
     fun localCalendars(context: Context, accountName: String): List<Long> {
         val ids = mutableListOf<Long>()
         try {

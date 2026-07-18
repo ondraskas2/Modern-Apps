@@ -128,6 +128,24 @@ object ContactsSink {
         }
     }
 
+    /**
+     * Removes every raw contact for this account from the on-device provider.
+     * Used when the user turns contact sync off; the account itself stays, so a
+     * later re-enable can repopulate it from a fresh pull. Deleting via the
+     * sync-adapter URI hard-removes the rows rather than marking them DELETED.
+     */
+    fun purge(context: Context, accountName: String) {
+        try {
+            context.contentResolver.delete(
+                ContactsContract.RawContacts.CONTENT_URI.asSyncAdapter(accountName),
+                "${ContactsContract.RawContacts.ACCOUNT_NAME} = ? AND ${ContactsContract.RawContacts.ACCOUNT_TYPE} = ?",
+                arrayOf(accountName, ACCOUNT_TYPE),
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "purge failed", e)
+        }
+    }
+
     /** Contacts the user edited/deleted locally (DIRTY/DELETED set by other apps). */
     fun getLocalChanges(context: Context, accountName: String): List<LocalContactChange> {
         val changes = mutableListOf<LocalContactChange>()
