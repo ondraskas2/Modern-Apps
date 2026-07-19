@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import com.vayunmathur.library.ui.HorizontalDivider
 import com.vayunmathur.library.ui.IconClearNight
 import com.vayunmathur.library.ui.IconSchedule
 import com.vayunmathur.library.ui.IconSunny
@@ -52,13 +52,13 @@ fun SunBlock(sunriseEpochSec: Long?, sunsetEpochSec: Long?, use24Hour: Boolean, 
                 .coerceIn(0.0, 1.0).toFloat()
         } else 0f
 
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
             val w = size.width
             val h = size.height
             // Half-circle arc from the bottom edge.
             val cx = w / 2f
-            val cy = h * 0.7f
-            val r = w * 0.35f
+            val cy = h * 0.65f
+            val r = w * 0.4f
             drawArc(
                 color = arcColor,
                 startAngle = 180f,
@@ -67,7 +67,7 @@ fun SunBlock(sunriseEpochSec: Long?, sunsetEpochSec: Long?, use24Hour: Boolean, 
                 topLeft = Offset(cx - r, cy - r),
                 size = androidx.compose.ui.geometry.Size(r * 2, r * 2),
                 style = Stroke(
-                    width = 3.dp.toPx(),
+                    width = 2.dp.toPx(),
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)),
                 ),
             )
@@ -75,19 +75,19 @@ fun SunBlock(sunriseEpochSec: Long?, sunsetEpochSec: Long?, use24Hour: Boolean, 
             val theta = Math.toRadians(180 + 180.0 * progress)
             val sx = (cx + r * cos(theta)).toFloat()
             val sy = (cy + r * sin(theta)).toFloat()
-            drawCircle(color = sunColor, radius = 7.dp.toPx(), center = Offset(sx, sy))
+            drawCircle(color = sunColor, radius = 6.dp.toPx(), center = Offset(sx, sy))
         }
 
         // Bottom panel with sunrise / sunset times + daylight length.
         Surface(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxHeight(0.46f).fillMaxWidth(),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxHeight(0.42f).fillMaxWidth(),
             color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f),
         ) {
             Box(Modifier.fillMaxSize()) {
-                HorizontalDivider(Modifier.align(Alignment.TopCenter))
                 Column(
-                    Modifier.align(Alignment.Center),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    Modifier.fillMaxWidth().align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     RiseSetTimeRow(
                         text = sunriseEpochSec?.let { formatClockTime(it, use24Hour) } ?: "—",
@@ -111,13 +111,18 @@ fun SunBlock(sunriseEpochSec: Long?, sunsetEpochSec: Long?, use24Hour: Boolean, 
 
 @Composable
 private fun RiseSetTimeRow(text: String, icon: @Composable (Modifier, Color) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        icon(Modifier.size(18.dp), MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.width(5.dp))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+    ) {
+        icon(Modifier.size(16.dp), MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.width(6.dp))
         Text(
             text = text,
             color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
         )
     }
 }

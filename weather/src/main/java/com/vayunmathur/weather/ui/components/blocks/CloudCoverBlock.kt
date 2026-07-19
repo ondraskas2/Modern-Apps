@@ -27,12 +27,11 @@ fun CloudCoverBlock(current: Current) {
         pct < 90 -> "Mostly cloudy"
         else -> "Overcast"
     }
-    CircularStatBlock {
-        Box(Modifier.align(Alignment.TopCenter)) {
+    SquareBlock {
+        Box(Modifier.align(Alignment.TopStart)) {
             BlockHeader(
                 icon = { m, c -> IconCloudy(m, c) },
                 title = "Cloud cover",
-                topPadding = 36.dp,
             )
         }
         Text(
@@ -43,7 +42,7 @@ fun CloudCoverBlock(current: Current) {
         )
         Text(
             text = label,
-            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-26).dp),
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-20).dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -32,23 +32,22 @@ import com.vayunmathur.weather.util.formatWind
 @Composable
 fun WindBlock(current: Current, unit: WindUnit) {
     val degrees = current.windDirection.toFloat()
-    CircularStatBlock {
+    SquareBlock {
         Image(
             painter = painterResource(R.drawable.weather_wind_arrow_dominant),
             contentDescription = null,
-            modifier = Modifier.matchParentSize().rotate(degrees),
+            modifier = Modifier.matchParentSize().rotate(degrees).padding(12.dp),
             colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.inversePrimary),
         )
-        Box(Modifier.align(Alignment.TopCenter)) {
+        Box(Modifier.align(Alignment.TopStart)) {
             BlockHeader(
                 icon = { m, c -> IconWind(m, c) },
                 title = "Wind",
-                topPadding = 36.dp,
             )
         }
         val windText = formatWind(current.windSpeed, unit)
         Row(
-            modifier = Modifier.align(Alignment.Center).offset(y = 10.dp),
+            modifier = Modifier.align(Alignment.Center).offset(y = 8.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             Text(
@@ -61,17 +60,17 @@ fun WindBlock(current: Current, unit: WindUnit) {
             Text(
                 text = windText.substringAfter(' '),
                 modifier = Modifier.alignByBaseline(),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Text(
             text = "From ${compassDirection(current.windDirection)} · Gusts ${formatWind(current.windGusts, unit)}",
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.labelSmall,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 16.dp)
-                .padding(horizontal = 16.dp),
+                .padding(bottom = 12.dp)
+                .padding(horizontal = 12.dp),
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

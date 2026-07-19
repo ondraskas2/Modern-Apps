@@ -2,6 +2,7 @@ package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.IconRain
@@ -40,17 +41,17 @@ fun PrecipitationBlock(
             BlockHeader(icon = { m, c -> IconRain(m, c) }, title = "Precipitation")
         }
         Column(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.align(Alignment.Center).offset(y = if (nowcast != null) (-12).dp else 0.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
                 text = value,
-                style = MaterialTheme.typography.displayMedium,
+                style = if (nowcast != null) MaterialTheme.typography.displaySmall else MaterialTheme.typography.displayMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 text = unit,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -59,9 +60,10 @@ fun PrecipitationBlock(
                 text = nowcast,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 style = MaterialTheme.typography.labelLarge,
                 textAlign = TextAlign.Center,
+                lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified,
                 color = MaterialTheme.colorScheme.primary,
             )
         }

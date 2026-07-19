@@ -45,13 +45,16 @@ fun resolveSdkDir(): String =
         }
         ?: error("Android SDK not found (set ANDROID_HOME or sdk.dir in local.properties)")
 
-val cargoBin = "${System.getProperty("user.home")}/.cargo/bin"
+val isWindows = org.gradle.internal.os.OperatingSystem.current().isWindows
+val cargoBin = File(System.getProperty("user.home"), ".cargo/bin")
+val cargoExe = if (isWindows) File(cargoBin, "cargo.exe") else File(cargoBin, "cargo")
+
 val ndkRoot = "${resolveSdkDir()}/ndk/$ndkVersionForRust"
 // The NDK ships an x86_64 host toolchain (runs under Rosetta on Apple Silicon).
 val hostTag = when {
     org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "darwin-x86_64"
     org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux-x86_64"
-    org.gradle.internal.os.OperatingSystem.current().isWindows -> "windows-x86_64"
+    isWindows -> "windows-x86_64"
     else -> error("Unsupported host OS for NDK toolchain")
 }
 val ndkBin = "$ndkRoot/toolchains/llvm/prebuilt/$hostTag/bin"
@@ -68,14 +71,30 @@ val rustAbis = listOf(
 )
 
 val perAbiBuildTasks = rustAbis.map { (abiDir, triple) ->
-    tasks.register<Exec>("cargoBuild_${abiDir.replace('-', '_')}") {
+    val taskName = "cargoBuild_${abiDir.replace('-', '_')}"
+    val localCargoExe = cargoExe
+    val localCargoBin = cargoBin
+    val localNdkBin = ndkBin
+    val localNdkSysroot = ndkSysroot
+    val localIsWindows = isWindows
+    val localAbiDir = abiDir
+
+    tasks.register<Exec>(taskName) {
         description = "Cross-compiles the Rust .om decoder for $abiDir."
         workingDir = file("rust")
 
-        val clang = "$ndkBin/$triple$androidApiLevel-clang"
+        val clang = "$localNdkBin/$triple$androidApiLevel-clang" + (if (localIsWindows) ".cmd" else "")
         val linkerVar = "CARGO_TARGET_${triple.uppercase().replace('-', '_')}_LINKER"
         val soOut = file("rust/target/$triple/release/libweather_om.so")
         val destSo = layout.buildDirectory.file("rustJniLibs/$abiDir/libweather_om.so").get().asFile
+
+        onlyIf {
+            val exists = localCargoExe.exists()
+            if (!exists) {
+                println("Skipping Rust build for $localAbiDir: cargo not found at ${localCargoExe.absolutePath}")
+            }
+            exists
+        }
 
         inputs.dir("rust/src")
         inputs.file("rust/Cargo.toml")
@@ -83,22 +102,24 @@ val perAbiBuildTasks = rustAbis.map { (abiDir, triple) ->
 
         // Prepend the rustup toolchain (has the Android targets) ahead of any
         // Homebrew rust on PATH.
-        environment("PATH", "$cargoBin:${System.getenv("PATH")}")
+        environment("PATH", "${localCargoBin.absolutePath}${File.pathSeparator}${System.getenv("PATH")}")
         // The om-file-format-sys build script uses an unprefixed CC + SYSROOT;
         // the per-API NDK clang wrapper bakes in --target and the sysroot.
         environment("CC", clang)
-        environment("AR", "$ndkBin/llvm-ar")
-        environment("SYSROOT", ndkSysroot)
+        environment("AR", "$localNdkBin/llvm-ar" + (if (localIsWindows) ".exe" else ""))
+        environment("SYSROOT", localNdkSysroot)
         environment(linkerVar, clang)
         // Keep host-side C tooling (if any build dep needs it) on the host clang.
-        environment("HOST_CC", "/usr/bin/clang")
+        if (!localIsWindows) {
+            environment("HOST_CC", "/usr/bin/clang")
+        }
         // bindgen parses the C headers with libclang: point it at the NDK too.
         environment(
             "BINDGEN_EXTRA_CLANG_ARGS",
-            "--target=$triple$androidApiLevel --sysroot=$ndkSysroot",
+            "--target=$triple$androidApiLevel --sysroot=$localNdkSysroot",
         )
 
-        commandLine("$cargoBin/cargo", "build", "--release", "--target", triple)
+        commandLine(localCargoExe.absolutePath, "build", "--release", "--target", triple)
 
         doLast {
             destSo.parentFile.mkdirs()

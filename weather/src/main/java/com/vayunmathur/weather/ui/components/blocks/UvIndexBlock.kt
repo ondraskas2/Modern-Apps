@@ -1,32 +1,28 @@
 package com.vayunmathur.weather.ui.components.blocks
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import com.vayunmathur.library.ui.ExperimentalMaterial3ExpressiveApi
 import com.vayunmathur.library.ui.IconSunny
-import com.vayunmathur.library.ui.MaterialShapes
 import com.vayunmathur.library.ui.MaterialTheme
 import com.vayunmathur.library.ui.Text
-import com.vayunmathur.library.ui.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.vayunmathur.weather.R
 import kotlin.math.roundToInt
 
 /**
- * Port of WeatherMaster's `UvIndexBlock` — Cookie12Sided surface with the
- * 5 colored severity dots drawn on a Canvas inside the cookie. The active
- * level's dot renders at full alpha; the others fade to 15%. Big UV
- * number centered, severity label bottom-center.
- *
- * Dot offsets are taken straight from WeatherMaster's source (positions
- * within a 176×176 reference canvas) and re-scaled to the actual block
- * size.
+ * Port of WeatherMaster's `UvIndexBlock`. Standard square block with the
+ * 5 colored severity dots arranged in a horizontal line below the UV value.
+ * The active level's dot renders larger and at full alpha; the others are
+ * small and faded.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -55,46 +51,41 @@ fun UvIndexBlock(uvIndex: Double?) {
         Color(0xFFAF5CF7), // Very high — purple
         Color(0xFFEE675C), // Extreme — red
     )
-    // Reference offsets within a 176×176 box (matches WeatherMaster).
-    val dotOffsets = listOf(
-        Offset(31f, 121f),  // Low
-        Offset(54f, 145f),  // Moderate
-        Offset(88f, 155f),  // High
-        Offset(144f, 121f), // Very high
-        Offset(120f, 145f), // Extreme
-    )
-    val dotRadii = listOf(8f, 6f, 6f, 6f, 6f)
 
-    StatBlock(shape = MaterialShapes.Cookie12Sided.toShape()) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            val sx = size.width / 176f
-            val sy = size.height / 176f
-            dotColors.forEachIndexed { i, color ->
-                val o = dotOffsets[i]
-                drawCircle(
-                    color = color,
-                    radius = dotRadii[i] * sx,
-                    center = Offset(o.x * sx, o.y * sy),
-                    alpha = if (i == activeLevel) 1f else 0.15f,
-                )
-            }
-        }
-        Box(Modifier.align(Alignment.TopCenter)) {
+    SquareBlock {
+        Box(Modifier.align(Alignment.TopStart)) {
             BlockHeader(
                 icon = { m, c -> IconSunny(m, c) },
                 title = "UV index",
-                topPadding = 32.dp,
             )
         }
+        
         Text(
             text = v?.toString() ?: "—",
             style = MaterialTheme.typography.displayMedium,
-            modifier = Modifier.align(Alignment.Center).offset(y = 4.dp),
+            modifier = Modifier.align(Alignment.Center).offset(y = (-10).dp),
             color = MaterialTheme.colorScheme.onSurface,
         )
+
+        // Linear severity dots
+        Row(
+            modifier = Modifier.align(Alignment.Center).offset(y = 28.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            dotColors.forEachIndexed { i, color ->
+                Canvas(modifier = Modifier.size(if (i == activeLevel) 12.dp else 8.dp)) {
+                    drawCircle(
+                        color = color,
+                        alpha = if (i == activeLevel) 1f else 0.25f
+                    )
+                }
+            }
+        }
+
         Text(
             text = label,
-            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-35).dp),
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = (-14).dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
